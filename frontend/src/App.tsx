@@ -1,10 +1,28 @@
+import { useState } from 'react'
+import { Header } from '@/components/Header'
 import { Home } from '@/pages/Home'
+import { ConfigPage } from '@/pages/ConfigPage'
+import { TestsPage } from '@/pages/TestsPage'
 
 function App() {
+  const [page, setPage] = useState('home')
+
+  const renderPage = () => {
+    switch (page) {
+      case 'config':
+        return <ConfigPage />
+      case 'tests':
+        return <TestsPage />
+      default:
+        return <Home />
+    }
+  }
+
   return (
     <div className="min-h-screen flex flex-col">
+      <Header page={page} onNavigate={setPage} />
       <main className="flex-1">
-        <Home />
+        {renderPage()}
       </main>
     </div>
   )

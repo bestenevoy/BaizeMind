@@ -17,8 +17,6 @@ data/documents.db
 data/processed/
 data/raw/
 data/graphrag/
-data/evaluation/results/
-*.deb
 
 # Models (downloaded)
 PaddleOCR-VL-1.5/

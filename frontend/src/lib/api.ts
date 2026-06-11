@@ -241,6 +241,35 @@ export async function getSystemStats(): Promise<SystemStats> {
   return res.json()
 }
 
+export interface ConfigCategory {
+  category: string
+  items: { key: string; label: string; value: string }[]
+}
+
+export interface ConfigResponse {
+  categories: ConfigCategory[]
+  secrets: Record<string, string>
+}
+
+export async function getConfig(): Promise<ConfigResponse> {
+  const res = await fetch(`${API_BASE}/system/config`)
+  if (!res.ok) throw new Error(`Config failed: ${res.statusText}`)
+  return res.json()
+}
+
+export interface ConnectivityResult {
+  service: string
+  status: string
+  detail: string
+  latency_ms: number
+}
+
+export async function checkConnectivity(): Promise<ConnectivityResult[]> {
+  const res = await fetch(`${API_BASE}/system/connectivity-check`)
+  if (!res.ok) throw new Error(`Connectivity check failed: ${res.statusText}`)
+  return res.json()
+}
+
 export async function healthCheck(): Promise<boolean> {
   try {
     const res = await fetch('/health')

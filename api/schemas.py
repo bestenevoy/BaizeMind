@@ -93,6 +93,13 @@ class DocumentContentResponse(BaseModel):
     status: str
 
 
+class ConnectivityResult(BaseModel):
+    service: str
+    status: str  # ok / warning / error
+    detail: str = ""
+    latency_ms: float = 0.0
+
+
 class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
