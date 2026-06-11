@@ -1,0 +1,45 @@
+# Environment
+.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# uv
+uv.lock
+
+# Data
+data/documents.db
+data/processed/
+data/raw/
+data/graphrag/
+data/evaluation/results/
+*.deb
+
+# Models (downloaded)
+PaddleOCR-VL-1.5/
+PP-DocLayoutV3/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# BM25 index (too large for git)
+data/bm25_index/

@@ -1,0 +1,247 @@
+import { useEffect, useState, useCallback } from 'react'
+import { FileText, Trash2, CheckCircle2, Loader2, AlertCircle, Tag, RotateCcw, Eye, X, ExternalLink, FileImage } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { listDocuments, deleteDocument, retryDocument, getDocumentContent, type DocumentInfo, type DocumentContent } from '@/lib/api'
+
+interface DocumentListProps {
+  folder: string | null
+  tags: string[]
+  onRefresh?: () => void
+}
+
+export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
+  const [docs, setDocs] = useState<DocumentInfo[]>([])
+  const [loading, setLoading] = useState(false)
+  const [previewDoc, setPreviewDoc] = useState<DocumentContent | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [retrying, setRetrying] = useState<string | null>(null)
+
+  const fetchDocs = useCallback(async () => {
+    setLoading(true)
+    try {
+      const result = await listDocuments(folder || undefined, tags.length ? tags : undefined)
+      setDocs(result)
+    } catch {
+      setDocs([])
+    } finally {
+      setLoading(false)
+    }
+  }, [folder, tags.join(',')])
+
+  useEffect(() => {
+    fetchDocs()
+  }, [fetchDocs])
+
+  useEffect(() => {
+    if (onRefresh) onRefresh()
+  }, [onRefresh])
+
+  const handleDelete = async (docId: string) => {
+    if (!confirm('确认删除该文档？')) return
+    try {
+      await deleteDocument(docId)
+      fetchDocs()
+    } catch {}
+  }
+
+  const handleRetry = async (docId: string) => {
+    setRetrying(docId)
+    try {
+      await retryDocument(docId)
+      fetchDocs()
+    } catch (e) {
+      alert(`重试失败: ${e}`)
+    } finally {
+      setRetrying(null)
+    }
+  }
+
+  const handlePreview = async (docId: string) => {
+    setPreviewLoading(true)
+    try {
+      const content = await getDocumentContent(docId)
+      setPreviewDoc(content)
+    } catch (e) {
+      alert(`获取内容失败: ${e}`)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  const statusIcon = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+      case 'processing':
+      case 'pending':
+        return <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+      case 'failed':
+        return <AlertCircle className="h-3.5 w-3.5 text-destructive" />
+      default:
+        return null
+    }
+  }
+
+  return (
+    <Card className="flex flex-col">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            文档列表
+            <span className="text-muted-foreground font-normal">({docs.length})</span>
+          </CardTitle>
+        </div>
+      </CardHeader>
+      <ScrollArea className="max-h-[300px]">
+        <CardContent className="p-2 space-y-1">
+          {docs.length === 0 && !loading && (
+            <p className="text-sm text-muted-foreground text-center py-4">暂无文档</p>
+          )}
+          {docs.map((doc) => (
+            <div key={doc.doc_id} className="flex items-start gap-2 p-2 rounded-md hover:bg-muted/50 group">
+              <FileText className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm truncate">{doc.filename}</span>
+                  {statusIcon(doc.status)}
+                </div>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className="text-xs text-muted-foreground">{doc.folder}</span>
+                  {doc.chunk_count > 0 && (
+                    <span className="text-xs text-muted-foreground">· {doc.chunk_count} chunks</span>
+                  )}
+                </div>
+                {(doc.status === 'processing' || doc.status === 'pending') && doc.processing_stage && (
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                    <span className="text-xs text-muted-foreground">{doc.processing_stage}</span>
+                  </div>
+                )}
+                {doc.tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {doc.tags.map((tag) => (
+                      <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
+                        <Tag className="h-2.5 w-2.5 mr-0.5" />
+                        {tag}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                {doc.error && <p className="text-xs text-destructive mt-0.5">{doc.error}</p>}
+              </div>
+              <div className="flex items-center gap-0.5 shrink-0">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={() => handlePreview(doc.doc_id)}
+                  title="查看内容"
+                >
+                  <Eye className="h-3 w-3" />
+                </Button>
+                {doc.status === 'failed' && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={() => handleRetry(doc.doc_id)}
+                    disabled={retrying === doc.doc_id}
+                    title="重试"
+                  >
+                    {retrying === doc.doc_id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-3 w-3" />
+                    )}
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={() => handleDelete(doc.doc_id)}
+                >
+                  <Trash2 className="h-3 w-3 text-destructive" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </ScrollArea>
+
+      {previewLoading && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <Loader2 className="h-8 w-8 animate-spin text-white" />
+        </div>
+      )}
+
+      {previewDoc && (
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 pt-10 px-4" onClick={() => setPreviewDoc(null)}>
+          <div className="bg-background rounded-lg shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="font-semibold">文档内容 - {previewDoc.filename}</h3>
+              <Button variant="ghost" size="icon" onClick={() => setPreviewDoc(null)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <ScrollArea className="flex-1 p-4">
+              <div className="space-y-4">
+                <div>
+                  <h4 className="text-sm font-medium mb-2 text-muted-foreground">原始内容</h4>
+                  {previewDoc.is_binary && previewDoc.raw_url ? (
+                    <div className="bg-muted/50 rounded p-4">
+                      {previewDoc.file_ext.match(/\.(png|jpg|jpeg|gif|webp|bmp|svg)$/) ? (
+                        <div className="flex flex-col items-center gap-3">
+                          <FileImage className="h-12 w-12 text-muted-foreground" />
+                          <p className="text-sm text-muted-foreground">
+                            图片 ({previewDoc.file_ext}) · {previewDoc.file_size_kb.toFixed(0)} KB
+                          </p>
+                          <a
+                            href={previewDoc.raw_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm text-primary hover:underline flex items-center gap-1"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            在新窗口打开图片
+                          </a>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-muted-foreground">{previewDoc.original_content}</span>
+                          <a
+                            href={previewDoc.raw_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm text-primary hover:underline flex items-center gap-1"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            下载文件
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-all max-h-[300px] overflow-auto">
+                      {previewDoc.original_content || '(空)'}
+                    </pre>
+                  )}
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium mb-2 text-muted-foreground">解析后 Markdown</h4>
+                  <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-all max-h-[300px] overflow-auto">
+                    {previewDoc.parsed_markdown || '(空)'}
+                  </pre>
+                </div>
+              </div>
+            </ScrollArea>
+          </div>
+        </div>
+      )}
+    </Card>
+  )
+}
