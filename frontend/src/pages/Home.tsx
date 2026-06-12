@@ -1,15 +1,18 @@
 import { useState, useCallback } from 'react'
+import { Upload } from 'lucide-react'
 import { UploadPanel } from '@/components/UploadPanel'
 import { ChatPanel } from '@/components/ChatPanel'
 import { StatsPanel } from '@/components/StatsPanel'
 import { FolderTree } from '@/components/FolderTree'
 import { TagFilter } from '@/components/TagFilter'
 import { DocumentList } from '@/components/DocumentList'
+import { Button } from '@/components/ui/button'
 
 export function Home() {
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [refreshKey, setRefreshKey] = useState(0)
+  const [showUpload, setShowUpload] = useState(false)
 
   const toggleTag = useCallback((tag: string) => {
     setSelectedTags((prev) =>
@@ -31,11 +34,21 @@ export function Home() {
           <StatsPanel />
         </div>
 
-        {/* Middle: Upload + Document list */}
+        {/* Middle: Upload button + Document list */}
         <div className="lg:col-span-3 space-y-4 overflow-y-auto">
-          <UploadPanel folder={selectedFolder} onUploadComplete={handleUploadComplete} />
+          <Button className="w-full" size="lg" onClick={() => setShowUpload(true)}>
+            <Upload className="h-5 w-5 mr-2" />
+            上传文档
+          </Button>
           <DocumentList folder={selectedFolder} tags={selectedTags} key={refreshKey} />
         </div>
+
+        <UploadPanel
+          folder={selectedFolder}
+          open={showUpload}
+          onOpenChange={setShowUpload}
+          onUploadComplete={handleUploadComplete}
+        />
 
         {/* Right: Chat */}
         <div className="lg:col-span-7">
