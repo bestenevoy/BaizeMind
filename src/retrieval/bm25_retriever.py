@@ -25,19 +25,22 @@ class BM25Retriever:
         self._model: Optional[BM25Okapi] = None
         self._chunks: list[dict] = []
         self._corpus: list[list[str]] = []
+        self._chunk_ids: set[str] = set()
 
     def build_index(self, chunks: list[dict[str, Any]]):
         self._chunks = chunks
+        self._chunk_ids = {c.get("chunk_id", "") for c in chunks}
         self._corpus = [tokenize(c["text"]) for c in chunks]
         self._model = BM25Okapi(self._corpus)
 
     def merge_chunks(self, new_chunks: list[dict[str, Any]]):
-        existing_ids = {c.get("chunk_id") for c in self._chunks}
-        for c in new_chunks:
-            if c.get("chunk_id") not in existing_ids:
-                self._chunks.append(c)
-                existing_ids.add(c.get("chunk_id"))
-        self._corpus = [tokenize(c["text"]) for c in self._chunks]
+        fresh = [c for c in new_chunks if c.get("chunk_id", "") not in self._chunk_ids]
+        if not fresh:
+            return
+        for c in fresh:
+            self._chunks.append(c)
+            self._chunk_ids.add(c.get("chunk_id", ""))
+            self._corpus.append(tokenize(c["text"]))
         self._model = BM25Okapi(self._corpus)
 
     def rebuild_from_milvus(self) -> bool:
@@ -69,7 +72,7 @@ class BM25Retriever:
         if self._model is None:
             return
         self.index_path.mkdir(parents=True, exist_ok=True)
-        data = {"chunks": self._chunks, "corpus": self._corpus}
+        data = {"chunks": self._chunks, "corpus": self._corpus, "chunk_ids": list(self._chunk_ids)}
         with open(self.index_path / "bm25_model.pkl", "wb") as f:
             pickle.dump(self._model, f)
         with open(self.index_path / "bm25_data.json", "w") as f:
@@ -85,11 +88,17 @@ class BM25Retriever:
                 data = json.load(f)
             self._chunks = data["chunks"]
             self._corpus = data["corpus"]
+            self._chunk_ids = set(data.get("chunk_ids", []) or [])
 
     def remove_by_doc_id(self, doc_id: str):
         if not self._model:
             return
-        self._chunks = [c for c in self._chunks if c.get("doc_id") != doc_id]
+        keep = [c for c in self._chunks if c.get("doc_id") != doc_id]
+        removed = len(self._chunks) - len(keep)
+        if removed == 0:
+            return
+        self._chunks = keep
+        self._chunk_ids = {c.get("chunk_id", "") for c in keep}
         if self._chunks:
             self._corpus = [tokenize(c["text"]) for c in self._chunks]
             self._model = BM25Okapi(self._corpus)

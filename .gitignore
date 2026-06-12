@@ -41,3 +41,6 @@ htmlcov/
 
 # BM25 index (too large for git)
 data/bm25_index/
+
+# Milvus installer
+*.deb

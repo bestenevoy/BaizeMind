@@ -64,28 +64,38 @@ class Neo4jManager:
     def batch_import(self, entities: list[dict], relations: list[dict]):
         self.connect()
         with self._driver.session() as session:
-            for entity in entities:
+            if entities:
+                entity_params = [
+                    {"name": e["name"], "type": e.get("type", "Unknown"), "description": e.get("description", "")}
+                    for e in entities
+                ]
                 session.run(
                     """
-                    MERGE (e:Entity {name: $name})
-                    SET e.type = $type, e.description = $description
+                    UNWIND $entities AS e
+                    MERGE (n:Entity {name: e.name})
+                    SET n.type = e.type, n.description = e.description
                     """,
-                    name=entity["name"],
-                    type=entity.get("type", "Unknown"),
-                    description=entity.get("description", ""),
+                    entities=entity_params,
                 )
-            for rel in relations:
-                subj = rel.get("subject", "")
-                pred = rel.get("predicate", "RELATES_TO").upper().replace(" ", "_")
-                obj = rel.get("object", "")
-                if subj and obj:
+            if relations:
+                rel_params = [
+                    {
+                        "subject": rel.get("subject", ""),
+                        "predicate": rel.get("predicate", "RELATES_TO").upper().replace(" ", "_"),
+                        "object": rel.get("object", ""),
+                    }
+                    for rel in relations
+                    if rel.get("subject") and rel.get("object")
+                ]
+                if rel_params:
                     session.run(
                         """
-                        MATCH (s:Entity {name: $subject})
-                        MATCH (o:Entity {name: $object})
-                        MERGE (s)-[r:RELATES_TO {type: $predicate}]->(o)
+                        UNWIND $relations AS r
+                        MATCH (s:Entity {name: r.subject})
+                        MATCH (o:Entity {name: r.object})
+                        MERGE (s)-[rel:RELATES_TO {type: r.predicate}]->(o)
                         """,
-                        subject=subj, predicate=pred, object=obj,
+                        relations=rel_params,
                     )
 
     def get_neighbors(self, entity_name: str, max_hops: int = 2) -> list[dict]:
