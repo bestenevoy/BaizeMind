@@ -260,4 +260,9 @@ async def get_stats():
 
 @router.post("/rebuild-indices")
 async def rebuild_indices():
-    return {"status": "rebuild initiated", "message": "Index rebuild not fully implemented"}
+    from src.retrieval.bm25_retriever import BM25Retriever
+    bm25 = BM25Retriever()
+    success = bm25.rebuild_from_milvus()
+    if success:
+        return {"status": "completed", "message": "BM25 index rebuilt from Milvus", "chunks_indexed": len(bm25._chunks)}
+    return {"status": "skipped", "message": "No chunks found in Milvus to rebuild"}

@@ -1,5 +1,7 @@
 import json
+import logging
 import time
+import traceback
 from typing import Optional
 
 from fastapi import APIRouter
@@ -7,6 +9,8 @@ from fastapi.responses import StreamingResponse
 
 from api.schemas import QARequest, QAResponse
 from src.agents.workflow import get_workflow
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/qa", tags=["qa"])
 
@@ -75,7 +79,10 @@ async def ask_stream(request: QARequest):
                 folder=request.folder,
                 tags=request.tags,
             ):
-                node_name, node_output = event
+                if not isinstance(event, dict) or not event:
+                    logger.warning(f"Skipping non-dict/empty event: {event!r}")
+                    continue
+                (node_name, node_output), = event.items()
                 label, detail_label = NODE_LABELS.get(node_name, (node_name, node_name))
 
                 payload = {"type": "step", "node": node_name, "label": label, "detail": detail_label}
@@ -132,6 +139,7 @@ async def ask_stream(request: QARequest):
             elapsed = (time.time() - start) * 1000
             yield f"data: {json.dumps({'type': 'done', 'processing_time_ms': elapsed})}\n\n"
         except Exception as e:
+            logger.error(f"Stream error: {traceback.format_exc()}")
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
     return StreamingResponse(

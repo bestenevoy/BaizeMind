@@ -42,8 +42,15 @@ def bm25_search(query: str, top_k: int = 10) -> str:
 
 @tool
 def rerank_results(query: str, results: str, top_k: int = 5) -> str:
-    """Re-rank search results by relevance to the query. Input 'results' should be result indices or descriptions."""
-    return f"Re-ranked to top {top_k} results for query: {query}"
+    """Re-rank search results by relevance to the query. Input 'results' should be a JSON array of search result objects."""
+    try:
+        parsed = json.loads(results)
+        if isinstance(parsed, list) and parsed:
+            reranked = _reranker.rerank(query, parsed, top_k=top_k)
+            return _format_search_results(reranked[:top_k])
+    except Exception:
+        pass
+    return f"Unable to rerank results. Provide results as a JSON array."
 
 
 @tool

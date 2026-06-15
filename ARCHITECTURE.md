@@ -265,36 +265,54 @@ agentic-rag/
 ## 快速启动
 
 ```bash
-# 1. 安装依赖
-uv pip install -e .
-
-# 2. 配置环境变量
-cp .env.example .env
-# 编辑 .env 填入 API 密钥
-
-# 3. 下载 PaddleOCR 模型 (from ModelScope)
-python -c "from modelscope import snapshot_download; snapshot_download('PaddlePaddle/PaddleOCR-VL-1.5', local_dir='./PaddleOCR-VL-1.5')"
-python -c "from modelscope import snapshot_download; snapshot_download('PaddlePaddle/PP-DocLayoutV3', local_dir='./PP-DocLayoutV3')"
-
-# 4. 启动 Milvus (如未启动)
-bash scripts/setup_milvus.sh
-
-# 5. 导入文档 (解析 + 切分 + 向量索引 + 知识图谱)
-python scripts/ingest_documents.py /path/to/document.pdf
-
-# 6. 构建 Microsoft GraphRAG 索引 (社区检测 + 摘要)
-python scripts/build_graphrag.py
-
-# 7. 启动服务
-uvicorn api.main:app --host 0.0.0.0 --port 8000
-
-# 8. 测试问答
-curl -X POST http://127.0.0.1:8000/api/v1/qa/ask \
-  -H "Content-Type: application/json" \
-  -d '{"query": "公司的营收目标是多少？", "stream": false}'
-
 # 9. 测试 GraphRAG 全局搜索 (holistic 类问题)
 curl -X POST http://127.0.0.1:8000/api/v1/qa/ask \
   -H "Content-Type: application/json" \
   -d '{"query": "这些文档的主要主题是什么？", "stream": false}'
 ```
+
+## 当前开发状态
+
+### 已完成
+
+| 模块 | 功能 | 状态 |
+|------|------|------|
+| 文档解析 | MinerU PDF/Office 解析、PaddleOCR-VL 图片 OCR、表格解析与跨页合并、图表描述 | 完成 |
+| Chunk 切分 | 层次化标题切分 (HierarchicalChunker)、表格感知切分 (TableChunker)、上下文合并 (ContextMerger) | 完成 |
+| Embedding | BGE-M3 密集+稀疏向量 (SiliconFlow API / 本地 GPU 双路 fallback) | 完成 |
+| 向量检索 | Milvus IVF_FLAT 索引、增删查、expr 过滤 | 完成 |
+| 关键词检索 | BM25 (jieba 分词)、增量追加、持久化 load/save | 完成 |
+| 混合检索 | RRF 融合 (dense 0.5 + sparse 0.3 + BM25 0.2) + LLM Rerank + TF-IDF fallback | 完成 |
+| 知识图谱 | LLM + LangExtract 实体关系抽取、Neo4j UNWIND 批量导入 (~50x 加速)、Cypher 查询、Text-to-Cypher | 完成 |
+| GraphRAG | Microsoft GraphRAG 索引构建、Global/Local/DRIFT 三种搜索模式 | 完成 |
+| Agent 工作流 | LangGraph StateGraph: 6 种查询类型分类、5 路条件路由、多轮迭代 (最多 5 轮) | 完成 |
+| 答案验证 | 幻觉检测、引用校验、完整性评分 | 完成 |
+| 文档存储 | SQLite 文档元数据 (文件夹/标签/状态)、LLM 自动标签 | 完成 |
+| REST API | 文档 CRUD、Q&A (/ask + /stream SSE)、系统统计、健康检查 | 完成 |
+| 前端 | React 18 + Vite + Tailwind + shadcn/ui: 3 页面 (首页/配置/测试)、3 栏布局、流式对话 | 完成 |
+| 评测 | 105 条 QA 样本、Recall@K、语义相似度、LLM Judge、引用准确度 | 完成 |
+| 诊断工具 | 8 层诊断脚本 (环境→服务→API→模块→解析→Milvus→Neo4j→Agent) | 完成 |
+| 性能优化 | Neo4j UNWIND 批量插入 (~50x)、BM25 增量追加 (~5-10x) | 完成 |
+
+### 待完成 / 已知缺陷
+
+| 位置 | 问题 | 优先级 |
+|------|------|--------|
+| `api/routes/management.py:261` | `POST /rebuild-indices` 端点返回 stub ("not fully implemented") | 高 |
+| `src/agents/tools.py:44` | `rerank_results` 工具为 stub，未被 ALL_TOOLS 包含 | 高 |
+| 知识图谱 | 删除文档时 Neo4j 中的实体/关系未同步删除 | 高 |
+| `src/embeddings/bge_m3.py:48` | API 模式下 `encode_sparse()` 返回空列表，稀疏编码仅本地 GPU 可用 | 中 |
+| 实体抽取 | 每个 chunk 串行调用 LLM，未并行化 (~10-20x 优化空间) | 中 |
+| Embedding 批处理 | 串行 HTTP 调用，未并发派发 (~3-5x 优化空间) | 中 |
+| 前端 | `config/`、`contexts/`、`hooks/`、`components/figma/` 目录为空 | 低 |
+| 测试 | 无集成测试；`test_retrieval.py`、`test_agents.py::test_workflow_init` 在无外部服务时会 hang | 中 |
+| 错误处理 | 多处 `pass` 静默吞噬异常 (见 `query_router.py:39`, `answer_validator.py:48`, `graph_agent.py:40` 等) | 中 |
+
+### 最近提交 (4 commits)
+
+| 提交 | 日期 | 描述 |
+|------|------|------|
+| `b7953e5` | 2026-06-13 | feat: show upload panel as dialog instead of inline |
+| `9c188e1` | 2026-06-13 | perf: Neo4j UNWIND bulk insert + BM25 incremental append |
+| `fd39f44` | 2026-06-12 | feat: add system configuration and connectivity check endpoints |
+| `f5fe855` | 2026-06-12 | feat: initial commit — Agentic-GraphRAG system |

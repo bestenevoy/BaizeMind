@@ -32,6 +32,7 @@ class Neo4jManager:
         with self._driver.session() as session:
             session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (e:Entity) REQUIRE e.name IS UNIQUE")
             session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.type)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.doc_id)")
 
     def upsert_entity(self, entity: dict):
         self.connect()
@@ -61,7 +62,7 @@ class Neo4jManager:
                 object=relation.get("object", ""),
             )
 
-    def batch_import(self, entities: list[dict], relations: list[dict]):
+    def batch_import(self, entities: list[dict], relations: list[dict], doc_id: str = ""):
         self.connect()
         with self._driver.session() as session:
             if entities:
@@ -74,8 +75,10 @@ class Neo4jManager:
                     UNWIND $entities AS e
                     MERGE (n:Entity {name: e.name})
                     SET n.type = e.type, n.description = e.description
-                    """,
+                    """
+                    + ('SET n.doc_id = $doc_id' if doc_id else ''),
                     entities=entity_params,
+                    doc_id=doc_id,
                 )
             if relations:
                 rel_params = [
@@ -155,6 +158,14 @@ class Neo4jManager:
         with self._driver.session() as session:
             result = session.run(cypher, params or {})
             return [dict(r) for r in result]
+
+    def delete_entities_by_doc(self, doc_id: str):
+        self.connect()
+        with self._driver.session() as session:
+            session.run(
+                "MATCH (n:Entity) WHERE n.doc_id = $doc_id DETACH DELETE n",
+                doc_id=doc_id,
+            )
 
     def get_stats(self) -> dict:
         self.connect()

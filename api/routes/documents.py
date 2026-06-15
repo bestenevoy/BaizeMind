@@ -113,6 +113,13 @@ async def delete_document(doc_id: str):
     except Exception:
         pass
 
+    try:
+        from src.knowledge_graph.neo4j_manager import Neo4jManager
+        neo4j = Neo4jManager()
+        neo4j.delete_entities_by_doc(doc_id)
+    except Exception:
+        pass
+
     doc_store.delete_document(doc_id)
     return {"status": "deleted", "doc_id": doc_id}
 
@@ -305,7 +312,7 @@ def _process_document(doc_id: str, file_path: str, folder: str):
         neo4j = Neo4jManager()
         neo4j.connect()
         neo4j.init_schema()
-        neo4j.batch_import(entities, relations)
+        neo4j.batch_import(entities, relations, doc_id=doc_id)
 
         doc_store.update_document(doc_id, processing_stage="自动标签")
         from src.storage.auto_tagger import generate_tags

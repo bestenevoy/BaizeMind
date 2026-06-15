@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Header } from '@/components/Header'
 import { Home } from '@/pages/Home'
+import { DocumentsPage } from '@/pages/DocumentsPage'
 import { ConfigPage } from '@/pages/ConfigPage'
 import { TestsPage } from '@/pages/TestsPage'
 
@@ -9,6 +10,8 @@ function App() {
 
   const renderPage = () => {
     switch (page) {
+      case 'documents':
+        return <DocumentsPage />
       case 'config':
         return <ConfigPage />
       case 'tests':

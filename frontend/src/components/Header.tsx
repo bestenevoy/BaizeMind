@@ -1,4 +1,4 @@
-import { Brain, Home, Settings, FlaskConical } from 'lucide-react'
+import { Brain, Home, FileText, Settings, FlaskConical } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { healthCheck } from '@/lib/api'
 
@@ -22,18 +22,14 @@ export function Header({ page, onNavigate }: HeaderProps) {
 
   const navItems = [
     { id: 'home', label: '主页', icon: Home },
+    { id: 'documents', label: '文档', icon: FileText },
     { id: 'config', label: '配置', icon: Settings },
     { id: 'tests', label: '测试', icon: FlaskConical },
   ]
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="container flex h-14 items-center justify-between">
-        <a className="flex items-center space-x-2 cursor-pointer" onClick={() => onNavigate('home')}>
-          <Brain className="h-6 w-6 text-primary" />
-          <span className="font-bold">Agentic-GraphRAG</span>
-        </a>
-
+      <div className="container flex h-14 items-center">
         <nav className="flex items-center space-x-1">
           {navItems.map(({ id, label, icon: Icon }) => (
             <button
@@ -51,7 +47,7 @@ export function Header({ page, onNavigate }: HeaderProps) {
           ))}
         </nav>
 
-        <div className="flex items-center gap-1.5 text-xs">
+        <div className="ml-auto flex items-center gap-1.5 text-xs">
           <span
             className={`h-2 w-2 rounded-full ${
               online === null ? 'bg-gray-400 animate-pulse' : online ? 'bg-green-500' : 'bg-red-500'
