@@ -1,4 +1,5 @@
 import json
+import shutil
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -184,6 +185,20 @@ def get_doc_ids_by_filter(
 
 
 def move_document(doc_id: str, new_folder: str) -> Optional[dict]:
+    new_folder = normalize_folder(new_folder)
+    doc = get_document(doc_id)
+    if not doc:
+        return None
+    # Move physical file
+    old_path = doc.get("file_path", "")
+    if old_path:
+        old = Path(old_path)
+        if old.exists():
+            new_dir = Path(settings.raw_dir) / new_folder.lstrip("/")
+            new_dir.mkdir(parents=True, exist_ok=True)
+            new_path = new_dir / old.name
+            shutil.move(str(old), str(new_path))
+            return update_document(doc_id, folder=new_folder, file_path=str(new_path))
     return update_document(doc_id, folder=new_folder)
 
 
@@ -259,7 +274,7 @@ def move_folder(src: str, dst: str) -> int:
 
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT doc_id, folder FROM documents WHERE folder = ? OR folder LIKE ?",
+        "SELECT doc_id, folder, file_path FROM documents WHERE folder = ? OR folder LIKE ?",
         (src, f"{src}/%"),
     ).fetchall()
 
@@ -271,6 +286,19 @@ def move_folder(src: str, dst: str) -> int:
             "UPDATE documents SET folder = ?, updated_at = ? WHERE doc_id = ?",
             (new_folder, datetime.now().isoformat(), r["doc_id"]),
         )
+        # Move physical file on disk
+        old_path = r["file_path"]
+        if old_path:
+            old = Path(old_path)
+            if old.exists():
+                new_dir = Path(settings.raw_dir) / new_folder.lstrip("/")
+                new_dir.mkdir(parents=True, exist_ok=True)
+                new_path = new_dir / old.name
+                shutil.move(str(old), str(new_path))
+                conn.execute(
+                    "UPDATE documents SET file_path = ? WHERE doc_id = ?",
+                    (str(new_path), r["doc_id"]),
+                )
         count += 1
 
     # Move folder markers

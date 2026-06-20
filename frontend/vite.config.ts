@@ -19,6 +19,7 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    allowedHosts: ['localhost', 'rag.ruzeng.wang', '127.0.0.1', '10.123.123.1']
   },
   build: {
     outDir: 'dist',

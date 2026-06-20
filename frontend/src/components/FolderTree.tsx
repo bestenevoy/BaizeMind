@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   FolderOpen, Folder, ChevronRight, ChevronDown, RefreshCw,
-  Plus, Trash2, Pencil, GripHorizontal,
+  Plus, Trash2, Pencil,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -344,20 +344,25 @@ function FolderNode({
   const isExpanded = expanded.has(node.path) || node.path === ''
   const isSelected = selected === (node.path || null)
   const isRoot = node.path === ''
-  const [menuOpen, setMenuOpen] = useState(false)
+  const depthColors = ['text-blue-400', 'text-emerald-400', 'text-amber-400', 'text-purple-400', 'text-rose-400']
 
   return (
     <div>
       <div
-        className={`group flex items-center gap-1 w-full rounded text-sm relative ${
-          isSelected ? 'bg-accent text-accent-foreground font-medium' : 'hover:bg-accent'
+        className={`group flex items-center gap-0.5 w-full rounded text-sm relative ${
+          isSelected ? 'bg-accent text-accent-foreground font-medium shadow-sm' : 'hover:bg-accent/60'
         }`}
-        style={{ paddingLeft: `${depth * 12 + (isRoot ? 4 : 8)}px` }}
+        style={{ paddingLeft: `${depth * 14 + (isRoot ? 4 : 6)}px` }}
       >
+        {/* Depth indicator line */}
+        {!isRoot && depth > 0 && (
+          <div className="absolute left-[${depth * 14 - 5}px] top-0 bottom-0 w-px bg-border/50" />
+        )}
+
         {/* Expand/collapse */}
         {hasChildren || isRoot ? (
           <button
-            className="shrink-0 py-1"
+            className="shrink-0 py-1.5 hover:text-foreground transition-colors"
             onClick={(e) => { e.stopPropagation(); onToggle(node.path) }}
           >
             {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
@@ -368,37 +373,41 @@ function FolderNode({
 
         {/* Main button */}
         <button
-          className="flex items-center gap-1.5 flex-1 min-w-0 py-1 pr-1"
+          className="flex items-center gap-1.5 flex-1 min-w-0 py-1.5 pr-1 text-left"
           onClick={() => onSelect(node.path || null)}
         >
           {isRoot ? (
-            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <FolderOpen className={`h-3.5 w-3.5 shrink-0 ${isSelected ? 'text-primary' : 'text-primary/70'}`} />
           ) : (
-            <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <Folder className={`h-3.5 w-3.5 shrink-0 ${isSelected ? depthColors[depth % depthColors.length] : 'text-muted-foreground/60'}`} />
           )}
           <span className="truncate">{node.name}</span>
-          <span className="ml-auto text-xs text-muted-foreground shrink-0">{node.count || ''}</span>
+          {node.count > 0 && (
+            <span className="ml-auto text-[11px] text-muted-foreground shrink-0 tabular-nums bg-muted/50 px-1.5 py-0.5 rounded-full">
+              {node.count}
+            </span>
+          )}
         </button>
 
         {/* Context actions (non-root) */}
         {!isRoot && !readonly && (
-          <div className="hidden group-hover:flex items-center gap-0.5 pr-0.5">
+          <div className="hidden group-hover:flex items-center gap-0.5 pr-1">
             <button
-              className="p-0.5 rounded hover:bg-accent-foreground/10"
+              className="p-0.5 rounded hover:bg-accent-foreground/10 transition-colors"
               title="新建子目录"
               onClick={(e) => { e.stopPropagation(); onNewFolder(node.path) }}
             >
               <Plus className="h-3 w-3" />
             </button>
             <button
-              className="p-0.5 rounded hover:bg-accent-foreground/10"
+              className="p-0.5 rounded hover:bg-accent-foreground/10 transition-colors"
               title="移动/重命名"
               onClick={(e) => { e.stopPropagation(); onRenameFolder({ folder: node.path, doc_count: node.count }) }}
             >
               <Pencil className="h-3 w-3" />
             </button>
             <button
-              className="p-0.5 rounded hover:bg-destructive/10 text-destructive"
+              className="p-0.5 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
               title="删除文件夹"
               onClick={(e) => { e.stopPropagation(); onDeleteFolder({ folder: node.path, doc_count: node.count }) }}
             >
@@ -408,7 +417,7 @@ function FolderNode({
         )}
       </div>
 
-      {/* Children */}
+      {/* Children with smooth expand */}
       {hasChildren && isExpanded && (
         <div>
           {node.children.map((child) => (

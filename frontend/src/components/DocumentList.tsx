@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback } from 'react'
 import { FileText, Trash2, CheckCircle2, Loader2, AlertCircle, Tag, RotateCcw, Eye, X, ExternalLink, FileImage, FolderInput } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -286,36 +285,37 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-sm">
-              将 <code className="bg-muted px-1 rounded">{moveTarget?.filename}</code> 从
-              <code className="bg-muted px-1 rounded ml-1">{moveTarget?.folder}</code> 移动到:
+              <code className="bg-muted px-1 rounded">{moveTarget?.filename}</code>
+              <span className="text-muted-foreground"> 当前: </span>
+              <code className="bg-muted px-1 rounded">{moveTarget?.folder}</code>
             </p>
             <div>
               <label className="text-sm font-medium">目标文件夹</label>
-              <Input
-                placeholder="如 /docs/ai"
-                value={moveToFolder}
-                onChange={(e) => setMoveToFolder(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleMove() }}
-                autoFocus
-              />
-            </div>
-            {folderOptions.length > 0 && (
-              <div className="max-h-32 overflow-y-auto border rounded-md p-2">
-                <p className="text-xs text-muted-foreground mb-1">现有目录 (点击选择):</p>
-                {folderOptions.map((f) => (
-                  <button
-                    key={f.folder}
-                    className="block w-full text-left text-sm px-2 py-1 rounded hover:bg-accent cursor-pointer"
-                    onClick={() => setMoveToFolder(f.folder)}
-                  >
-                    {f.folder} ({f.doc_count})
-                  </button>
-                ))}
+              <div className="max-h-48 overflow-y-auto border rounded-md mt-1">
+                {folderOptions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground p-3">加载中...</p>
+                ) : (
+                  folderOptions.map((f) => (
+                    <button
+                      key={f.folder}
+                      className={`block w-full text-left text-sm px-3 py-2 hover:bg-accent transition-colors cursor-pointer flex items-center gap-2 ${
+                        moveToFolder === f.folder ? 'bg-accent text-accent-foreground font-medium' : ''
+                      }`}
+                      onClick={() => setMoveToFolder(f.folder)}
+                    >
+                      <svg className="h-3.5 w-3.5 shrink-0 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                      </svg>
+                      <span className="flex-1 truncate">{f.folder}</span>
+                      <span className="text-xs text-muted-foreground">{f.doc_count > 0 ? f.doc_count : ''}</span>
+                    </button>
+                  ))
+                )}
               </div>
-            )}
+            </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setMoveTarget(null)}>取消</Button>
-              <Button onClick={handleMove} disabled={!moveToFolder.trim()}>
+              <Button onClick={handleMove} disabled={!moveToFolder.trim() || moveToFolder === moveTarget?.folder}>
                 <FolderInput className="h-4 w-4 mr-1" />移动
               </Button>
             </div>
