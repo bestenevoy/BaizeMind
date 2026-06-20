@@ -104,3 +104,77 @@ class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+
+# ── Evaluation ──
+
+class EvalSampleCreate(BaseModel):
+    id: str
+    query: str
+    query_type: str = "simple_fact"
+    ground_truth_answer: str = ""
+    ground_truth_sources: list[str] = []
+    ground_truth_ids: list[str] = []
+
+
+class EvalSampleUpdate(BaseModel):
+    query: Optional[str] = None
+    query_type: Optional[str] = None
+    ground_truth_answer: Optional[str] = None
+    ground_truth_sources: Optional[list[str]] = None
+    ground_truth_ids: Optional[list[str]] = None
+
+
+class EvalSampleResponse(BaseModel):
+    id: str
+    query: str
+    query_type: str = "simple_fact"
+    ground_truth_answer: str = ""
+    ground_truth_sources: list[str] = []
+    ground_truth_ids: list[str] = []
+
+
+class EvalDatasetImport(BaseModel):
+    samples: list[dict[str, Any]]
+    mode: str = "replace"  # "replace" | "merge"
+
+
+class EvalRunRequest(BaseModel):
+    max_samples: Optional[int] = Field(None, ge=1, description="Limit number of samples to evaluate")
+    folder: Optional[str] = Field(None, description="Limit retrieval scope to this folder")
+
+
+class EvalDatasetGenerate(BaseModel):
+    folder: Optional[str] = Field(None, description="Knowledge base folder to generate dataset from, e.g. /eval")
+    max_docs: Optional[int] = Field(10, ge=1, le=50, description="Max number of docs to generate from")
+    samples_per_doc: Optional[int] = Field(3, ge=1, le=10, description="Samples per document")
+    mode: str = Field("replace", description="replace | merge")
+
+
+class EvalResultSummary(BaseModel):
+    filename: str
+    timestamp: float = 0
+    num_samples: int = 0
+    recall_at_5: float = 0
+    recall_at_10: float = 0
+    semantic_similarity: float = 0
+    judge_accuracy: float = 0
+    citation_accuracy: float = 0
+
+
+class EvalSampleResult(BaseModel):
+    sample_id: str
+    query: str
+    query_type: str = ""
+    predicted_answer: str = ""
+    cited_sources: list[str] = []
+    retrieved_ids: list[str] = []
+    error: Optional[str] = None
+    processing_time_ms: float = 0
+
+
+class EvalResultDetail(BaseModel):
+    summary: dict[str, Any] = {}
+    total_time_seconds: float = 0
+    avg_time_per_sample: float = 0
+    results: list[dict[str, Any]] = []

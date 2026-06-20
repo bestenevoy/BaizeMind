@@ -142,6 +142,34 @@ export async function removeTag(docId: string, tag: string): Promise<DocumentInf
   return res.json()
 }
 
+// ── Folder Management ──
+
+export async function createFolder(path: string): Promise<{ folder: string; doc_count: number }> {
+  const res = await fetch(`${API_BASE}/documents/folders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  if (!res.ok) throw new Error(`Create folder failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function deleteFolder(path: string): Promise<{ deleted: boolean; folder: string; doc_count: number }> {
+  const res = await fetch(`${API_BASE}/documents/folders${path}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`Delete folder failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function moveFolder(src: string, dst: string): Promise<{ moved: boolean; src: string; dst: string; doc_count: number }> {
+  const res = await fetch(`${API_BASE}/documents/folders/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ src, dst }),
+  })
+  if (!res.ok) throw new Error(`Move folder failed: ${res.statusText}`)
+  return res.json()
+}
+
 // ── Folders & Tags ──
 
 export async function listFolders(): Promise<FolderInfo[]> {
@@ -277,4 +305,237 @@ export async function healthCheck(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+// ── Evaluation ──
+
+export interface EvalSample {
+  id: string
+  query: string
+  query_type: string
+  ground_truth_answer: string
+  ground_truth_sources: string[]
+  ground_truth_ids: string[]
+}
+
+export interface EvalResultSummary {
+  filename: string
+  timestamp: number
+  num_samples: number
+  recall_at_5: number
+  recall_at_10: number
+  semantic_similarity: number
+  judge_accuracy: number
+  citation_accuracy: number
+}
+
+export interface EvalSampleResult {
+  sample_id: string
+  query: string
+  query_type: string
+  predicted_answer: string
+  cited_sources: string[]
+  retrieved_ids: string[]
+  error?: string
+  processing_time_ms: number
+}
+
+export interface EvalResultDetail {
+  summary: {
+    num_samples: number
+    recall_at_5: number
+    recall_at_10: number
+    semantic_similarity: number
+    judge_accuracy: number
+    citation_accuracy: number
+  }
+  total_time_seconds: number
+  avg_time_per_sample: number
+  results: EvalSampleResult[]
+}
+
+export async function listDataset(): Promise<EvalSample[]> {
+  const res = await fetch(`${API_BASE}/evaluation/dataset`)
+  if (!res.ok) throw new Error(`List dataset failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function addSample(sample: Omit<EvalSample, 'id'> & { id?: string }): Promise<EvalSample> {
+  const res = await fetch(`${API_BASE}/evaluation/dataset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(sample),
+  })
+  if (!res.ok) throw new Error(`Add sample failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function updateSample(sampleId: string, updates: Partial<EvalSample>): Promise<EvalSample> {
+  const res = await fetch(`${API_BASE}/evaluation/dataset/${encodeURIComponent(sampleId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  })
+  if (!res.ok) throw new Error(`Update sample failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function deleteSample(sampleId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/evaluation/dataset/${encodeURIComponent(sampleId)}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) throw new Error(`Delete sample failed: ${res.statusText}`)
+}
+
+export async function importDataset(samples: Record<string, unknown>[], mode: 'replace' | 'merge' = 'replace'): Promise<{ count: number; mode: string }> {
+  const res = await fetch(`${API_BASE}/evaluation/dataset/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ samples, mode }),
+  })
+  if (!res.ok) throw new Error(`Import dataset failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function exportDataset(): Promise<EvalSample[]> {
+  const res = await fetch(`${API_BASE}/evaluation/dataset/export`)
+  if (!res.ok) throw new Error(`Export dataset failed: ${res.statusText}`)
+  return res.json()
+}
+
+export interface EvalProgressEvent {
+  type: 'start' | 'progress' | 'sample_done' | 'done'
+  total?: number
+  current?: number
+  sample_id?: string
+  query?: string
+  processing_time_ms?: number
+  error?: string
+  summary?: Record<string, number>
+  filename?: string
+}
+
+export async function runEvaluation(
+  maxSamples: number | null,
+  folder: string | null,
+  onEvent: (evt: EvalProgressEvent) => void,
+  onDone: (summary: Record<string, number>, filename: string) => void,
+  onError: (err: string) => void,
+): Promise<void> {
+  const body: Record<string, unknown> = { max_samples: maxSamples || undefined }
+  if (folder) body.folder = folder
+  const res = await fetch(`${API_BASE}/evaluation/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    onError(`Run failed: ${res.statusText}`)
+    return
+  }
+  const reader = res.body?.getReader()
+  if (!reader) {
+    onError('No response body')
+    return
+  }
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6).trim()
+        try {
+          const parsed = JSON.parse(data) as EvalProgressEvent
+          if (parsed.type === 'done') {
+            onDone(parsed.summary || {}, parsed.filename || '')
+            return
+          }
+          onEvent(parsed)
+        } catch {
+          // skip malformed
+        }
+      }
+    }
+  }
+  onDone({}, '')
+}
+
+export async function listResults(): Promise<EvalResultSummary[]> {
+  const res = await fetch(`${API_BASE}/evaluation/results`)
+  if (!res.ok) throw new Error(`List results failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function getResult(filename: string): Promise<EvalResultDetail> {
+  const res = await fetch(`${API_BASE}/evaluation/results/${encodeURIComponent(filename)}`)
+  if (!res.ok) throw new Error(`Get result failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function deleteResult(filename: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/evaluation/results/${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) throw new Error(`Delete result failed: ${res.statusText}`)
+}
+
+export interface GenerateProgressEvent {
+  type: 'start' | 'progress' | 'sample_generated' | 'done' | 'error'
+  total?: number
+  current?: number
+  folder?: string
+  doc_id?: string
+  sample_id?: string
+  query?: string
+  count?: number
+  mode?: string
+  error?: string
+}
+
+export async function generateDataset(
+  folder: string | null,
+  maxDocs: number,
+  samplesPerDoc: number,
+  mode: 'replace' | 'merge',
+  onEvent: (evt: GenerateProgressEvent) => void,
+  onDone: (count: number) => void,
+  onError: (err: string) => void,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/evaluation/dataset/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folder: folder || '/', max_docs: maxDocs, samples_per_doc: samplesPerDoc, mode }),
+  })
+  if (!res.ok) {
+    onError(`Generate failed: ${res.statusText}`)
+    return
+  }
+  const reader = res.body?.getReader()
+  if (!reader) { onError('No response body'); return }
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6).trim()
+        try {
+          const parsed = JSON.parse(data) as GenerateProgressEvent
+          if (parsed.type === 'error') { onError(parsed.error || 'Unknown error'); return }
+          if (parsed.type === 'done') { onDone(parsed.count || 0); return }
+          onEvent(parsed)
+        } catch { /* skip malformed */ }
+      }
+    }
+  }
+  onDone(0)
 }

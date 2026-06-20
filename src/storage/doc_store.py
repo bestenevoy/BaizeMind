@@ -37,11 +37,18 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(folder);
         CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
         CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at);
+        CREATE TABLE IF NOT EXISTS folder_markers (
+            path TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        );
     """)
     try:
         conn.execute("ALTER TABLE documents ADD COLUMN processing_stage TEXT NOT NULL DEFAULT ''")
     except sqlite3.OperationalError:
         pass
+    # Normalize existing folders without leading slash
+    conn.execute("UPDATE documents SET folder = '/' || folder WHERE folder != '/' AND folder NOT LIKE '/%'")
+    conn.execute("UPDATE folder_markers SET path = '/' || path WHERE path != '/' AND path NOT LIKE '/%'")
     conn.close()
 
 
@@ -141,8 +148,20 @@ def list_folders() -> list[dict]:
     rows = conn.execute(
         "SELECT folder, COUNT(*) as doc_count FROM documents GROUP BY folder ORDER BY folder"
     ).fetchall()
+    counts = {r["folder"]: r["doc_count"] for r in rows}
+
+    # Add folder markers with 0 doc_count
+    marker_rows = conn.execute(
+        "SELECT path FROM folder_markers ORDER BY path"
+    ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+
+    for r in marker_rows:
+        p = r["path"]
+        if p not in counts:
+            counts[p] = 0
+
+    return [{"folder": k, "doc_count": v} for k, v in sorted(counts.items())]
 
 
 def list_all_tags() -> list[dict]:
@@ -184,3 +203,109 @@ def remove_tag(doc_id: str, tag: str) -> Optional[dict]:
         return None
     tags = [t for t in doc["tags"] if t != tag]
     return update_document(doc_id, tags=tags)
+
+
+# ── Folder management ──
+
+def normalize_folder(path: str) -> str:
+    if not path or path == "/":
+        return "/"
+    return "/" + path.strip("/")
+
+
+def create_folder(path: str) -> dict:
+    path = normalize_folder(path)
+    conn = _get_conn()
+    now = datetime.now().isoformat()
+    conn.execute(
+        "INSERT OR IGNORE INTO folder_markers (path, created_at) VALUES (?, ?)",
+        (path, now),
+    )
+    conn.commit()
+    conn.close()
+    return {"folder": path, "doc_count": 0}
+
+
+def delete_folder(path: str) -> int:
+    """Delete all documents in folder and subfolders. Returns count of deleted docs."""
+    path = normalize_folder(path)
+    conn = _get_conn()
+    # Find all docs in this folder and subfolders
+    rows = conn.execute(
+        "SELECT doc_id FROM documents WHERE folder = ? OR folder LIKE ?",
+        (path, f"{path}/%"),
+    ).fetchall()
+    doc_ids = [r["doc_id"] for r in rows]
+    count = len(doc_ids)
+
+    if count > 0:
+        placeholders = ",".join("?" * len(doc_ids))
+        conn.execute(f"DELETE FROM documents WHERE doc_id IN ({placeholders})", doc_ids)
+
+    # Also delete any nested folder markers
+    conn.execute(
+        "DELETE FROM folder_markers WHERE path = ? OR path LIKE ?",
+        (path, f"{path}/%"),
+    )
+    conn.commit()
+    conn.close()
+    return count
+
+
+def move_folder(src: str, dst: str) -> int:
+    """Move all documents from src folder (and subfolders) to dst folder. Returns count of moved docs."""
+    src = normalize_folder(src)
+    dst = normalize_folder(dst)
+
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT doc_id, folder FROM documents WHERE folder = ? OR folder LIKE ?",
+        (src, f"{src}/%"),
+    ).fetchall()
+
+    count = 0
+    for r in rows:
+        old_folder = r["folder"]
+        new_folder = dst + old_folder[len(src):] if old_folder.startswith(src) else dst
+        conn.execute(
+            "UPDATE documents SET folder = ?, updated_at = ? WHERE doc_id = ?",
+            (new_folder, datetime.now().isoformat(), r["doc_id"]),
+        )
+        count += 1
+
+    # Move folder markers
+    mrows = conn.execute(
+        "SELECT path FROM folder_markers WHERE path = ? OR path LIKE ?",
+        (src, f"{src}/%"),
+    ).fetchall()
+    for mr in mrows:
+        old_path = mr["path"]
+        new_path = dst + old_path[len(src):] if old_path.startswith(src) else dst
+        conn.execute(
+            "UPDATE folder_markers SET path = ?, created_at = ? WHERE path = ?",
+            (new_path, datetime.now().isoformat(), old_path),
+        )
+
+    conn.commit()
+    conn.close()
+    return count
+
+
+def delete_folder_marker(path: str) -> bool:
+    path = normalize_folder(path)
+    conn = _get_conn()
+    conn.execute("DELETE FROM folder_markers WHERE path = ?", (path,))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def _folder_has_docs(path: str) -> bool:
+    path = normalize_folder(path)
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM documents WHERE folder = ? OR folder LIKE ?",
+        (path, f"{path}/%"),
+    ).fetchone()
+    conn.close()
+    return row["cnt"] > 0 if row else False

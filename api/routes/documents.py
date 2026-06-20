@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException
+from pydantic import BaseModel, Field
 
 from api.schemas import (
     DocumentUploadResponse,
@@ -26,6 +27,8 @@ async def upload_document(
     file: UploadFile = File(...),
     folder: str = Form("/"),
 ):
+    folder = ("/" + folder.strip("/")) if folder != "/" else "/"
+
     filename = file.filename or "unknown"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     allowed = {"pdf", "docx", "pptx", "xlsx", "png", "jpg", "jpeg", "txt", "md"}
@@ -126,7 +129,10 @@ async def delete_document(doc_id: str):
 
 @router.put("/{doc_id}/move", response_model=DocumentInfo)
 async def move_document(doc_id: str, req: MoveRequest):
-    doc = doc_store.move_document(doc_id, req.folder)
+    folder = req.folder
+    if folder and folder != "/":
+        folder = "/" + folder.strip("/")
+    doc = doc_store.move_document(doc_id, folder)
     if not doc:
         raise HTTPException(404, f"Document {doc_id} not found")
     return DocumentInfo(**doc)
@@ -326,3 +332,36 @@ def _process_document(doc_id: str, file_path: str, folder: str):
     except Exception as e:
         elapsed = (time.time() - start) * 1000
         doc_store.update_document(doc_id, status="failed", processing_time_ms=elapsed, error=str(e))
+
+
+# ── Folder Management ──
+
+class FolderCreateRequest(BaseModel):
+    path: str = Field(..., description="Folder path e.g. /myfolder")
+
+
+class FolderMoveRequest(BaseModel):
+    src: str = Field(..., description="Source folder path")
+    dst: str = Field(..., description="Destination folder path")
+
+
+@router.post("/folders")
+async def create_folder(req: FolderCreateRequest):
+    return doc_store.create_folder(req.path)
+
+
+@router.delete("/folders/{folder_path:path}")
+async def delete_folder(folder_path: str):
+    path = "/" + folder_path.lstrip("/")
+    has_docs = doc_store._folder_has_docs(path)
+    count = doc_store.delete_folder(path)
+    if not has_docs and count == 0:
+        # Remove just the marker
+        doc_store.delete_folder_marker(path)
+    return {"deleted": True, "folder": path, "doc_count": count}
+
+
+@router.put("/folders/move")
+async def move_folder_endpoint(req: FolderMoveRequest):
+    count = doc_store.move_folder(req.src, req.dst)
+    return {"moved": True, "src": req.src, "dst": req.dst, "doc_count": count}

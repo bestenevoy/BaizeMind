@@ -22,11 +22,19 @@ export function DocumentsPage() {
     setRefreshKey((k) => k + 1)
   }, [])
 
+  const handleFolderChanged = useCallback(() => {
+    setRefreshKey((k) => k + 1)
+  }, [])
+
   return (
     <div className="container mx-auto py-6 px-4">
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-3rem)]">
         <div className="lg:col-span-2 space-y-4 overflow-y-auto">
-          <FolderTree selectedFolder={selectedFolder} onSelect={setSelectedFolder} />
+          <FolderTree
+            selectedFolder={selectedFolder}
+            onSelect={setSelectedFolder}
+            onChanged={handleFolderChanged}
+          />
           <TagFilter selectedTags={selectedTags} onToggle={toggleTag} />
         </div>
 

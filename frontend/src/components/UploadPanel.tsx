@@ -35,7 +35,7 @@ export function UploadPanel({ folder, open, onOpenChange, onUploadComplete }: Up
   const [showFolderInput, setShowFolderInput] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const targetFolder = customFolder || folder || '/'
+  const targetFolder = (customFolder || folder || '/').replace(/^\/?(.*)/, '/$1').replace(/\/$/, '') || '/'
 
   const handleFiles = async (files: FileList | null) => {
     if (!files) return

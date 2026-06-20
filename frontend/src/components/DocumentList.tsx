@@ -1,10 +1,12 @@
 import { useEffect, useState, useCallback } from 'react'
-import { FileText, Trash2, CheckCircle2, Loader2, AlertCircle, Tag, RotateCcw, Eye, X, ExternalLink, FileImage } from 'lucide-react'
+import { FileText, Trash2, CheckCircle2, Loader2, AlertCircle, Tag, RotateCcw, Eye, X, ExternalLink, FileImage, FolderInput } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { listDocuments, deleteDocument, retryDocument, getDocumentContent, type DocumentInfo, type DocumentContent } from '@/lib/api'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { listDocuments, deleteDocument, retryDocument, getDocumentContent, moveDocument, listFolders, type DocumentInfo, type DocumentContent, type FolderInfo } from '@/lib/api'
 
 interface DocumentListProps {
   folder: string | null
@@ -18,6 +20,9 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
   const [previewDoc, setPreviewDoc] = useState<DocumentContent | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [retrying, setRetrying] = useState<string | null>(null)
+  const [moveTarget, setMoveTarget] = useState<DocumentInfo | null>(null)
+  const [moveToFolder, setMoveToFolder] = useState('')
+  const [folderOptions, setFolderOptions] = useState<FolderInfo[]>([])
 
   const fetchDocs = useCallback(async () => {
     setLoading(true)
@@ -45,6 +50,27 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
       await deleteDocument(docId)
       fetchDocs()
     } catch {}
+  }
+
+  const handleMove = async () => {
+    if (!moveTarget || !moveToFolder.trim()) return
+    try {
+      await moveDocument(moveTarget.doc_id, moveToFolder)
+      setMoveTarget(null)
+      setMoveToFolder('')
+      fetchDocs()
+    } catch {}
+  }
+
+  const openMoveDialog = async (doc: DocumentInfo) => {
+    setMoveTarget(doc)
+    setMoveToFolder(doc.folder)
+    try {
+      const f = await listFolders()
+      setFolderOptions(f)
+    } catch {
+      setFolderOptions([])
+    }
   }
 
   const handleRetry = async (docId: string) => {
@@ -142,6 +168,15 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
                   title="查看内容"
                 >
                   <Eye className="h-3 w-3" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={() => openMoveDialog(doc)}
+                  title="移动文件"
+                >
+                  <FolderInput className="h-3 w-3" />
                 </Button>
                 {doc.status === 'failed' && (
                   <Button
@@ -242,6 +277,51 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
           </div>
         </div>
       )}
+
+      {/* Move Document Dialog */}
+      <Dialog open={!!moveTarget} onOpenChange={(o) => { if (!o) setMoveTarget(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>移动文件</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm">
+              将 <code className="bg-muted px-1 rounded">{moveTarget?.filename}</code> 从
+              <code className="bg-muted px-1 rounded ml-1">{moveTarget?.folder}</code> 移动到:
+            </p>
+            <div>
+              <label className="text-sm font-medium">目标文件夹</label>
+              <Input
+                placeholder="如 /docs/ai"
+                value={moveToFolder}
+                onChange={(e) => setMoveToFolder(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleMove() }}
+                autoFocus
+              />
+            </div>
+            {folderOptions.length > 0 && (
+              <div className="max-h-32 overflow-y-auto border rounded-md p-2">
+                <p className="text-xs text-muted-foreground mb-1">现有目录 (点击选择):</p>
+                {folderOptions.map((f) => (
+                  <button
+                    key={f.folder}
+                    className="block w-full text-left text-sm px-2 py-1 rounded hover:bg-accent cursor-pointer"
+                    onClick={() => setMoveToFolder(f.folder)}
+                  >
+                    {f.folder} ({f.doc_count})
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setMoveTarget(null)}>取消</Button>
+              <Button onClick={handleMove} disabled={!moveToFolder.trim()}>
+                <FolderInput className="h-4 w-4 mr-1" />移动
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }
