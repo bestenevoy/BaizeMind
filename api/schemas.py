@@ -160,6 +160,8 @@ class EvalResultSummary(BaseModel):
     semantic_similarity: float = 0
     judge_accuracy: float = 0
     citation_accuracy: float = 0
+    context_relevancy: float = 0
+    answer_relevancy: float = 0
 
 
 class EvalSampleResult(BaseModel):
@@ -169,6 +171,7 @@ class EvalSampleResult(BaseModel):
     predicted_answer: str = ""
     cited_sources: list[str] = []
     retrieved_ids: list[str] = []
+    retrieved_texts: list[str] = []
     error: Optional[str] = None
     processing_time_ms: float = 0
 

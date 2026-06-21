@@ -118,16 +118,33 @@ def export_dataset():
 @router.post("/dataset/generate")
 def generate_dataset(req: EvalDatasetGenerate):
     def generate():
+        try:
+            yield from _generate_inner(req)
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': f'{type(e).__name__}: {e}'})}\n\n"
+
+    def _generate_inner(req: EvalDatasetGenerate):
         folder = req.folder or "/"
         max_docs = req.max_docs or 10
         samples_per_doc = req.samples_per_doc or 3
 
         doc_ids = doc_store.get_doc_ids_by_filter(folder=folder)
         if not doc_ids:
-            yield f"data: {json.dumps({'type': 'error', 'error': f'No documents found in folder: {folder}'})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'error': f'文件夹 {folder} 中没有文档，请先在文档页上传并处理完成'})}\n\n"
             return
 
         doc_ids = doc_ids[:max_docs]
+        # Filter to only completed docs
+        completed_ids = []
+        for did in doc_ids:
+            doc = doc_store.get_document(did)
+            if doc and doc.get("status") == "completed":
+                completed_ids.append(did)
+        if not completed_ids:
+            yield f"data: {json.dumps({'type': 'error', 'error': f'文件夹 {folder} 中有 {len(doc_ids)} 篇文档，但全部尚未处理完成，请等待处理完成后再生成'})}\n\n"
+            return
+
+        doc_ids = completed_ids[:max_docs]
         yield f"data: {json.dumps({'type': 'start', 'total': len(doc_ids), 'folder': folder})}\n\n"
 
         try:
@@ -166,13 +183,14 @@ def generate_dataset(req: EvalDatasetGenerate):
         doc_idx = 0
         for doc_id, chunks in chunks_by_doc.items():
             doc_idx += 1
-            yield f"data: {json.dumps({'type': 'progress', 'current': doc_idx, 'total': len(chunks_by_doc), 'doc_id': doc_id})}\n\n"
 
             chunk_texts = [c.get("text", "") for c in chunks[:50] if c.get("text", "").strip()]
             if not chunk_texts:
+                yield f"data: {json.dumps({'type': 'progress', 'current': doc_idx, 'total': len(chunks_by_doc), 'doc_id': doc_id, 'warning': 'No text in chunks'})}\n\n"
                 continue
 
             combined = "\n---\n".join(chunk_texts[:20])
+            yield f"data: {json.dumps({'type': 'progress', 'current': doc_idx, 'total': len(chunks_by_doc), 'doc_id': doc_id})}\n\n"
 
             prompt = (
                 "You are a dataset generator for RAG evaluation. Based on the document content below, "
@@ -187,11 +205,24 @@ def generate_dataset(req: EvalDatasetGenerate):
 
             try:
                 resp = llm.invoke(prompt).content
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'progress', 'current': doc_idx, 'total': len(chunks_by_doc), 'doc_id': doc_id, 'warning': f'LLM call failed: {e}'})}\n\n"
+                continue
+
+            try:
                 match = re.search(r"\[[\s\S]*\]", resp)
                 if not match:
+                    yield f"data: {json.dumps({'type': 'progress', 'current': doc_idx, 'total': len(chunks_by_doc), 'doc_id': doc_id, 'warning': f'LLM did not return JSON array. Response: {resp[:200]}'})}\n\n"
                     continue
                 qa_pairs = json.loads(match.group())
-            except Exception:
+                if not isinstance(qa_pairs, list):
+                    yield f"data: {json.dumps({'type': 'progress', 'current': doc_idx, 'total': len(chunks_by_doc), 'doc_id': doc_id, 'warning': f'LLM returned non-list JSON'})}\n\n"
+                    continue
+            except json.JSONDecodeError as e:
+                yield f"data: {json.dumps({'type': 'progress', 'current': doc_idx, 'total': len(chunks_by_doc), 'doc_id': doc_id, 'warning': f'JSON parse failed: {e}. Raw: {resp[:200]}'})}\n\n"
+                continue
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'progress', 'current': doc_idx, 'total': len(chunks_by_doc), 'doc_id': doc_id, 'warning': f'Parse error: {e}'})}\n\n"
                 continue
 
             for qa in qa_pairs:
@@ -260,12 +291,16 @@ def run_evaluation(req: EvalRunRequest):
                 retrieved_ids = [
                     d.get("chunk_id", "") for d in result.get("documents", [])
                 ]
+                retrieved_texts = [
+                    d.get("text", "") for d in result.get("documents", [])
+                ]
                 query_type = result.get("query_type", "")
             except Exception as e:
                 err = str(e)
                 predicted = f"ERROR: {e}"
                 cited_sources = []
                 retrieved_ids = []
+                retrieved_texts = []
                 query_type = ""
 
             sample_time = (time.time() - sample_start) * 1000
@@ -276,6 +311,7 @@ def run_evaluation(req: EvalRunRequest):
                 "predicted_answer": predicted,
                 "cited_sources": cited_sources,
                 "retrieved_ids": retrieved_ids,
+                "retrieved_texts": retrieved_texts,
                 "error": err,
                 "processing_time_ms": sample_time,
             })

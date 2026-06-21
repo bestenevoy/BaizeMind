@@ -307,6 +307,35 @@ export async function healthCheck(): Promise<boolean> {
   }
 }
 
+// ── Config Overrides ──
+
+export interface EditableConfigItem {
+  key: string
+  value: string
+  overridden: boolean
+}
+
+export async function listEditableConfig(): Promise<EditableConfigItem[]> {
+  const res = await fetch(`${API_BASE}/system/config/editable`)
+  if (!res.ok) throw new Error(`List editable config failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function updateConfigOverride(key: string, value: string): Promise<{ key: string; value: unknown; saved: boolean }> {
+  const res = await fetch(`${API_BASE}/system/config/editable`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, value }),
+  })
+  if (!res.ok) throw new Error(`Update config failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function resetConfigOverride(key: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/system/config/editable/${encodeURIComponent(key)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`Reset config failed: ${res.statusText}`)
+}
+
 // ── Evaluation ──
 
 export interface EvalSample {
@@ -327,6 +356,8 @@ export interface EvalResultSummary {
   semantic_similarity: number
   judge_accuracy: number
   citation_accuracy: number
+  context_relevancy: number
+  answer_relevancy: number
 }
 
 export interface EvalSampleResult {
@@ -336,6 +367,7 @@ export interface EvalSampleResult {
   predicted_answer: string
   cited_sources: string[]
   retrieved_ids: string[]
+  retrieved_texts: string[]
   error?: string
   processing_time_ms: number
 }
@@ -348,6 +380,8 @@ export interface EvalResultDetail {
     semantic_similarity: number
     judge_accuracy: number
     citation_accuracy: number
+    context_relevancy: number
+    answer_relevancy: number
   }
   total_time_seconds: number
   avg_time_per_sample: number
@@ -430,7 +464,8 @@ export async function runEvaluation(
     body: JSON.stringify(body),
   })
   if (!res.ok) {
-    onError(`Run failed: ${res.statusText}`)
+    const msg = `HTTP ${res.status}: ${res.statusText || 'Unknown error'}`
+    try { const b = await res.json(); onError(b?.detail || b?.error || msg) } catch { onError(msg) }
     return
   }
   const reader = res.body?.getReader()
@@ -495,6 +530,7 @@ export interface GenerateProgressEvent {
   count?: number
   mode?: string
   error?: string
+  warning?: string
 }
 
 export async function generateDataset(
@@ -512,7 +548,8 @@ export async function generateDataset(
     body: JSON.stringify({ folder: folder || '/', max_docs: maxDocs, samples_per_doc: samplesPerDoc, mode }),
   })
   if (!res.ok) {
-    onError(`Generate failed: ${res.statusText}`)
+    const msg = `HTTP ${res.status}: ${res.statusText || 'Unknown error'}`
+    try { const b = await res.json(); onError(b?.detail || b?.error || msg) } catch { onError(msg) }
     return
   }
   const reader = res.body?.getReader()

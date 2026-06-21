@@ -67,4 +67,15 @@ class HybridRetriever:
                 scores[chunk_id] = (doc, scores[chunk_id][1] + weight / (k + rank + 1))
 
         ranked = sorted(scores.values(), key=lambda x: x[1], reverse=True)
+
+        # Threshold-based noise filtering
+        threshold = settings.retrieval_similarity_threshold
+        if threshold > 0:
+            ranked = [(doc, s) for doc, s in ranked if self._normalize_score(s, ranked[0][1] if ranked else 1.0) >= threshold]
+
         return [doc for doc, _ in ranked[:top_k]]
+
+    @staticmethod
+    def _normalize_score(score: float, max_score: float) -> float:
+        """Normalize RRF score to 0-1 range relative to the top result."""
+        return score / max_score if max_score > 0 else 0.0

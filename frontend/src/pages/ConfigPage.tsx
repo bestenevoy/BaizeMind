@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from 'react'
-import { getConfig, checkConnectivity, getSystemStats } from '@/lib/api'
-import type { ConfigResponse, ConnectivityResult, SystemStats } from '@/lib/api'
+import { getConfig, checkConnectivity, getSystemStats, listEditableConfig, updateConfigOverride, resetConfigOverride } from '@/lib/api'
+import type { ConfigResponse, ConnectivityResult, SystemStats, EditableConfigItem } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, Wifi } from 'lucide-react'
+import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, Wifi, Save, RotateCcw, Pencil } from 'lucide-react'
 
 function StatusIcon({ status }: { status: string }) {
   if (status === 'ok')
@@ -22,13 +23,18 @@ export function ConfigPage() {
   const [connResults, setConnResults] = useState<ConnectivityResult[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [checking, setChecking] = useState(false)
+  const [editableItems, setEditableItems] = useState<EditableConfigItem[]>([])
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const loadConfig = useCallback(async () => {
     setLoading(true)
     try {
-      const [cfg, st] = await Promise.all([getConfig(), getSystemStats()])
+      const [cfg, st, ed] = await Promise.all([getConfig(), getSystemStats(), listEditableConfig().catch(() => [])])
       setConfig(cfg)
       setStats(st)
+      setEditableItems(Array.isArray(ed) ? ed : [])
     } catch {
       setConfig(null)
     }
@@ -45,6 +51,38 @@ export function ConfigPage() {
     }
     setChecking(false)
   }, [])
+
+  const handleSaveOverride = async () => {
+    if (!editingKey) return
+    setSaving(true)
+    try {
+      await updateConfigOverride(editingKey, editValue)
+      setEditableItems((prev) =>
+        prev.map((it) => (it.key === editingKey ? { ...it, value: editValue, overridden: true } : it))
+      )
+      setEditingKey(null)
+    } catch {}
+    setSaving(false)
+  }
+
+  const handleResetOverride = async (key: string) => {
+    try {
+      await resetConfigOverride(key)
+      loadEditableConfig()
+    } catch {}
+  }
+
+  const startEdit = (item: EditableConfigItem) => {
+    setEditingKey(item.key)
+    setEditValue(item.value)
+  }
+
+  const loadEditableConfig = async () => {
+    try {
+      const ed = await listEditableConfig()
+      setEditableItems(Array.isArray(ed) ? ed : [])
+    } catch {}
+  }
 
   useEffect(() => {
     loadConfig()
@@ -192,6 +230,66 @@ export function ConfigPage() {
             ) : (
               <p className="text-sm text-muted-foreground">无法加载配置信息</p>
             )}
+          </CardContent>
+        </Card>
+
+        {/* Editable Runtime Config */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Pencil className="h-5 w-5" />
+              运行时配置 (可编辑)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {editableItems.map((item) => (
+                <div
+                  key={item.key}
+                  className="flex items-center gap-3 p-2 rounded border hover:bg-muted/30 text-sm"
+                >
+                  <span className="w-48 shrink-0 text-muted-foreground font-mono text-xs">
+                    {item.key}
+                  </span>
+                  {editingKey === item.key ? (
+                    <div className="flex items-center gap-2 flex-1">
+                      <Input
+                        className="flex-1 h-8 text-xs"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleSaveOverride() }}
+                        autoFocus
+                      />
+                      <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
+                        {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>
+                        取消
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 flex-1">
+                      <code className="text-xs bg-muted px-1.5 py-0.5 rounded min-w-[80px] text-center">
+                        {item.value || '-'}
+                      </code>
+                      {item.overridden && (
+                        <Badge variant="secondary" className="text-[10px]">已修改</Badge>
+                      )}
+                      <div className="ml-auto flex items-center gap-1">
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => startEdit(item)} title="编辑">
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                        {item.overridden && (
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleResetOverride(item.key)} title="恢复默认">
+                            <RotateCcw className="h-3 w-3" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </CardContent>
         </Card>
       </div>

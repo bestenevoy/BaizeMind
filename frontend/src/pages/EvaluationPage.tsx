@@ -295,14 +295,14 @@ function GenerateDatasetDialog({
   const [samplesPerDoc, setSamplesPerDoc] = useState(3)
   const [mode, setMode] = useState<'replace' | 'merge'>('merge')
   const [running, setRunning] = useState(false)
-  const [log, setLog] = useState<string[]>([])
+  const [logText, setLogText] = useState('')
   const [doneCount, setDoneCount] = useState(0)
   const [folders, setFolders] = useState<FolderInfo[]>([])
 
   useEffect(() => {
     if (open) {
       listFolders().then(setFolders).catch(() => {})
-      setLog([])
+      setLogText('')
       setDoneCount(0)
       setRunning(false)
     }
@@ -310,32 +310,33 @@ function GenerateDatasetDialog({
 
   const handleGenerate = async () => {
     setRunning(true)
-    setLog([])
+    setLogText('')
     try {
       await generateDataset(
         folder || '/', maxDocs, samplesPerDoc, mode,
         (evt: GenerateProgressEvent) => {
           if (evt.type === 'start') {
-            setLog((prev) => [...prev, `开始生成: ${evt.total} 个文档`])
+            setLogText((prev) => prev + `开始: ${evt.total} 个文档 (${evt.folder})\n`)
           } else if (evt.type === 'progress') {
-            setLog((prev) => [...prev, `处理文档: ${evt.doc_id}`])
+            const w = evt.warning ? ` ⚠ ${evt.warning}` : ''
+            setLogText((prev) => prev + `[${evt.current}/${evt.total}] ${evt.doc_id}${w}\n`)
           } else if (evt.type === 'sample_generated') {
-            setLog((prev) => [...prev, `  生成: [${evt.sample_id}] ${evt.query}`])
+            setLogText((prev) => prev + `  ✓ [${evt.sample_id}] ${evt.query}\n`)
           }
         },
         (count) => {
           setDoneCount(count)
           setRunning(false)
-          setLog((prev) => [...prev, `完成! 共生成 ${count} 条样本`])
+          setLogText((prev) => prev + `完成! 共生成 ${count} 条样本`)
           if (count > 0) onDone()
         },
         (err) => {
-          setLog((prev) => [...prev, `错误: ${err}`])
+          setLogText((prev) => prev + `错误: ${err}`)
           setRunning(false)
         },
       )
     } catch (e: unknown) {
-      setLog((prev) => [...prev, `异常: ${String(e)}`])
+      setLogText((prev) => prev + `异常: ${String(e)}`)
       setRunning(false)
     }
   }
@@ -390,11 +391,9 @@ function GenerateDatasetDialog({
               {running ? '生成中...' : '开始生成'}
             </Button>
           </div>
-          {log.length > 0 && (
+          {logText && (
             <div className="p-3 rounded-md bg-muted/50 max-h-48 overflow-y-auto">
-              {log.map((line, i) => (
-                <pre key={i} className="text-xs text-muted-foreground whitespace-pre-wrap">{line}</pre>
-              ))}
+              <pre className="text-xs text-muted-foreground whitespace-pre-wrap">{logText}</pre>
               {doneCount > 0 && (
                 <p className="text-sm font-medium text-green-600 mt-2">生成完成! 共 {doneCount} 条样本已保存。</p>
               )}
@@ -413,13 +412,14 @@ function RunTab() {
   const [evalFolder, setEvalFolder] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState({ current: 0, total: 0 })
-  const [sampleresults, setSampleResults] = useState<{ sample_id: string; processing_time_ms: number; error?: string }[]>([])
+  const [sampleVersion, setSampleVersion] = useState(0)
   const [done, setDone] = useState(false)
   const [summary, setSummary] = useState<Record<string, number> | null>(null)
   const [error, setError] = useState('')
   const [lastFile, setLastFile] = useState('')
   const [folders, setFolders] = useState<FolderInfo[]>([])
-  const logRef = useRef<HTMLDivElement>(null)
+  const samplesRef = useRef<{ sample_id: string; processing_time_ms: number; error?: string }[]>([])
+  const elRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { listFolders().then(setFolders).catch(() => {}) }, [])
 
@@ -428,7 +428,8 @@ function RunTab() {
     setDone(false)
     setSummary(null)
     setError('')
-    setSampleResults([])
+    samplesRef.current = []
+    setSampleVersion(0)
     setProgress({ current: 0, total: 0 })
 
     try {
@@ -441,9 +442,10 @@ function RunTab() {
           } else if (evt.type === 'progress') {
             setProgress({ current: evt.current || 0, total: evt.total || 0 })
           } else if (evt.type === 'sample_done') {
-            setSampleResults((prev) => [...prev, { sample_id: evt.sample_id || '', processing_time_ms: evt.processing_time_ms || 0, error: evt.error }])
+            samplesRef.current = [...samplesRef.current, { sample_id: evt.sample_id || '', processing_time_ms: evt.processing_time_ms || 0, error: evt.error }]
+            setSampleVersion((v) => v + 1)
           }
-          if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+          if (elRef.current) elRef.current.scrollTop = elRef.current.scrollHeight
         },
         (sum, filename) => {
           setSummary(sum)
@@ -540,13 +542,15 @@ function RunTab() {
             <CardTitle className="text-base">评估结果摘要</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-8 gap-3">
               <MetricBox label="样本数" value={summary.num_samples?.toString() || '-'} />
               <MetricBox label="Recall@5" value={summary.recall_at_5?.toFixed(4) || '-'} />
               <MetricBox label="Recall@10" value={summary.recall_at_10?.toFixed(4) || '-'} />
               <MetricBox label="语义相似度" value={summary.semantic_similarity?.toFixed(4) || '-'} />
               <MetricBox label="Judge准确率" value={summary.judge_accuracy?.toFixed(4) || '-'} />
               <MetricBox label="引用准确率" value={summary.citation_accuracy?.toFixed(4) || '-'} />
+              <MetricBox label="上下文相关" value={summary.context_relevancy?.toFixed(4) || '-'} />
+              <MetricBox label="答案相关度" value={summary.answer_relevancy?.toFixed(4) || '-'} />
             </div>
             {lastFile && <p className="text-xs text-muted-foreground mt-3">结果已保存: {lastFile}</p>}
           </CardContent>
@@ -554,14 +558,14 @@ function RunTab() {
       )}
 
       {/* Sample Log */}
-      {sampleresults.length > 0 && (
+      {samplesRef.current.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">样本结果 ({sampleresults.length})</CardTitle>
+            <CardTitle className="text-base">样本结果 ({samplesRef.current.length})</CardTitle>
           </CardHeader>
           <CardContent>
-            <div ref={logRef} className="max-h-64 overflow-y-auto space-y-1">
-              {sampleresults.map((r, i) => (
+            <div ref={elRef} className="max-h-64 overflow-y-auto space-y-1">
+              {samplesRef.current.map((r, i) => (
                 <div key={i} className="flex items-center gap-2 text-sm py-1 px-2 rounded hover:bg-muted/50">
                   {r.error ? <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
                     : <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />}

@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     siliconflow_api_key: str = ""
     siliconflow_embedding_url: str = "https://api.siliconflow.cn/v1/embeddings"
     siliconflow_embedding_model: str = "BAAI/bge-m3"
+    siliconflow_rerank_url: str = "https://api.siliconflow.cn/v1/rerank"
+    siliconflow_rerank_model: str = "BAAI/bge-reranker-v2-m3"
 
     # Milvus
     milvus_host: str = "127.0.0.1"
@@ -54,6 +56,8 @@ class Settings(BaseSettings):
     hybrid_sparse_weight: float = 0.3
     hybrid_bm25_weight: float = 0.2
     hybrid_rrf_k: int = 60
+    retrieval_similarity_threshold: float = 0.0  # 0 = disabled; set e.g. 0.3 to filter low-relevance chunks
+    reranker_method: str = "embedding"  # "embedding" | "llm" | "hybrid"
 
     # Agent
     agent_max_iterations: int = 5

@@ -41,6 +41,9 @@ class EvalRunner:
                     "retrieved_ids": [
                         d.get("chunk_id", "") for d in result.get("documents", [])
                     ],
+                    "retrieved_texts": [
+                        d.get("text", "") for d in result.get("documents", [])
+                    ],
                     "processing_time_ms": time.time() * 1000,
                 })
             except Exception as e:
@@ -50,6 +53,7 @@ class EvalRunner:
                     "predicted_answer": f"ERROR: {e}",
                     "cited_sources": [],
                     "retrieved_ids": [],
+                    "retrieved_texts": [],
                     "error": str(e),
                 })
 

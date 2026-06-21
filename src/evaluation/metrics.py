@@ -59,6 +59,69 @@ class EvalMetrics:
         matched = sum(1 for src in cited_sources if any(gt in src for gt in ground_truth_sources))
         return matched / max(len(cited_sources), 1)
 
+    def context_relevancy(
+        self, query: str, retrieved_texts: list[str]
+    ) -> float:
+        """Measure how relevant retrieved chunks are to the query.
+        Returns average cosine similarity between query and each chunk."""
+        if not retrieved_texts:
+            return 0.0
+        try:
+            query_vec = self._embedding.encode_dense([query])[0]
+            chunk_vecs = self._embedding.encode_dense(retrieved_texts)
+            sims = cosine_similarity(query_vec.reshape(1, -1), chunk_vecs).flatten()
+            return float(np.mean(sims))
+        except Exception:
+            return 0.0
+
+    def context_relevancy_llm(
+        self, query: str, retrieved_texts: list[str]
+    ) -> float:
+        """LLM-judged context relevancy. Rate how much each chunk helps answer the query."""
+        if not retrieved_texts:
+            return 0.0
+        joined = "\n---\n".join(t[:300] for t in retrieved_texts[:10])
+        llm = self._get_judge_llm()
+        prompt = (
+            f"Rate how relevant the retrieved context is to answering the question.\n"
+            f"Question: {query[:500]}\n\n"
+            f"Retrieved context:\n{joined[:4000]}\n\n"
+            f'Respond in JSON: {{"relevancy": 0.0-1.0, "explanation": "..."}}'
+        )
+        try:
+            import json, re
+            resp = llm.invoke(prompt)
+            match = re.search(r"\{[\s\S]*\}", resp.content)
+            if match:
+                return float(json.loads(match.group()).get("relevancy", 0))
+        except Exception:
+            pass
+        return 0.0
+
+    def answer_relevancy(
+        self, query: str, answer: str
+    ) -> float:
+        """Measure how relevant the answer is to the query.
+        Uses LLM judge to score semantic relevance."""
+        if not answer:
+            return 0.0
+        llm = self._get_judge_llm()
+        prompt = (
+            f"Rate how relevant this answer is to the question, regardless of factual correctness.\n"
+            f"Question: {query[:500]}\n\n"
+            f"Answer: {answer[:2000]}\n\n"
+            f'Respond in JSON: {{"relevancy": 0.0-1.0, "explanation": "..."}}'
+        )
+        try:
+            import json, re
+            resp = llm.invoke(prompt)
+            match = re.search(r"\{[\s\S]*\}", resp.content)
+            if match:
+                return float(json.loads(match.group()).get("relevancy", 0))
+        except Exception:
+            pass
+        return 0.0
+
     def compute_metrics(
         self,
         samples: list[dict],
@@ -69,6 +132,8 @@ class EvalMetrics:
         all_accuracies = []
         all_citations = []
         all_is_correct = []
+        all_ctx_relevancy = []
+        all_ans_relevancy = []
 
         for sample, result in zip(samples, results):
             if "retrieved_ids" in result and "ground_truth_ids" in sample:
@@ -96,11 +161,27 @@ class EvalMetrics:
             )
             all_citations.append(cit)
 
+            # Context relevancy from retrieved texts
+            retrieved_texts = result.get("retrieved_texts", [])
+            if retrieved_texts:
+                all_ctx_relevancy.append(
+                    self.context_relevancy(sample["query"], retrieved_texts)
+                )
+
+            # Answer relevancy
+            predicted = result.get("predicted_answer", "")
+            if predicted and "error" not in predicted.lower():
+                all_ans_relevancy.append(
+                    self.answer_relevancy(sample["query"], predicted)
+                )
+
         return {
             "num_samples": len(samples),
-            "recall_at_5": np.mean(all_recall_5) if all_recall_5 else 0.0,
-            "recall_at_10": np.mean(all_recall_10) if all_recall_10 else 0.0,
-            "semantic_similarity": np.mean(all_accuracies) if all_accuracies else 0.0,
-            "judge_accuracy": np.mean(all_is_correct) if all_is_correct else 0.0,
-            "citation_accuracy": np.mean(all_citations) if all_citations else 0.0,
+            "recall_at_5": float(np.mean(all_recall_5)) if all_recall_5 else 0.0,
+            "recall_at_10": float(np.mean(all_recall_10)) if all_recall_10 else 0.0,
+            "semantic_similarity": float(np.mean(all_accuracies)) if all_accuracies else 0.0,
+            "judge_accuracy": float(np.mean(all_is_correct)) if all_is_correct else 0.0,
+            "citation_accuracy": float(np.mean(all_citations)) if all_citations else 0.0,
+            "context_relevancy": float(np.mean(all_ctx_relevancy)) if all_ctx_relevancy else 0.0,
+            "answer_relevancy": float(np.mean(all_ans_relevancy)) if all_ans_relevancy else 0.0,
         }
