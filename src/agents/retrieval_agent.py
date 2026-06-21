@@ -30,14 +30,43 @@ class RetrievalAgent:
         # Apply relevance threshold AFTER reranking
         threshold = settings.retrieval_similarity_threshold
         if threshold > 0:
-            filtered = [r for r in ranked if r.get("rerank_score", r.get("score", 0)) >= threshold]
-            if filtered:
-                return filtered
-        return ranked
+            ranked = [r for r in ranked if r.get("rerank_score", r.get("score", 0)) >= threshold]
+            if not ranked:
+                return []
+
+        return self._dedup_by_chunk_id(ranked)
+
+    @staticmethod
+    def _dedup_by_chunk_id(results: list[dict]) -> list[dict]:
+        """Deduplicate by chunk_id, keeping first (highest-ranked) occurrence."""
+        seen = set()
+        out = []
+        for r in results:
+            cid = r.get("chunk_id", "")
+            if cid and cid not in seen:
+                seen.add(cid)
+                out.append(r)
+            elif not cid:
+                out.append(r)  # Keep items without chunk_id
+        return out
+
+    @staticmethod
+    def _dedup_by_text(results: list[dict]) -> list[dict]:
+        """Deduplicate near-identical chunks using text hash."""
+        seen = set()
+        out = []
+        for r in results:
+            text = r.get("text", "").strip()
+            h = hash(text)
+            if h not in seen:
+                seen.add(h)
+                out.append(r)
+        return out
 
     def extract_context(self, results: list[dict]) -> str:
+        deduped = self._dedup_by_text(self._dedup_by_chunk_id(results))
         parts = []
-        for r in results:
+        for r in deduped:
             source = f"[Source: {r.get('doc_id', '?')}_{r.get('chunk_id', '?')}]"
             parts.append(f"{source}\n{r.get('text', '')}")
         return "\n\n---\n\n".join(parts)

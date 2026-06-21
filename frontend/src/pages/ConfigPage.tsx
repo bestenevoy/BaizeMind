@@ -84,6 +84,18 @@ export function ConfigPage() {
     } catch {}
   }
 
+  const friendlyValue = (item: EditableConfigItem) => {
+    if (item.key === 'reranker_method') {
+      const m: Record<string, string> = {
+        embedding: 'Cross-Encoder (bge-reranker-v2-m3)',
+        llm: 'LLM 排序',
+        hybrid: '混合 (Cross-Encoder + LLM)',
+      }
+      return m[item.value] || item.value
+    }
+    return item.value
+  }
+
   useEffect(() => {
     loadConfig()
     runConnectivityCheck()
@@ -252,25 +264,46 @@ export function ConfigPage() {
                     {item.key}
                   </span>
                   {editingKey === item.key ? (
-                    <div className="flex items-center gap-2 flex-1">
-                      <Input
-                        className="flex-1 h-8 text-xs"
-                        value={editValue}
-                        onChange={(e) => setEditValue(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') handleSaveOverride() }}
-                        autoFocus
-                      />
-                      <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
-                        {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>
-                        取消
-                      </Button>
-                    </div>
+                    item.key === 'reranker_method' ? (
+                      <div className="flex items-center gap-2 flex-1">
+                        <select
+                          className="flex-1 h-8 text-xs rounded-md border bg-background px-2"
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          autoFocus
+                        >
+                          <option value="embedding">硅基流动 Cross-Encoder (BAAI/bge-reranker-v2-m3)</option>
+                          <option value="llm">LLM 排序</option>
+                          <option value="hybrid">混合 (Cross-Encoder + LLM)</option>
+                        </select>
+                        <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
+                          {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>
+                          取消
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 flex-1">
+                        <Input
+                          className="flex-1 h-8 text-xs"
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleSaveOverride() }}
+                          autoFocus
+                        />
+                        <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
+                          {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>
+                          取消
+                        </Button>
+                      </div>
+                    )
                   ) : (
                     <div className="flex items-center gap-2 flex-1">
                       <code className="text-xs bg-muted px-1.5 py-0.5 rounded min-w-[80px] text-center">
-                        {item.value || '-'}
+                        {friendlyValue(item) || '-'}
                       </code>
                       {item.overridden && (
                         <Badge variant="secondary" className="text-[10px]">已修改</Badge>

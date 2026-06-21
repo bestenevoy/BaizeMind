@@ -46,6 +46,7 @@ data/bm25_index/
 dataset.json
 data/evaluation/dataset.json
 data/evaluation/results/
+data/config_overrides.json
 
 # Milvus installer
 *.deb
