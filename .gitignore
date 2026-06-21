@@ -42,5 +42,10 @@ htmlcov/
 # BM25 index (too large for git)
 data/bm25_index/
 
+# Evaluation artifacts (generated at runtime)
+dataset.json
+data/evaluation/dataset.json
+data/evaluation/results/
+
 # Milvus installer
 *.deb
