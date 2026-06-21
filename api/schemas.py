@@ -155,13 +155,34 @@ class EvalResultSummary(BaseModel):
     filename: str
     timestamp: float = 0
     num_samples: int = 0
+    # P1: Core
+    context_relevancy: float = 0
+    context_recall: float = 0
+    answer_relevancy: float = 0
+    faithfulness: float = 0
+    # P1: Precision & NDCG
+    precision_at_5: Optional[float] = None
+    precision_at_10: Optional[float] = None
+    ndcg_at_5: Optional[float] = None
+    # P1: Hallucination
+    intrinsic_hallucination_rate: float = 0
+    extrinsic_hallucination_rate: float = 0
+    # P1: Completeness
+    answer_completeness: float = 0
+    # P2
+    mrr: Optional[float] = None
+    context_redundancy: float = 0
+    delta_ndcg: Optional[float] = None
+    filter_drop_rate: float = 0
+    # P3
+    timing_mean_ms: float = 0
+    timing_p95_ms: float = 0
+    # legacy
     recall_at_5: float = 0
     recall_at_10: float = 0
     semantic_similarity: float = 0
     judge_accuracy: float = 0
     citation_accuracy: float = 0
-    context_relevancy: float = 0
-    answer_relevancy: float = 0
 
 
 class EvalSampleResult(BaseModel):

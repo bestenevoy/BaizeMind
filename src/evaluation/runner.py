@@ -28,9 +28,11 @@ class EvalRunner:
 
         for i, sample in enumerate(samples):
             print(f"  [{i+1}/{len(samples)}] {sample['query'][:60]}...")
+            t0 = time.time()
             try:
                 workflow = get_workflow()
                 result = workflow.invoke(sample["query"])
+                elapsed_ms = (time.time() - t0) * 1000
 
                 results.append({
                     "sample_id": sample.get("id", str(i)),
@@ -44,7 +46,8 @@ class EvalRunner:
                     "retrieved_texts": [
                         d.get("text", "") for d in result.get("documents", [])
                     ],
-                    "processing_time_ms": time.time() * 1000,
+                    "is_negative_sample": sample.get("is_negative", False),
+                    "processing_time_ms": elapsed_ms,
                 })
             except Exception as e:
                 results.append({
@@ -54,6 +57,7 @@ class EvalRunner:
                     "cited_sources": [],
                     "retrieved_ids": [],
                     "retrieved_texts": [],
+                    "is_negative_sample": sample.get("is_negative", False),
                     "error": str(e),
                 })
 

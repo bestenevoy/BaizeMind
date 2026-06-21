@@ -17,9 +17,12 @@ import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from 'recharts'
+import {
   Database, Play, BarChart3, History, Plus, Trash2, Edit3, Upload, Download,
   Loader2, CheckCircle2, XCircle, Clock, RefreshCw, FileText, AlertTriangle,
-  Sparkles, FolderSearch,
+  Sparkles, FolderSearch, TrendingUp,
 } from 'lucide-react'
 
 type Tab = 'dataset' | 'run' | 'results'
@@ -542,15 +545,42 @@ function RunTab() {
             <CardTitle className="text-base">评估结果摘要</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-8 gap-3">
-              <MetricBox label="样本数" value={summary.num_samples?.toString() || '-'} />
-              <MetricBox label="Recall@5" value={summary.recall_at_5?.toFixed(4) || '-'} />
-              <MetricBox label="Recall@10" value={summary.recall_at_10?.toFixed(4) || '-'} />
-              <MetricBox label="语义相似度" value={summary.semantic_similarity?.toFixed(4) || '-'} />
-              <MetricBox label="Judge准确率" value={summary.judge_accuracy?.toFixed(4) || '-'} />
-              <MetricBox label="引用准确率" value={summary.citation_accuracy?.toFixed(4) || '-'} />
-              <MetricBox label="上下文相关" value={summary.context_relevancy?.toFixed(4) || '-'} />
-              <MetricBox label="答案相关度" value={summary.answer_relevancy?.toFixed(4) || '-'} />
+            <div>
+              <h4 className="text-sm font-medium mb-2">P1: 核心检索与质量</h4>
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+                <MetricBox label="上下文相关度" english="context_relevancy" value={summary.context_relevancy?.toFixed(4) || '-'} highlight />
+                <MetricBox label="上下文召回" english="context_recall" value={summary.context_recall?.toFixed(4) || '-'} highlight />
+                <MetricBox label="答案相关度" english="answer_relevancy" value={summary.answer_relevancy?.toFixed(4) || '-'} highlight />
+                <MetricBox label="忠实度" english="faithfulness" value={summary.faithfulness?.toFixed(4) || '-'} highlight />
+                <MetricBox label="精度@5" english="precision_at_5" value={summary.precision_at_5 != null ? summary.precision_at_5.toFixed(4) : '-'} />
+                <MetricBox label="精度@10" english="precision_at_10" value={summary.precision_at_10 != null ? summary.precision_at_10.toFixed(4) : '-'} />
+                <MetricBox label="NDCG@5" english="ndcg_at_5" value={summary.ndcg_at_5 != null ? summary.ndcg_at_5.toFixed(4) : '-'} />
+                <MetricBox label="完整性" english="answer_completeness" value={summary.answer_completeness?.toFixed(4) || '-'} />
+              </div>
+            </div>
+            <div>
+              <h4 className="text-sm font-medium mb-2">P1: 幻觉检测</h4>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <MetricBox label="内在幻觉率" english="intrinsic" value={summary.intrinsic_hallucination_rate?.toFixed(4) || '-'} />
+                <MetricBox label="外在幻觉率" english="extrinsic" value={summary.extrinsic_hallucination_rate?.toFixed(4) || '-'} />
+              </div>
+            </div>
+            <div>
+              <h4 className="text-sm font-medium mb-2">P2: 排序与冗余</h4>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                <MetricBox label="MRR" value={summary.mrr != null ? summary.mrr.toFixed(4) : '-'} />
+                <MetricBox label="上下文冗余度" english="redundancy" value={summary.context_redundancy?.toFixed(4) || '-'} />
+                <MetricBox label="ΔNDCG" english="rerank gain" value={summary.delta_ndcg != null ? summary.delta_ndcg.toFixed(4) : '-'} />
+                <MetricBox label="过滤丢弃率" english="drop rate" value={summary.filter_drop_rate?.toFixed(4) || '-'} />
+              </div>
+            </div>
+            <div>
+              <h4 className="text-sm font-medium mb-2">P3: 性能</h4>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                <MetricBox label="样本数" value={summary.num_samples?.toString() || '-'} />
+                <MetricBox label="平均耗时" english="mean ms" value={summary.timing_mean_ms ? `${summary.timing_mean_ms.toFixed(0)}ms` : '-'} />
+                <MetricBox label="P95耗时" english="p95 ms" value={summary.timing_p95_ms ? `${summary.timing_p95_ms.toFixed(0)}ms` : '-'} />
+              </div>
             </div>
             {lastFile && <p className="text-xs text-muted-foreground mt-3">结果已保存: {lastFile}</p>}
           </CardContent>
@@ -584,11 +614,12 @@ function RunTab() {
   )
 }
 
-function MetricBox({ label, value }: { label: string; value: string }) {
+function MetricBox({ label, value, english, highlight }: { label: string; value: string; english?: string; highlight?: boolean }) {
   return (
-    <div className="p-3 rounded-lg border text-center">
-      <p className="text-xl font-bold">{value}</p>
-      <p className="text-xs text-muted-foreground">{label}</p>
+    <div className={`p-3 rounded-lg border text-center ${highlight ? 'border-primary/30 bg-primary/5' : ''}`}>
+      <p className={`text-xl font-bold ${highlight ? 'text-primary' : ''}`}>{value}</p>
+      <p className="text-xs mt-0.5">{label}</p>
+      {english && <p className="text-[10px] text-muted-foreground">{english}</p>}
     </div>
   )
 }
@@ -662,6 +693,37 @@ function ResultsTab() {
         </Card>
       ) : (
         <>
+          {/* 4-Metric Trend Chart */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <TrendingUp className="h-4 w-4" />指标趋势
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={280}>
+                <LineChart data={[...results].reverse()}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                  <XAxis
+                    dataKey="filename"
+                    tick={{ fontSize: 10 }}
+                    tickFormatter={(v: string) => v.replace('eval_', '').replace('.json', '')}
+                  />
+                  <YAxis domain={[0, 1]} tick={{ fontSize: 10 }} />
+                  <Tooltip />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Line type="monotone" dataKey="context_relevancy" name="context_relevancy" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="context_recall" name="context_recall" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="answer_relevancy" name="answer_relevancy" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="faithfulness" name="faithfulness" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="ndcg_at_5" name="ndcg@5" stroke="#8b5cf6" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 2" />
+                  <Line type="monotone" dataKey="answer_completeness" name="completeness" stroke="#06b6d4" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 2" />
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* History List */}
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-base">历史结果 ({results.length})</CardTitle>
@@ -680,10 +742,12 @@ function ResultsTab() {
                       <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium font-mono">{r.filename}</p>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
                           <span>{r.num_samples} 样本</span>
-                          <span>Recall@5: {r.recall_at_5.toFixed(3)}</span>
-                          <span>Judge: {r.judge_accuracy.toFixed(3)}</span>
+                          <span className="text-blue-500 font-medium">CR: {r.context_relevancy.toFixed(3)}</span>
+                          <span className="text-green-500 font-medium">CRe: {r.context_recall.toFixed(3)}</span>
+                          <span className="text-amber-500 font-medium">AR: {r.answer_relevancy.toFixed(3)}</span>
+                          <span className="text-red-500 font-medium">F: {r.faithfulness.toFixed(3)}</span>
                         </div>
                       </div>
                       <Button
@@ -710,8 +774,39 @@ function ResultsTab() {
                 <CardTitle className="text-base">结果详情: {viewingFile}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* Metrics */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                {/* 4 Key Metrics */}
+                <div>
+                  <h4 className="text-sm font-medium mb-2">核心指标</h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <MetricBox
+                      label="上下文相关度"
+                      english="context_relevancy"
+                      value={selected.summary.context_relevancy?.toFixed(4) || '-'}
+                      highlight
+                    />
+                    <MetricBox
+                      label="上下文召回"
+                      english="context_recall"
+                      value={selected.summary.context_recall?.toFixed(4) || '-'}
+                      highlight
+                    />
+                    <MetricBox
+                      label="答案相关度"
+                      english="answer_relevancy"
+                      value={selected.summary.answer_relevancy?.toFixed(4) || '-'}
+                      highlight
+                    />
+                    <MetricBox
+                      label="忠实度"
+                      english="faithfulness"
+                      value={selected.summary.faithfulness?.toFixed(4) || '-'}
+                      highlight
+                    />
+                  </div>
+                </div>
+                <Separator />
+                {/* Legacy metrics */}
+                <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
                   <MetricBox label="样本数" value={selected.summary.num_samples?.toString() || '-'} />
                   <MetricBox label="Recall@5" value={selected.summary.recall_at_5?.toFixed(4) || '-'} />
                   <MetricBox label="Recall@10" value={selected.summary.recall_at_10?.toFixed(4) || '-'} />

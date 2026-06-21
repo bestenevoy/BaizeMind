@@ -351,13 +351,34 @@ export interface EvalResultSummary {
   filename: string
   timestamp: number
   num_samples: number
+  // P1: Core
+  context_relevancy: number
+  context_recall: number
+  answer_relevancy: number
+  faithfulness: number
+  // P1: Precision & NDCG
+  precision_at_5: number | null
+  precision_at_10: number | null
+  ndcg_at_5: number | null
+  // P1: Hallucination
+  intrinsic_hallucination_rate: number
+  extrinsic_hallucination_rate: number
+  // P1: Completeness
+  answer_completeness: number
+  // P2
+  mrr: number | null
+  context_redundancy: number
+  delta_ndcg: number | null
+  filter_drop_rate: number
+  // P3
+  timing_mean_ms: number
+  timing_p95_ms: number
+  // legacy
   recall_at_5: number
   recall_at_10: number
   semantic_similarity: number
   judge_accuracy: number
   citation_accuracy: number
-  context_relevancy: number
-  answer_relevancy: number
 }
 
 export interface EvalSampleResult {
@@ -375,13 +396,27 @@ export interface EvalSampleResult {
 export interface EvalResultDetail {
   summary: {
     num_samples: number
+    context_relevancy: number
+    context_recall: number
+    answer_relevancy: number
+    faithfulness: number
+    precision_at_5: number | null
+    precision_at_10: number | null
+    ndcg_at_5: number | null
+    intrinsic_hallucination_rate: number
+    extrinsic_hallucination_rate: number
+    answer_completeness: number
+    mrr: number | null
+    context_redundancy: number
+    delta_ndcg: number | null
+    filter_drop_rate: number
+    timing_mean_ms: number
+    timing_p95_ms: number
     recall_at_5: number
     recall_at_10: number
     semantic_similarity: number
     judge_accuracy: number
     citation_accuracy: number
-    context_relevancy: number
-    answer_relevancy: number
   }
   total_time_seconds: number
   avg_time_per_sample: number
