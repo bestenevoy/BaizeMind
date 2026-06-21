@@ -267,14 +267,52 @@ async def get_stats():
     )
 
 
-@router.post("/rebuild-indices")
-async def rebuild_indices():
-    from src.retrieval.bm25_retriever import BM25Retriever
-    bm25 = BM25Retriever()
-    success = bm25.rebuild_from_milvus()
-    if success:
-        return {"status": "completed", "message": "BM25 index rebuilt from Milvus", "chunks_indexed": len(bm25._chunks)}
-    return {"status": "skipped", "message": "No chunks found in Milvus to rebuild"}
+@router.post("/cleanup-orphans")
+async def cleanup_orphans():
+    """Remove vectors and entities that have no corresponding document in doc_store."""
+    result = {"milvus_deleted": 0, "neo4j_deleted_entities": 0}
+    try:
+        doc_ids = set(d["doc_id"] for d in doc_store.list_documents(limit=10000))
+    except Exception as e:
+        return {"error": f"Failed to list documents: {e}", "milvus_deleted": 0, "neo4j_deleted_entities": 0}
+
+    # Clean orphan Milvus vectors
+    try:
+        from src.retrieval.vector_retriever import MilvusVectorRetriever
+        vr = MilvusVectorRetriever()
+        vr.ensure_collection()
+        all_chunks = vr.fetch_all_chunks()
+        orphans = [c for c in all_chunks if c.get("doc_id", "") not in doc_ids]
+        for c in orphans:
+            try:
+                vr._client.delete(vr.collection_name, f'id == "{c["id"]}"')
+                result["milvus_deleted"] += 1
+            except Exception:
+                pass
+    except Exception as e:
+        result["milvus_error"] = str(e)
+
+    # Clean orphan Neo4j entities
+    try:
+        from src.knowledge_graph.neo4j_manager import Neo4jManager
+        neo4j = Neo4jManager()
+        neo4j.connect()
+        id_list = list(doc_ids) if doc_ids else [""]
+        with neo4j._driver.session() as session:
+            res = session.run(
+                """
+                MATCH (n:Entity)
+                WHERE n.doc_id IS NULL OR NOT n.doc_id IN $doc_ids
+                DETACH DELETE n
+                RETURN count(n) as cnt
+                """,
+                doc_ids=id_list,
+            ).single()
+            result["neo4j_deleted_entities"] = res["cnt"] if res else 0
+    except Exception as e:
+        result["neo4j_error"] = str(e)
+
+    return result
 
 
 # ── Runtime Config Overrides ──

@@ -40,12 +40,13 @@ class Neo4jManager:
             session.run(
                 """
                 MERGE (e:Entity {name: $name})
-                SET e.type = $type, e.description = $description, e.chunk_id = $chunk_id
+                SET e.type = $type, e.description = $description, e.chunk_id = $chunk_id, e.doc_id = $doc_id
                 """,
                 name=entity["name"],
                 type=entity.get("type", "Unknown"),
                 description=entity.get("description", ""),
                 chunk_id=entity.get("chunk_id", ""),
+                doc_id=entity.get("doc_id", ""),
             )
 
     def upsert_relation(self, relation: dict):
@@ -74,9 +75,8 @@ class Neo4jManager:
                     """
                     UNWIND $entities AS e
                     MERGE (n:Entity {name: e.name})
-                    SET n.type = e.type, n.description = e.description
-                    """
-                    + ('SET n.doc_id = $doc_id' if doc_id else ''),
+                    SET n.type = e.type, n.description = e.description, n.doc_id = $doc_id
+                    """,
                     entities=entity_params,
                     doc_id=doc_id,
                 )

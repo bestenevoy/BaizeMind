@@ -336,6 +336,12 @@ export async function resetConfigOverride(key: string): Promise<void> {
   if (!res.ok) throw new Error(`Reset config failed: ${res.statusText}`)
 }
 
+export async function cleanupOrphans(): Promise<{ milvus_deleted: number; neo4j_deleted_entities: number }> {
+  const res = await fetch(`${API_BASE}/system/cleanup-orphans`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Cleanup failed: ${res.statusText}`)
+  return res.json()
+}
+
 // ── Evaluation ──
 
 export interface EvalSample {

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { getConfig, checkConnectivity, getSystemStats, listEditableConfig, updateConfigOverride, resetConfigOverride } from '@/lib/api'
+import { getConfig, checkConnectivity, getSystemStats, listEditableConfig, updateConfigOverride, resetConfigOverride, cleanupOrphans } from '@/lib/api'
 import type { ConfigResponse, ConnectivityResult, SystemStats, EditableConfigItem } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, Wifi, Save, RotateCcw, Pencil } from 'lucide-react'
+import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, Wifi, Save, RotateCcw, Pencil, Trash2 } from 'lucide-react'
 
 function StatusIcon({ status }: { status: string }) {
   if (status === 'ok')
@@ -183,6 +183,26 @@ export function ConfigPage() {
                 </div>
               </div>
             ) : null}
+            <div className="flex justify-end mt-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  if (!confirm('清理 Milvus 和 Neo4j 中不属于任何文档的孤立数据？')) return
+                  try {
+                    const r = await cleanupOrphans()
+                    const parts = [`Milvus: ${r.milvus_deleted}`, `Neo4j: ${r.neo4j_deleted_entities}`]
+                    if ((r as any).milvus_error) parts.push(`(Milvus: ${(r as any).milvus_error})`)
+                    if ((r as any).neo4j_error) parts.push(`(Neo4j: ${(r as any).neo4j_error})`)
+                    alert(`清除完成: ${parts.join(', ')}`)
+                    loadConfig()
+                  } catch (e: any) { alert(`清理失败: ${e?.message || e}`) }
+                }}
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1" />
+                清理孤立数据
+              </Button>
+            </div>
           </CardContent>
         </Card>
 

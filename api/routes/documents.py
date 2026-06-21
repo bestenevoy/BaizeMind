@@ -354,11 +354,38 @@ async def create_folder(req: FolderCreateRequest):
 async def delete_folder(folder_path: str):
     path = "/" + folder_path.lstrip("/")
     has_docs = doc_store._folder_has_docs(path)
+
+    # Collect doc_ids before deletion
+    docs = doc_store.list_documents(folder=path, limit=10000)
+
     count = doc_store.delete_folder(path)
     if not has_docs and count == 0:
-        # Remove just the marker
         doc_store.delete_folder_marker(path)
-    return {"deleted": True, "folder": path, "doc_count": count}
+
+    # Clean up Milvus, BM25, Neo4j for deleted docs
+    for d in docs:
+        did = d["doc_id"]
+        try:
+            from src.retrieval.vector_retriever import MilvusVectorRetriever
+            vr = MilvusVectorRetriever()
+            vr.delete_by_doc(did)
+        except Exception:
+            pass
+        try:
+            from src.retrieval.bm25_retriever import BM25Retriever
+            bm25 = BM25Retriever()
+            bm25.load()
+            bm25.remove_by_doc_id(did)
+        except Exception:
+            pass
+        try:
+            from src.knowledge_graph.neo4j_manager import Neo4jManager
+            neo4j = Neo4jManager()
+            neo4j.delete_entities_by_doc(did)
+        except Exception:
+            pass
+
+    return {"deleted": True, "folder": path, "doc_count": count, "cleaned_vectors": True}
 
 
 @router.put("/folders/move")
