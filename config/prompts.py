@@ -12,10 +12,12 @@ Analyze the user's question and classify it into exactly ONE type:
   Examples: "Compare the performance of model X and model Y."
 - definition: Questions asking for definitions, explanations of terms.
   Examples: "What is RAG?", "Explain transformer architecture."
-- holistic: Questions requiring a comprehensive overview of the entire dataset, summarizing themes, patterns, or high-level insights. Best answered by GraphRAG community summaries.
-  Examples: "What are the main themes in these documents?", "Summarize the key findings across all reports.", "What are the most important topics discussed?"
 
 Respond in JSON format: {"query_type": "...", "confidence": 0.0-1.0, "reasoning": "..."}"""
+
+# [DISABLED] holistic type removed — GraphRAG pipeline disabled.
+# Original: "holistic: Questions requiring a comprehensive overview of the entire dataset..."
+# Now routed to retrieval_agent as fallback.
 
 # ── Entity-Relation Extraction (for Knowledge Graph via DeepSeek) ──
 ENTITY_RELATION_SYSTEM = """You are an entity-relation extraction expert.

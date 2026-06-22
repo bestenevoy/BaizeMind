@@ -28,7 +28,8 @@ class QueryRouter:
             if match:
                 data = json.loads(match.group())
                 query_type = data.get("query_type", "simple_fact")
-                if query_type not in ("chitchat", "simple_fact", "multi_hop", "comparison", "definition", "holistic"):
+                # [DISABLED] GraphRAG: holistic queries now fallback to retrieval path
+                if query_type not in ("chitchat", "simple_fact", "multi_hop", "comparison", "definition"):
                     query_type = "simple_fact"
                 return {
                     "query_type": query_type,

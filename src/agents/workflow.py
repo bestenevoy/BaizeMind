@@ -30,12 +30,16 @@ class AgentState(TypedDict):
     tags: list[str]
 
 
+# [DISABLED] GraphRAG pipeline: holistic queries now route to retrieval_agent.
+# Original routing: "holistic" → "graphrag_search"
+# The graphrag_search node and _route_after_graphrag edge remain in the graph
+# for compilation integrity but are unreachable.
 def _route_by_query_type(state: AgentState) -> str:
     query_type = state.get("query_type", "simple_fact")
     if query_type == "chitchat":
         return "chitchat"
     if query_type == "holistic":
-        return "graphrag_search"
+        return "retrieval_agent"  # DISABLED: was "graphrag_search"
     if query_type in ("multi_hop", "comparison"):
         return "graph_agent"
     return "retrieval_agent"
@@ -50,6 +54,7 @@ def _route_for_multi_hop(state: AgentState) -> str:
     return "answer_generator"
 
 
+# [DISABLED] GraphRAG — retained for graph compilation, unreachable via routing
 def _route_after_graphrag(state: AgentState) -> str:
     if state.get("graphrag_context"):
         return "answer_generator"
@@ -81,6 +86,7 @@ class AgenticRAGWorkflow:
             self._llm = get_chat_llm()
         return self._llm
 
+    # [DISABLED] GraphRAG query instance — retained for graph compilation
     def _get_graphrag(self):
         if self._graphrag_query is None:
             from src.knowledge_graph.graphrag_query import GraphRAGQuery
@@ -94,6 +100,7 @@ class AgenticRAGWorkflow:
         builder.add_node("chitchat", self._node_chitchat)
         builder.add_node("retrieval_agent", self._node_retrieval_agent)
         builder.add_node("graph_agent", self._node_graph_agent)
+        # [DISABLED] GraphRAG node — retained for graph compilation, unreachable via routing
         builder.add_node("graphrag_search", self._node_graphrag_search)
         builder.add_node("answer_generator", self._node_answer_generator)
         builder.add_node("answer_validator", self._node_answer_validator)
@@ -102,6 +109,7 @@ class AgenticRAGWorkflow:
         builder.add_conditional_edges("query_router", _route_by_query_type)
         builder.add_edge("chitchat", END)
         builder.add_conditional_edges("graph_agent", _route_for_multi_hop)
+        # [DISABLED] GraphRAG edge — retained for graph compilation
         builder.add_conditional_edges("graphrag_search", _route_after_graphrag)
         builder.add_edge("retrieval_agent", "answer_generator")
         builder.add_edge("answer_generator", "answer_validator")
@@ -193,6 +201,7 @@ class AgenticRAGWorkflow:
         except Exception as e:
             return {"graph_context": f"Graph query failed: {e}", "error": str(e)}
 
+    # [DISABLED] GraphRAG search node — unreachable via current routing
     def _node_graphrag_search(self, state: AgentState) -> dict:
         try:
             graphrag = self._get_graphrag()

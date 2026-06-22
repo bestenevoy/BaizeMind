@@ -119,7 +119,8 @@ def graphrag_drift_search(query: str) -> str:
 
 ALL_TOOLS: list[BaseTool] = [
     hybrid_search, bm25_search, query_kg, expand_path, get_entity_info,
-    graphrag_global_search, graphrag_local_search, graphrag_drift_search,
+    # [DISABLED] GraphRAG tools removed from tool list
+    # graphrag_global_search, graphrag_local_search, graphrag_drift_search,
 ]
 
 
