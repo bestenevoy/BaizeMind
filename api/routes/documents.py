@@ -284,16 +284,10 @@ def _process_document(doc_id: str, file_path: str, folder: str):
         doc_store.update_document(doc_id, processing_stage="向量嵌入")
         from src.embeddings.bge_m3 import BGEM3Embedding
         from src.retrieval.vector_retriever import MilvusVectorRetriever
-        import numpy as np
 
         embedding = BGEM3Embedding()
         texts = [c["text"] for c in chunks]
-        all_embeddings = []
-        for i in range(0, len(texts), settings.bge_m3_batch_size):
-            batch = texts[i: i + settings.bge_m3_batch_size]
-            all_embeddings.append(embedding.encode_dense(batch))
-
-        embeddings = np.concatenate(all_embeddings) if all_embeddings else np.array([])
+        embeddings = embedding.encode_dense_all(texts, batch_size=settings.bge_m3_batch_size, concurrency=8)
 
         doc_store.update_document(doc_id, processing_stage="写入向量库")
         vector_retriever = MilvusVectorRetriever()

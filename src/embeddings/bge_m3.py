@@ -1,4 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import numpy as np
+
 from config.settings import settings
 
 
@@ -47,6 +50,24 @@ class BGEM3Embedding:
         if self.use_local and self._model is not None:
             return np.array(self._model.encode(texts)["dense_vecs"], dtype=np.float32)
         return self._get_api_embeddings(texts)
+
+    def encode_dense_all(self, texts: list[str], batch_size: int = 32, concurrency: int = 8) -> np.ndarray:
+        if not texts:
+            return np.array([], dtype=np.float32)
+        if self.use_local and self._model is not None:
+            return np.array(self._model.encode(texts)["dense_vecs"], dtype=np.float32)
+
+        batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
+        max_workers = min(concurrency, len(batches))
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(self._get_api_embeddings, batch): i for i, batch in enumerate(batches)}
+            results = [None] * len(batches)
+            for future in as_completed(futures):
+                idx = futures[future]
+                results[idx] = future.result()
+
+        return np.concatenate(results, axis=0)
 
     def encode_sparse(self, texts: list[str]) -> list[dict[int, float]]:
         if self.use_local and self._model is not None:
