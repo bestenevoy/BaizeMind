@@ -60,6 +60,40 @@ export interface SystemStats {
   neo4j_relation_count: number
 }
 
+export interface ChunkInfo {
+  chunk_id: string
+  text: string
+  heading: string
+  metadata: Record<string, unknown>
+}
+
+export interface DocumentChunks {
+  doc_id: string
+  chunks: ChunkInfo[]
+  total: number
+}
+
+export interface GraphNode {
+  id: string
+  label: string
+  type: string
+  doc_id: string
+  description: string
+}
+
+export interface GraphEdge {
+  source: string
+  target: string
+  type: string
+}
+
+export interface GraphOverview {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  total_nodes: number
+  total_edges: number
+}
+
 // ── Documents ──
 
 export async function uploadDocument(file: File, folder: string = '/'): Promise<{ doc_id: string; filename: string; folder: string; status: string }> {
@@ -127,6 +161,12 @@ export interface DocumentContent {
 export async function getDocumentContent(docId: string): Promise<DocumentContent> {
   const res = await fetch(`${API_BASE}/documents/${docId}/content`)
   if (!res.ok) throw new Error(`Get content failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function getDocumentChunks(docId: string): Promise<DocumentChunks> {
+  const res = await fetch(`${API_BASE}/documents/${docId}/chunks`)
+  if (!res.ok) throw new Error(`Get chunks failed: ${res.statusText}`)
   return res.json()
 }
 
@@ -266,6 +306,13 @@ export async function askQuestionStream(
 export async function getSystemStats(): Promise<SystemStats> {
   const res = await fetch(`${API_BASE}/system/stats`)
   if (!res.ok) throw new Error(`Stats failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function getGraphOverview(docId?: string): Promise<GraphOverview> {
+  const params = docId ? `?doc_id=${encodeURIComponent(docId)}` : ''
+  const res = await fetch(`${API_BASE}/system/graph/overview${params}`)
+  if (!res.ok) throw new Error(`Graph overview failed: ${res.statusText}`)
   return res.json()
 }
 

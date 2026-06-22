@@ -106,6 +106,15 @@ class MilvusVectorRetriever:
         )
         return res[0]["count(*)"] if res else 0
 
+    def get_chunks_by_doc(self, doc_id: str) -> list[dict[str, Any]]:
+        self.ensure_collection()
+        return self._client.query(
+            collection_name=self.collection_name,
+            filter=f'doc_id == "{doc_id}"',
+            output_fields=["id", "doc_id", "chunk_id", "text", "metadata"],
+            limit=10000,
+        )
+
     def fetch_all_chunks(self) -> list[dict[str, Any]]:
         self.ensure_collection()
         total = self.count()

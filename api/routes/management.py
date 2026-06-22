@@ -3,7 +3,7 @@ import os
 
 from fastapi import APIRouter
 
-from api.schemas import SystemStatsResponse, ConnectivityResult
+from api.schemas import SystemStatsResponse, ConnectivityResult, GraphOverviewResponse, GraphNode, GraphEdge
 from config.settings import settings
 from src.retrieval.vector_retriever import MilvusVectorRetriever
 from src.knowledge_graph.neo4j_manager import Neo4jManager
@@ -313,6 +313,60 @@ async def cleanup_orphans():
         result["neo4j_error"] = str(e)
 
     return result
+
+
+@router.get("/graph/overview", response_model=GraphOverviewResponse)
+async def get_graph_overview(doc_id: str = ""):
+    neo4j = Neo4jManager()
+    neo4j.connect()
+
+    if doc_id:
+        result = neo4j.query(
+            """
+            MATCH (n:Entity {doc_id: $doc_id})-[r:RELATES_TO]-(m:Entity {doc_id: $doc_id})
+            RETURN n, r, m
+            """,
+            {"doc_id": doc_id},
+        )
+    else:
+        result = neo4j.query(
+            "MATCH (n:Entity)-[r:RELATES_TO]->(m:Entity) RETURN n, r, m LIMIT 500"
+        )
+
+    nodes_map: dict[str, GraphNode] = {}
+    edges_seen: set[str] = set()
+    edges: list[GraphEdge] = []
+
+    for row in result:
+        n = row["n"]
+        m = row["m"]
+        r = row["r"]
+
+        for entity in (n, m):
+            node_id = entity.get("name", "")
+            if node_id and node_id not in nodes_map:
+                nodes_map[node_id] = GraphNode(
+                    id=node_id,
+                    label=node_id,
+                    type=entity.get("type", ""),
+                    doc_id=entity.get("doc_id", ""),
+                    description=entity.get("description", ""),
+                )
+
+        rel_type = r.get("type", "")
+        source = n.get("name", "")
+        target = m.get("name", "")
+        edge_key = f"{source}|{rel_type}|{target}"
+        if source and target and edge_key not in edges_seen:
+            edges_seen.add(edge_key)
+            edges.append(GraphEdge(source=source, target=target, type=rel_type))
+
+    return GraphOverviewResponse(
+        nodes=list(nodes_map.values()),
+        edges=edges,
+        total_nodes=len(nodes_map),
+        total_edges=len(edges),
+    )
 
 
 # ── Runtime Config Overrides ──

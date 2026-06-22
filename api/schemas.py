@@ -93,6 +93,40 @@ class DocumentContentResponse(BaseModel):
     status: str
 
 
+class ChunkInfo(BaseModel):
+    chunk_id: str
+    text: str
+    heading: str = ""
+    metadata: dict[str, Any] = {}
+
+
+class DocumentChunksResponse(BaseModel):
+    doc_id: str
+    chunks: list[ChunkInfo]
+    total: int
+
+
+class GraphNode(BaseModel):
+    id: str
+    label: str
+    type: str = ""
+    doc_id: str = ""
+    description: str = ""
+
+
+class GraphEdge(BaseModel):
+    source: str
+    target: str
+    type: str
+
+
+class GraphOverviewResponse(BaseModel):
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
+    total_nodes: int
+    total_edges: int
+
+
 class ConnectivityResult(BaseModel):
     service: str
     status: str  # ok / warning / error

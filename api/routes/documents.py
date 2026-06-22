@@ -9,6 +9,8 @@ from api.schemas import (
     DocumentUploadResponse,
     DocumentStatusResponse,
     DocumentContentResponse,
+    DocumentChunksResponse,
+    ChunkInfo,
     DocumentInfo,
     FolderInfo,
     TagInfo,
@@ -196,6 +198,27 @@ async def get_document_content(doc_id: str):
         file_ext=file_ext,
         file_size_kb=file_size_kb,
         status=doc.get("status", ""),
+    )
+
+
+@router.get("/{doc_id}/chunks", response_model=DocumentChunksResponse)
+async def get_document_chunks(doc_id: str):
+    doc = doc_store.get_document(doc_id)
+    if not doc:
+        raise HTTPException(404, f"Document {doc_id} not found")
+
+    from src.retrieval.vector_retriever import MilvusVectorRetriever
+    vr = MilvusVectorRetriever()
+    chunks = vr.get_chunks_by_doc(doc_id)
+    return DocumentChunksResponse(
+        doc_id=doc_id,
+        chunks=[ChunkInfo(
+            chunk_id=c.get("chunk_id", ""),
+            text=c.get("text", ""),
+            heading=c.get("metadata", {}).get("heading", "") if isinstance(c.get("metadata"), dict) else "",
+            metadata=c.get("metadata", {}) if isinstance(c.get("metadata"), dict) else {},
+        ) for c in chunks],
+        total=len(chunks),
     )
 
 

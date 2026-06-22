@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
+import { GraphView } from '@/components/GraphView'
 import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, Wifi, Save, RotateCcw, Pencil, Trash2 } from 'lucide-react'
 
 function StatusIcon({ status }: { status: string }) {
@@ -203,6 +204,16 @@ export function ConfigPage() {
                 清理孤立数据
               </Button>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Knowledge Graph Visualization */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg">知识图谱</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <GraphView />
           </CardContent>
         </Card>
 
