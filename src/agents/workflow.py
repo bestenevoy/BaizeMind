@@ -197,6 +197,36 @@ class AgenticRAGWorkflow:
         except Exception as e:
             return {"error": f"Retrieval failed: {e}"}
 
+    def _filter_relevant_entities(self, query: str, paths: list[dict]) -> list[str]:
+        """Use LLM to select only query-relevant entities from graph expansion results."""
+        if not paths:
+            return []
+        path_lines = []
+        for p in paths:
+            s = p.get("subject_name", "")
+            o = p.get("object_name", "")
+            rel = ", ".join(p.get("relation_types", []))
+            path_lines.append(f"- {s} --[{rel}]--> {o}")
+        paths_text = "\n".join(path_lines[:30])
+
+        prompt = (
+            f"Given a user query and a set of graph relationships found, "
+            f"select ONLY the entity names that are directly relevant to answering the query. "
+            f"Ignore irrelevant entities. Return a JSON array of entity name strings.\n\n"
+            f"Query: {query}\n\n"
+            f"Graph relationships:\n{paths_text}\n\n"
+            f"Relevant entities (JSON array):"
+        )
+        resp = self._get_llm().invoke(prompt)
+        try:
+            import json, re
+            match = re.search(r"\[.*?\]", resp.content, re.DOTALL)
+            if match:
+                return json.loads(match.group())
+        except Exception:
+            pass
+        return []
+
     def _node_graph_agent(self, state: AgentState) -> dict:
         try:
             entities = self.graph_agent.extract_entities_from_query(state["query"])
@@ -205,10 +235,10 @@ class AgenticRAGWorkflow:
                 graph_context = self.graph_agent.format_context(paths)
 
                 graph_entities = list(entities)
-                for p in paths:
-                    for key in ("subject_name", "object_name"):
-                        name = p.get(key, "")
-                        if name and name not in graph_entities:
+                if paths:
+                    relevant = self._filter_relevant_entities(state["query"], paths)
+                    for name in relevant:
+                        if name not in graph_entities:
                             graph_entities.append(name)
             else:
                 graph_context = "No entities found for graph expansion."
