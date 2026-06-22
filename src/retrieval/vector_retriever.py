@@ -95,11 +95,16 @@ class MilvusVectorRetriever:
             collection_name=self.collection_name,
             filter=f'doc_id == "{doc_id}"',
         )
+        self._client.compact(self.collection_name)
 
     def count(self) -> int:
         self.ensure_collection()
-        stats = self._client.get_collection_stats(self.collection_name)
-        return int(stats.get("row_count", 0))
+        res = self._client.query(
+            collection_name=self.collection_name,
+            filter="id != ''",
+            output_fields=["count(*)"],
+        )
+        return res[0]["count(*)"] if res else 0
 
     def fetch_all_chunks(self) -> list[dict[str, Any]]:
         self.ensure_collection()
