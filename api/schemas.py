@@ -127,6 +127,15 @@ class GraphOverviewResponse(BaseModel):
     total_edges: int
 
 
+class EntityDetailResponse(BaseModel):
+    name: str
+    type: str = ""
+    description: str = ""
+    doc_id: str = ""
+    documents: list[dict[str, Any]] = []
+    related_chunks: list[ChunkInfo] = []
+
+
 class ConnectivityResult(BaseModel):
     service: str
     status: str  # ok / warning / error

@@ -13,9 +13,18 @@ const typeColors: Record<string, string> = {
   Concept: '#A09C5C',
 }
 
-export function GraphView({ docId }: { docId?: string }) {
+interface GraphViewProps {
+  docId?: string
+  onNodeClick?: (nodeId: string) => void
+  selectedNode?: string | null
+}
+
+export function GraphView({ docId, onNodeClick, selectedNode }: GraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const networkRef = useRef<Network | null>(null)
+  const onNodeClickRef = useRef(onNodeClick)
+
+  onNodeClickRef.current = onNodeClick
 
   const buildGraph = useCallback(async () => {
     if (!containerRef.current) return
@@ -98,6 +107,12 @@ export function GraphView({ docId }: { docId?: string }) {
         selectionWidth: 3,
       },
     })
+
+    networkRef.current.on('click', (params: { nodes: string[] }) => {
+      if (params.nodes.length > 0 && onNodeClickRef.current) {
+        onNodeClickRef.current(params.nodes[0])
+      }
+    })
   }, [docId])
 
   useEffect(() => {
@@ -110,11 +125,21 @@ export function GraphView({ docId }: { docId?: string }) {
     }
   }, [buildGraph])
 
+  useEffect(() => {
+    if (!networkRef.current || !selectedNode) return
+    try {
+      networkRef.current.selectNodes([selectedNode])
+      networkRef.current.focus(selectedNode, { scale: 1.2, animation: true })
+    } catch {
+      // ignore
+    }
+  }, [selectedNode])
+
   return (
     <div
       ref={containerRef}
       className="w-full rounded-lg border"
-      style={{ height: '500px' }}
+      style={{ height: '100%', minHeight: '500px' }}
     />
   )
 }

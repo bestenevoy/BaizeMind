@@ -5,6 +5,7 @@ import { DocumentsPage } from '@/pages/DocumentsPage'
 import { ConfigPage } from '@/pages/ConfigPage'
 import { TestsPage } from '@/pages/TestsPage'
 import { EvaluationPage } from '@/pages/EvaluationPage'
+import { GraphPage } from '@/pages/GraphPage'
 
 function App() {
   const [page, setPage] = useState('home')
@@ -19,6 +20,8 @@ function App() {
         return <TestsPage />
       case 'evaluation':
         return <EvaluationPage />
+      case 'graph':
+        return <GraphPage />
       default:
         return <Home />
     }

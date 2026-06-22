@@ -316,6 +316,28 @@ export async function getGraphOverview(docId?: string): Promise<GraphOverview> {
   return res.json()
 }
 
+export interface EntityDetail {
+  name: string
+  type: string
+  description: string
+  doc_id: string
+  documents: Array<{
+    doc_id: string
+    filename: string
+    folder: string
+    status: string
+    chunk_count: number
+    [key: string]: unknown
+  }>
+  related_chunks: ChunkInfo[]
+}
+
+export async function getEntityDetail(entityName: string): Promise<EntityDetail> {
+  const res = await fetch(`${API_BASE}/system/graph/entity/${encodeURIComponent(entityName)}`)
+  if (!res.ok) throw new Error(`Entity detail failed: ${res.statusText}`)
+  return res.json()
+}
+
 export interface ConfigCategory {
   category: string
   items: { key: string; label: string; value: string }[]

@@ -3,7 +3,7 @@ import os
 
 from fastapi import APIRouter
 
-from api.schemas import SystemStatsResponse, ConnectivityResult, GraphOverviewResponse, GraphNode, GraphEdge
+from api.schemas import SystemStatsResponse, ConnectivityResult, GraphOverviewResponse, GraphNode, GraphEdge, EntityDetailResponse, ChunkInfo
 from config.settings import settings
 from src.retrieval.vector_retriever import MilvusVectorRetriever
 from src.knowledge_graph.neo4j_manager import Neo4jManager
@@ -366,6 +366,69 @@ async def get_graph_overview(doc_id: str = ""):
         edges=edges,
         total_nodes=len(nodes_map),
         total_edges=len(edges),
+    )
+
+
+@router.get("/graph/entity/{entity_name:path}", response_model=EntityDetailResponse)
+async def get_graph_entity_detail(entity_name: str):
+    neo4j = Neo4jManager()
+    neo4j.connect()
+
+    entity_row = neo4j.query(
+        "MATCH (n:Entity {name: $name}) RETURN n LIMIT 1",
+        {"name": entity_name},
+    )
+    if not entity_row:
+        return EntityDetailResponse(name=entity_name, type="", description="", doc_id="")
+
+    entity = entity_row[0]["n"]
+    doc_id = entity.get("doc_id", "")
+
+    documents = []
+    related_doc_ids: set[str] = set()
+    chunks: list[ChunkInfo] = []
+
+    # Get doc info from SQLite
+    if doc_id:
+        doc = doc_store.get_document(doc_id)
+        if doc:
+            documents.append(dict(doc))
+            related_doc_ids.add(doc_id)
+
+    # Get chunks from Milvus containing the entity name
+    try:
+        vr = MilvusVectorRetriever()
+        vr.ensure_collection()
+        all_related = vr._client.query(
+            collection_name=vr.collection_name,
+            filter=f'text like "%{entity_name}%"',
+            output_fields=["id", "doc_id", "chunk_id", "text", "metadata"],
+            limit=10,
+        )
+        for c in all_related:
+            c_doc_id = c.get("doc_id", "")
+            if c_doc_id and c_doc_id not in related_doc_ids:
+                related_doc_ids.add(c_doc_id)
+                d = doc_store.get_document(c_doc_id)
+                if d:
+                    documents.append(dict(d))
+            meta = c.get("metadata", {})
+            chunks.append(ChunkInfo(
+                chunk_id=c.get("chunk_id", ""),
+                text=c.get("text", ""),
+                heading=meta.get("heading", "") if isinstance(meta, dict) else "",
+                metadata=meta if isinstance(meta, dict) else {},
+            ))
+    except Exception:
+        pass
+
+    return EntityDetailResponse(
+        name=entity_name,
+        type=entity.get("type", ""),
+        description=entity.get("description", ""),
+        doc_id=doc_id,
+        documents=documents,
+        related_chunks=chunks,
     )
 
 
