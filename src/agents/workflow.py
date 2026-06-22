@@ -18,6 +18,7 @@ class AgentState(TypedDict):
     confidence: float
     documents: Annotated[list[dict], operator.add]
     graph_context: str
+    graph_entities: list[str]
     graphrag_context: str
     draft_answer: str
     final_answer: str
@@ -184,7 +185,14 @@ class AgenticRAGWorkflow:
                 if not ids:
                     return {"documents": [], "error": "No documents match the filter"}
                 doc_filter = ids
-            results = self.retrieval_agent.search(state["query"], doc_ids=doc_filter)
+
+            query = state["query"]
+            graph_entities = state.get("graph_entities", [])
+            if graph_entities:
+                entity_suffix = " ".join(graph_entities[:10])
+                query = f"{query} {entity_suffix}"
+
+            results = self.retrieval_agent.search(query, doc_ids=doc_filter)
             return {"documents": results}
         except Exception as e:
             return {"error": f"Retrieval failed: {e}"}
@@ -195,11 +203,19 @@ class AgenticRAGWorkflow:
             if entities:
                 paths = self.graph_agent.expand(entities)
                 graph_context = self.graph_agent.format_context(paths)
+
+                graph_entities = list(entities)
+                for p in paths:
+                    for key in ("subject_name", "object_name"):
+                        name = p.get(key, "")
+                        if name and name not in graph_entities:
+                            graph_entities.append(name)
             else:
                 graph_context = "No entities found for graph expansion."
-            return {"graph_context": graph_context}
+                graph_entities = []
+            return {"graph_context": graph_context, "graph_entities": graph_entities}
         except Exception as e:
-            return {"graph_context": f"Graph query failed: {e}", "error": str(e)}
+            return {"graph_context": f"Graph query failed: {e}", "graph_entities": [], "error": str(e)}
 
     # [DISABLED] GraphRAG search node — unreachable via current routing
     def _node_graphrag_search(self, state: AgentState) -> dict:
