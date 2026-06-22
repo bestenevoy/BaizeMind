@@ -120,9 +120,9 @@ Classify     (Milvus)        (rank-bm25)   (Neo4j)
 | `langchain_compat.py` | PaddleOCR 兼容补丁 | monkey-patch langchain 旧模块 |
 
 ### 2. Chunk 切分 (src/chunker/)
-- **HierarchicalChunker**: 基于 Markdown H1-H6 标题层级切分，维护 heading_path
-- **TableChunker**: 表格分片时保留表头和标题，减小碎片化约35%
-- **ContextMerger**: 相邻同类 chunk 合并，减少冗余
+- **HierarchicalChunker**: 基于 Markdown H1-H6 标题层级构建树，每个 heading 下的正文使用 LangChain `RecursiveCharacterTextSplitter` 按语义边界递归切分，分隔符优先级：`\n\n` (段落) → `\n` (换行) → `。` (句号) → `！` (感叹号) → `？` (问号) → `；` (分号) → `，` (逗号) → 字符级硬切分。chunk_size=512, chunk_overlap=64。解决了中文文本 `text.split()` 无法按词切分导致整段变成一个超大 chunk 的问题
+- **TableChunker**: 表格分片时保留表头和标题，>30行的大表自动拆分为多个子chunk
+- **ContextMerger**: 相邻同类 chunk 合并 (max_merge_chars=1500)，去重去噪，同时过滤空文本 chunk 防止 embedding API 报错
 
 ### 3. Embedding (src/embeddings/)
 - **BGE-M3**: 本地 FlagEmbedding (GPU) + SiliconFlow API 双路 fallback
@@ -278,7 +278,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/qa/ask \
 | 模块 | 功能 | 状态 |
 |------|------|------|
 | 文档解析 | MinerU PDF/Office 解析、PaddleOCR-VL 图片 OCR、表格解析与跨页合并、图表描述 | 完成 |
-| Chunk 切分 | 层次化标题切分 (HierarchicalChunker)、表格感知切分 (TableChunker)、上下文合并 (ContextMerger) | 完成 |
+| Chunk 切分 | 层次化标题切分 (HierarchicalChunker) + LangChain RecursiveCharacterTextSplitter (中英文语义边界感知)、表格感知切分 (TableChunker)、上下文合并+空文本过滤 (ContextMerger) | 完成 |
 | Embedding | BGE-M3 密集+稀疏向量 (SiliconFlow API / 本地 GPU 双路 fallback) | 完成 |
 | 向量检索 | Milvus IVF_FLAT 索引、增删查、expr 过滤 | 完成 |
 | 关键词检索 | BM25 (jieba 分词)、增量追加、持久化 load/save | 完成 |
@@ -292,7 +292,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/qa/ask \
 | 前端 | React 18 + Vite + Tailwind + shadcn/ui: 3 页面 (首页/配置/测试)、3 栏布局、流式对话 | 完成 |
 | 评测 | 105 条 QA 样本、Recall@K、语义相似度、LLM Judge、引用准确度 | 完成 |
 | 诊断工具 | 8 层诊断脚本 (环境→服务→API→模块→解析→Milvus→Neo4j→Agent) | 完成 |
-| 性能优化 | Neo4j UNWIND 批量插入 (~50x)、BM25 增量追加 (~5-10x) | 完成 |
+| 性能优化 | Neo4j UNWIND 批量插入 (~50x)、BM25 增量追加 (~5-10x)、embedding API 错误响应体捕获、中文 chunk 语义切分修复 | 完成 |
 
 ### 待完成 / 已知缺陷
 
@@ -306,7 +306,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/qa/ask \
 | Embedding 批处理 | 串行 HTTP 调用，未并发派发 (~3-5x 优化空间) | 中 |
 | 前端 | `config/`、`contexts/`、`hooks/`、`components/figma/` 目录为空 | 低 |
 | 测试 | 无集成测试；`test_retrieval.py`、`test_agents.py::test_workflow_init` 在无外部服务时会 hang | 中 |
-| 错误处理 | 多处 `pass` 静默吞噬异常 (见 `query_router.py:39`, `answer_validator.py:48`, `graph_agent.py:40` 等) | 中 |
+| 错误处理 | 多处 `pass` 静默吞噬异常 (见 `query_router.py`, `answer_validator.py`, `graph_agent.py`); `bge_m3.py` API 错误响应体现已包含详情 | 已修复/部分修复 |
 
 ### 最近提交 (4 commits)
 

@@ -276,6 +276,7 @@ def _process_document(doc_id: str, file_path: str, folder: str):
         merger = ContextMerger()
         chunks = merger.merge(chunks)
         chunks = merger.deduplicate(chunks)
+        chunks = [c for c in chunks if c["text"].strip()]
 
         for chunk in chunks:
             chunk["folder"] = folder

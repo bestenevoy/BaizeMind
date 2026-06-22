@@ -1,11 +1,27 @@
 import re
 from typing import Any
 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 
 class HierarchicalChunker:
     def __init__(self, chunk_size: int = 512, chunk_overlap: int = 64):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self._splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=[
+                "\n\n",
+                "\n",
+                "。",
+                "！",
+                "？",
+                "；",
+                "，",
+                "",
+            ],
+        )
 
     def chunk(self, doc_id: str, markdown: str) -> list[dict[str, Any]]:
         tree = self._build_heading_tree(markdown)
@@ -61,21 +77,8 @@ class HierarchicalChunker:
         return chunks
 
     def _split_text(self, doc_id: str, text: str, heading: str) -> list[dict]:
-        if len(text) <= self.chunk_size:
-            return [self._make_chunk(doc_id, text, heading, 0)]
-
-        chunks = []
-        words = text.split()
-        start = 0
-        chunk_idx = 0
-        while start < len(words):
-            end = min(start + self.chunk_size, len(words))
-            chunk_text = " ".join(words[start:end])
-            chunks.append(self._make_chunk(doc_id, chunk_text, heading, chunk_idx))
-            chunk_idx += 1
-            start = end - self.chunk_overlap if end < len(words) else len(words)
-
-        return chunks
+        splits = self._splitter.split_text(text)
+        return [self._make_chunk(doc_id, s, heading, i) for i, s in enumerate(splits)]
 
     def _make_chunk(self, doc_id: str, text: str, heading: str, idx: int) -> dict:
         return {

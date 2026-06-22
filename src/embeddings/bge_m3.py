@@ -36,7 +36,10 @@ class BGEM3Embedding:
                 json=payload,
                 headers={"Authorization": f"Bearer {settings.siliconflow_api_key}"},
             )
-        resp.raise_for_status()
+        if resp.is_error:
+            raise RuntimeError(
+                f"SiliconFlow API error (HTTP {resp.status_code}): {resp.text}"
+            )
         data = resp.json()["data"]
         return np.array([d["embedding"] for d in data], dtype=np.float32)
 
