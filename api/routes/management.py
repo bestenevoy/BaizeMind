@@ -689,6 +689,20 @@ async def build_graph():
 # ── Delete All ──
 
 
+@router.post("/rebuild-bm25")
+async def rebuild_bm25():
+    try:
+        from src.retrieval.bm25_retriever import BM25Retriever
+        bm25 = BM25Retriever()
+        ok = bm25.rebuild_from_milvus()
+        if ok:
+            return {"success": True, "message": f"BM25 rebuilt: {len(bm25._chunks)} chunks"}
+        else:
+            return {"success": True, "message": "BM25 rebuilt: 0 chunks (Milvus is empty)"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
 @router.post("/delete-all-vectors")
 async def delete_all_vectors():
     try:

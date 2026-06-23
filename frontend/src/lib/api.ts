@@ -483,6 +483,12 @@ export async function deleteAllVectors(): Promise<{ success: boolean; message?: 
   return res.json()
 }
 
+export async function rebuildBM25(): Promise<{ success: boolean; message?: string }> {
+  const res = await fetch(`${API_BASE}/system/rebuild-bm25`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Rebuild BM25 failed: ${res.statusText}`)
+  return res.json()
+}
+
 export async function deleteAllGraph(): Promise<{ success: boolean; message?: string }> {
   const res = await fetch(`${API_BASE}/system/delete-all-graph`, { method: 'POST' })
   if (!res.ok) throw new Error(`Delete graph failed: ${res.statusText}`)

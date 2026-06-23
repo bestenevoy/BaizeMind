@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { getConfig, checkConnectivity, getSystemStats, listEditableConfig, updateConfigOverride, resetConfigOverride, cleanupOrphans, buildGraph, buildGraphStatus, deleteAllVectors, deleteAllGraph, deleteInactiveGraph } from '@/lib/api'
+import { getConfig, checkConnectivity, getSystemStats, listEditableConfig, updateConfigOverride, resetConfigOverride, cleanupOrphans, buildGraph, buildGraphStatus, deleteAllVectors, deleteAllGraph, deleteInactiveGraph, rebuildBM25 } from '@/lib/api'
 import type { ConfigResponse, ConnectivityResult, SystemStats, EditableConfigItem } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -289,6 +289,20 @@ export function ConfigPage() {
               >
                 <Trash2 className="h-3.5 w-3.5 mr-1" />
                 清空向量库
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    const r = await rebuildBM25()
+                    alert(r.message)
+                    loadConfig()
+                  } catch (e: any) { alert(`重建失败: ${e?.message || e}`) }
+                }}
+              >
+                <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                重建BM25索引
               </Button>
               <Button
                 variant="outline"
