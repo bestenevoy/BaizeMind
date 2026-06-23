@@ -12,6 +12,41 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = settings.graph_sync_max_retries
 
 
+def _parse_affected_key(task: dict) -> dict:
+    """Parse affected_key string into structured fields for get_support_count.
+
+    Returns dict with optional: entity_key, subject_key, predicate, object_key, attr_key, attr_value.
+    """
+    t = task["affected_type"]
+    key = task["affected_key"]
+    result = {}
+
+    if t == "ENTITY":
+        result["entity_key"] = key
+    elif t == "FACT":
+        parts = key.split("|")
+        if len(parts) >= 3:
+            result["subject_key"] = parts[0]
+            result["predicate"] = parts[1]
+            result["object_key"] = parts[2]
+    elif t == "ENTITY_ATTRIBUTE":
+        parts = key.split("|")
+        if len(parts) >= 3:
+            result["entity_key"] = parts[0]
+            result["attr_key"] = parts[1]
+            result["attr_value"] = parts[2]
+    elif t == "FACT_ATTRIBUTE":
+        parts = key.split("|")
+        if len(parts) >= 5:
+            result["subject_key"] = parts[0]
+            result["predicate"] = parts[1]
+            result["object_key"] = parts[2]
+            result["attr_key"] = parts[3]
+            result["attr_value"] = parts[4]
+
+    return result
+
+
 def process_pending_tasks(neo4j_manager=None) -> dict:
     """Process pending GraphSyncTask entries. Returns {success, failed, skipped}."""
     if neo4j_manager is None:
@@ -28,14 +63,15 @@ def process_pending_tasks(neo4j_manager=None) -> dict:
 
     for task in tasks:
         try:
+            parsed = _parse_affected_key(task)
             count = get_support_count(
                 affected_type=task["affected_type"],
-                entity_key=_parse_entity_key(task),
-                subject_key=_parse_subject_key(task),
-                predicate=task.get("predicate"),
-                object_key=_parse_object_key(task),
-                attr_key=task.get("attr_key"),
-                attr_value=task.get("attr_value"),
+                entity_key=parsed.get("entity_key"),
+                subject_key=parsed.get("subject_key"),
+                predicate=parsed.get("predicate"),
+                object_key=parsed.get("object_key"),
+                attr_key=parsed.get("attr_key"),
+                attr_value=parsed.get("attr_value"),
             )
             neo4j_manager.sync_from_affected(
                 affected_key=task["affected_key"],
@@ -53,30 +89,3 @@ def process_pending_tasks(neo4j_manager=None) -> dict:
             failed += 1
 
     return {"success": success, "failed": failed, "skipped": 0}
-
-
-def _parse_entity_key(task: dict) -> Optional[str]:
-    t = task["affected_type"]
-    key = task["affected_key"]
-    if t == "ENTITY":
-        return key
-    if t == "ENTITY_ATTRIBUTE":
-        return key.split("|")[0] if "|" in key else key
-    return None
-
-
-def _parse_subject_key(task: dict) -> Optional[str]:
-    t = task["affected_type"]
-    key = task["affected_key"]
-    if t in ("FACT", "FACT_ATTRIBUTE"):
-        return key.split("|")[0] if "|" in key else None
-    return None
-
-
-def _parse_object_key(task: dict) -> Optional[str]:
-    t = task["affected_type"]
-    key = task["affected_key"]
-    if t in ("FACT", "FACT_ATTRIBUTE"):
-        parts = key.split("|")
-        return parts[2] if len(parts) >= 3 else None
-    return None

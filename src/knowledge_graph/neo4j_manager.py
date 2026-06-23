@@ -234,7 +234,9 @@ class Neo4jManager:
         self.connect()
         if support_count > 0:
             if affected_type == "ENTITY":
-                self.sync_entity(affected_key, support_count)
+                entity_type, sep, entity_name = affected_key.partition(":")
+                count = support_count
+                self.sync_entity_with_name(affected_key, entity_name, entity_type, count)
             elif affected_type == "FACT":
                 parts = affected_key.split("|")
                 if len(parts) >= 3:
@@ -255,7 +257,11 @@ class Neo4jManager:
             elif affected_type == "FACT":
                 self.sync_fact(affected_key, "", "", "", 0)
             elif affected_type in ("ENTITY_ATTRIBUTE", "FACT_ATTRIBUTE"):
-                self.sync_entity_attribute(affected_key, "", "", "", 0)
+                parts = affected_key.split("|")
+                if affected_type == "ENTITY_ATTRIBUTE":
+                    self.sync_entity_attribute(affected_key, "", "", "", 0)
+                else:
+                    self.sync_fact_attribute(affected_key, "", "", "", 0)
             return True
 
     def get_all_entities_evidence(self) -> list[dict]:

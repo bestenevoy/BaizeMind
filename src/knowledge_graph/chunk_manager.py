@@ -62,8 +62,7 @@ def update_document_refs(
                     restored_hashes.append(chunk_hash)
                 doc_store.create_doc_chunk_ref(doc_id, doc_version, chunk_hash, chunk_index)
             else:
-                # Case 3: entirely new chunk (content created by caller)
-                doc_store.create_chunk_content(chunk_hash, text)
+                # Case 3: entirely new chunk — caller creates ChunkContent with milvus_id
                 doc_store.create_doc_chunk_ref(doc_id, doc_version, chunk_hash, chunk_index)
                 new_chunk_hashes.append(chunk_hash)
 
@@ -97,9 +96,12 @@ def process_chunk_ref_zero_to_one(chunk_hash: str) -> list[dict]:
 
 def process_chunk_ref_one_to_zero(chunk_hash: str) -> list[dict]:
     """Handle a chunk whose ref_count went from 1 to 0.
-    Deactivates evidence and returns affected keys.
+    Only deactivates evidence and ChunkContent if ref_count actually reached 0.
+    Returns affected keys for Neo4j sync.
     """
-    doc_store.update_chunk_ref_count(chunk_hash)
+    ref_info = doc_store.update_chunk_ref_count(chunk_hash)
+    if not ref_info.get("became_zero"):
+        return []
     affected = doc_store.deactivate_evidence_by_chunk(chunk_hash)
     doc_store.deactivate_chunk_content(chunk_hash)
     return affected

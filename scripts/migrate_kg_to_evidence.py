@@ -119,14 +119,10 @@ def rebuild_neo4j(entities: list[dict], relations: list[dict]):
         pred = rel.get("predicate", "RELATES_TO") or "RELATES_TO"
         objj = rel["object"]
 
-        subject_key = make_entity_key(
-            entities[0]["type"] if entities else "Unknown",
-            subj,
-        )
-        object_key = make_entity_key(
-            entities[0]["type"] if entities else "Unknown",
-            objj,
-        )
+        subj_match = entity_map.get(subj.lower().strip(), {"type": "Unknown"})
+        obj_match = entity_map.get(objj.lower().strip(), {"type": "Unknown"})
+        subject_key = make_entity_key(subj_match.get("type", "Unknown"), subj)
+        object_key = make_entity_key(obj_match.get("type", "Unknown"), objj)
         fact_key = make_fact_key(subject_key, pred, object_key)
 
         if fact_key in seen_facts:

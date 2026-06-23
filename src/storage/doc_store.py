@@ -444,23 +444,26 @@ def create_chunk_content(chunk_hash: str, text: str, milvus_id: str = "") -> dic
 
 
 def update_chunk_ref_count(chunk_hash: str):
-    """Recalculate ref_count from DocChunkRef."""
+    """Recalculate ref_count from DocChunkRef. Returns transition info."""
     conn = _get_conn()
+    old = conn.execute(
+        "SELECT active, ref_count FROM chunk_content WHERE chunk_hash = ?",
+        (chunk_hash,),
+    ).fetchone()
+    old_ref_count = old["ref_count"] if old else 0
+
     row = conn.execute(
         "SELECT COUNT(*) as cnt FROM doc_chunk_ref WHERE chunk_hash = ? AND active = 1",
         (chunk_hash,),
     ).fetchone()
     new_count = row["cnt"] if row else 0
+
     conn.execute(
         "UPDATE chunk_content SET ref_count = ? WHERE chunk_hash = ?",
         (new_count, chunk_hash),
     )
-    was_zero = False
-    became_zero = False
-    old = conn.execute("SELECT active, ref_count FROM chunk_content WHERE chunk_hash = ?", (chunk_hash,)).fetchone()
-    if old:
-        was_zero = old["ref_count"] == 0
-        became_zero = new_count == 0 and old["ref_count"] > 0
+    was_zero = old_ref_count == 0
+    became_zero = new_count == 0 and old_ref_count > 0
     conn.commit()
     conn.close()
     return {"chunk_hash": chunk_hash, "ref_count": new_count, "was_zero": was_zero, "became_zero": became_zero}

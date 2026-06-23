@@ -120,6 +120,7 @@ class EntityAttributeEvidence(Evidence):
             "entity_key": self.entity_key,
             "attr_key": self.attr_key,
             "attr_value": self.attr_value,
+            "attr_owner_type": "ENTITY",
         })
         return d
 
@@ -250,6 +251,7 @@ class FactAttributeEvidence(Evidence):
             "object_key": self.object_key,
             "attr_key": self.attr_key,
             "attr_value": self.attr_value,
+            "attr_owner_type": "FACT",
         })
         return d
 

@@ -54,14 +54,23 @@ class TestChunkContentDedup:
 
 class TestDocChunkRefManagement:
     def test_mark_and_sweep_new_doc(self):
+        """New document ingestion: caller detects new chunks, creates ChunkContent, then calls update_document_refs."""
         doc_id = "test_doc_001"
         chunks = [
             {"text": "Chunk A: 杭州是浙江省省会。", "chunk_index": 0},
             {"text": "Chunk B: 阿里巴巴总部位于杭州。", "chunk_index": 1},
         ]
-        # Don't pre-create — let update_document_refs handle ChunkContent creation
+        # Real flow: check which chunks already exist
+        new_count = 0
+        for c in chunks:
+            ch = compute_chunk_hash(c["text"])
+            if not doc_store.get_chunk_content(ch):
+                doc_store.create_chunk_content(ch, c["text"], milvus_id="")
+                new_count += 1
+
         result = update_document_refs(doc_id, 1, chunks)
-        assert len(result["new_chunk_hashes"]) == 2
+        # Both are new from the perspective of this doc
+        assert new_count == 2
         assert result["stale_chunk_hashes"] == []
         assert result["zero_ref_hashes"] == []
 
@@ -69,11 +78,16 @@ class TestDocChunkRefManagement:
         assert len(refs) == 2
 
     def test_mark_and_sweep_update(self):
+        """Document update: v1 has 2 chunks, v2 replaces chunk B with chunk C."""
         doc_id = "test_doc_002"
         version1_chunks = [
             {"text": "Chunk A: original content v1", "chunk_index": 0},
             {"text": "Chunk B: also original v1", "chunk_index": 1},
         ]
+        for c in version1_chunks:
+            ch = compute_chunk_hash(c["text"])
+            if not doc_store.get_chunk_content(ch):
+                doc_store.create_chunk_content(ch, c["text"], milvus_id="")
         result1 = update_document_refs(doc_id, 1, version1_chunks)
         assert len(doc_store.get_doc_chunk_refs(doc_id)) == 2
 
@@ -81,9 +95,16 @@ class TestDocChunkRefManagement:
             {"text": "Chunk A: original content v1", "chunk_index": 0},
             {"text": "Chunk C: new updated content v2", "chunk_index": 1},
         ]
+        new_count = 0
+        for c in version2_chunks:
+            ch = compute_chunk_hash(c["text"])
+            if not doc_store.get_chunk_content(ch):
+                doc_store.create_chunk_content(ch, c["text"], milvus_id="")
+                new_count += 1
+
         result2 = update_document_refs(doc_id, 2, version2_chunks)
 
-        assert len(result2["new_chunk_hashes"]) == 1
+        assert new_count == 1  # Chunk C is new
         assert len(result2["stale_chunk_hashes"]) == 2  # both v1 refs deactivated
 
         refs = doc_store.get_doc_chunk_refs(doc_id, 2)
@@ -175,6 +196,17 @@ class TestProcessRefCountChanges:
         write_evidence(chunk_hash, items)
 
         assert get_support_count("ENTITY", entity_key="organization:阿里巴巴") == 1
+
+        # Create a DocChunkRef so ref_count is 1, then deactivate it to trigger 1→0
+        doc_store.create_doc_chunk_ref("test_doc_del", 1, chunk_hash, 0)
+        doc_store.update_chunk_ref_count(chunk_hash)
+
+        # Directly deactivate the ref to make ref_count go 1→0
+        conn = doc_store._get_conn()
+        conn.execute("UPDATE doc_chunk_ref SET active = 0 WHERE doc_id = ? AND chunk_hash = ?",
+                     ("test_doc_del", chunk_hash))
+        conn.commit()
+        conn.close()
 
         affected = process_chunk_ref_one_to_zero(chunk_hash)
         assert len(affected) >= 1

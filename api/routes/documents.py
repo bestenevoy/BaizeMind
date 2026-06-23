@@ -115,11 +115,6 @@ async def _delete_document_evidence(doc_id: str, doc: dict):
 
     all_affected: dict[str, set[str]] = {}
 
-    refs = doc_store.get_doc_chunk_refs(doc_id)
-    for ref in refs:
-        doc_store.create_doc_chunk_ref(ref["doc_id"], ref["doc_version"],
-                                        ref["chunk_hash"], ref["chunk_index"],
-                                        ref.get("page_no"))
     doc_store.mark_doc_chunk_refs_stale(doc_id)
     stale_hashes = doc_store.deactivate_stale_doc_chunk_refs(doc_id)
 
@@ -356,6 +351,7 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str):
 
             existing = doc_store.get_chunk_content(ch)
             if not existing:
+                doc_store.create_chunk_content(ch, chunk["text"], milvus_id="")
                 new_chunk_texts.append(chunk)
 
         ref_result = update_document_refs(doc_id, doc_version, [
@@ -384,9 +380,14 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str):
             vector_retriever.ensure_collection()
             vector_retriever.insert(new_chunk_texts, embeddings)
 
+            conn = doc_store._get_conn()
             for nc in new_chunk_texts:
-                doc_store.create_chunk_content(nc["chunk_hash"], nc["text"],
-                                               milvus_id=nc.get("chunk_id", ""))
+                conn.execute(
+                    "UPDATE chunk_content SET milvus_id = ? WHERE chunk_hash = ?",
+                    (nc.get("chunk_id", ""), nc["chunk_hash"]),
+                )
+            conn.commit()
+            conn.close()
 
         doc_store.update_document(doc_id, processing_stage="构建BM25索引")
         from src.retrieval.bm25_retriever import BM25Retriever
