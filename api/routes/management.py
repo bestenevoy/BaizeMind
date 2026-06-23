@@ -698,7 +698,18 @@ async def rebuild_bm25():
         if ok:
             return {"success": True, "message": f"BM25 rebuilt: {len(bm25._chunks)} chunks"}
         else:
-            return {"success": True, "message": "BM25 rebuilt: 0 chunks (Milvus is empty)"}
+            # Milvus is empty — delete stale index files
+            model_file = bm25.index_path / "bm25_model.pkl"
+            data_file = bm25.index_path / "bm25_data.json"
+            if model_file.exists():
+                model_file.unlink()
+            if data_file.exists():
+                data_file.unlink()
+            bm25._model = None
+            bm25._chunks = []
+            bm25._corpus = []
+            bm25._chunk_ids = set()
+            return {"success": True, "message": "BM25 cleared: 0 chunks (old index files deleted)"}
     except Exception as e:
         return {"success": False, "message": str(e)}
 
