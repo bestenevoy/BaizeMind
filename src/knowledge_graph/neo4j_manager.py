@@ -22,95 +22,19 @@ class Neo4jManager:
             self._driver.verify_connectivity()
         return self._driver
 
-    def close(self):
-        if self._driver:
-            self._driver.close()
-            self._driver = None
-
-    def init_schema(self):
-        self.connect()
-        with self._driver.session() as session:
-            session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (e:Entity) REQUIRE e.name IS UNIQUE")
-            session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.type)")
-            session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.doc_id)")
-
-    def upsert_entity(self, entity: dict):
-        self.connect()
-        with self._driver.session() as session:
-            session.run(
-                """
-                MERGE (e:Entity {name: $name})
-                SET e.type = $type, e.description = $description, e.chunk_id = $chunk_id, e.doc_id = $doc_id
-                """,
-                name=entity["name"],
-                type=entity.get("type", "Unknown"),
-                description=entity.get("description", ""),
-                chunk_id=entity.get("chunk_id", ""),
-                doc_id=entity.get("doc_id", ""),
-            )
-
-    def upsert_relation(self, relation: dict):
-        self.connect()
-        with self._driver.session() as session:
-            session.run(
-                """
-                MATCH (s:Entity {name: $subject})
-                MATCH (o:Entity {name: $object})
-                MERGE (s)-[r:RELATES_TO {type: $predicate}]->(o)
-                """,
-                subject=relation.get("subject", relation.get("subject_obj", "").split(" ", 1)[0]),
-                predicate=relation.get("predicate", "relates_to").upper().replace(" ", "_"),
-                object=relation.get("object", ""),
-            )
-
-    def batch_import(self, entities: list[dict], relations: list[dict], doc_id: str = ""):
-        self.connect()
-        with self._driver.session() as session:
-            if entities:
-                entity_params = [
-                    {"name": e["name"], "type": e.get("type", "Unknown"), "description": e.get("description", "")}
-                    for e in entities
-                ]
-                session.run(
-                    """
-                    UNWIND $entities AS e
-                    MERGE (n:Entity {name: e.name})
-                    SET n.type = e.type, n.description = e.description, n.doc_id = $doc_id
-                    """,
-                    entities=entity_params,
-                    doc_id=doc_id,
-                )
-            if relations:
-                rel_params = [
-                    {
-                        "subject": rel.get("subject", ""),
-                        "predicate": rel.get("predicate", "RELATES_TO").upper().replace(" ", "_"),
-                        "object": rel.get("object", ""),
-                    }
-                    for rel in relations
-                    if rel.get("subject") and rel.get("object")
-                ]
-                if rel_params:
-                    session.run(
-                        """
-                        UNWIND $relations AS r
-                        MATCH (s:Entity {name: r.subject})
-                        MATCH (o:Entity {name: r.object})
-                        MERGE (s)-[rel:RELATES_TO {type: r.predicate}]->(o)
-                        """,
-                        relations=rel_params,
-                    )
-
     def get_neighbors(self, entity_name: str, max_hops: int = 2) -> list[dict]:
+        """Query entity neighbors supporting both legacy (:RELATES_TO) and new (:SUBJECT_OF/:OBJECT_OF) models."""
         self.connect()
         with self._driver.session() as session:
             result = session.run(
                 """
-                MATCH path = (s:Entity)-[*1..%d]-(o:Entity)
-                WHERE toLower(s.name) CONTAINS toLower($name)
-                RETURN s.name as subject_name, s.type as subject_type,
-                       o.name as object_name, o.type as object_type,
-                       [r in relationships(path) | r.type] as relation_types,
+                MATCH (s:Entity)
+                WHERE toLower(s.name) CONTAINS toLower($name) OR toLower(s.entity_key) CONTAINS toLower($name)
+                MATCH path = (s)-[*1..%d]-(o:Entity)
+                WHERE s <> o
+                RETURN s.name as subject_name, coalesce(s.type, '') as subject_type,
+                       o.name as object_name, coalesce(o.type, '') as object_type,
+                       [r in relationships(path) | coalesce(r.type, r.predicate, type(r))] as relation_types,
                        length(path) as distance
                 LIMIT 50
                 """ % max_hops,
@@ -159,20 +83,199 @@ class Neo4jManager:
             result = session.run(cypher, params or {})
             return [dict(r) for r in result]
 
-    def delete_entities_by_doc(self, doc_id: str):
-        self.connect()
-        with self._driver.session() as session:
-            session.run(
-                "MATCH (n:Entity) WHERE n.doc_id = $doc_id DETACH DELETE n",
-                doc_id=doc_id,
-            )
-
     def get_stats(self) -> dict:
         self.connect()
         with self._driver.session() as session:
             nodes = session.run("MATCH (n:Entity) RETURN count(n) as count").single()
+            facts = session.run("MATCH (n:Fact) RETURN count(n) as count").single()
+            attrs = session.run("MATCH (n:Attribute) RETURN count(n) as count").single()
             rels = session.run("MATCH ()-[r]->() RETURN count(r) as count").single()
             return {
                 "entity_count": nodes["count"] if nodes else 0,
+                "fact_count": facts["count"] if facts else 0,
+                "attribute_count": attrs["count"] if attrs else 0,
                 "relation_count": rels["count"] if rels else 0,
             }
+
+    # ═══════════════════════════════════════════════════════
+    # Evidence-driven schema — Entity / Fact / Attribute
+    # ═══════════════════════════════════════════════════════
+
+    def init_evidence_schema(self):
+        self.connect()
+        with self._driver.session() as session:
+            # Drop old constraints that conflict with the new model
+            for c in ["Entity_name", "entity_name_unique", "e.name IS UNIQUE"]:
+                try:
+                    session.run(f"DROP CONSTRAINT {c} IF EXISTS")
+                except Exception:
+                    pass
+            # Drop old constraint by label if the name-based one still exists
+            try:
+                result = session.run("SHOW CONSTRAINTS YIELD name, labelsOrTypes, properties WHERE labelsOrTypes = ['Entity']")
+                for r in result:
+                    if "name" in r.get("properties", []):
+                        session.run(f"DROP CONSTRAINT {r['name']}")
+            except Exception:
+                pass
+            session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (e:Entity) REQUIRE e.entity_key IS UNIQUE")
+            session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (f:Fact) REQUIRE f.fact_key IS UNIQUE")
+            session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (a:Attribute) REQUIRE a.attr_full_key IS UNIQUE")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.name)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.type)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (e:Entity) ON (e.active)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (f:Fact) ON (f.active)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (a:Attribute) ON (a.owner_key)")
+            session.run("CREATE INDEX IF NOT EXISTS FOR (a:Attribute) ON (a.active)")
+
+    def sync_entity(self, entity_key: str, support_count: int):
+        self.connect()
+        with self._driver.session() as session:
+            if support_count > 0:
+                session.run(
+                    """
+                    MERGE (e:Entity {entity_key: $entity_key})
+                    SET e.support_count = $support_count, e.active = true
+                    """,
+                    entity_key=entity_key, support_count=support_count,
+                )
+            else:
+                session.run(
+                    "MATCH (e:Entity {entity_key: $entity_key}) SET e.active = false, e.support_count = 0",
+                    entity_key=entity_key,
+                )
+
+    def sync_entity_with_name(self, entity_key: str, name: str, entity_type: str, support_count: int):
+        self.connect()
+        with self._driver.session() as session:
+            if support_count > 0:
+                session.run(
+                    """
+                    MERGE (e:Entity {entity_key: $entity_key})
+                    SET e.name = $name, e.type = $entity_type, e.support_count = $support_count, e.active = true
+                    """,
+                    entity_key=entity_key, name=name, entity_type=entity_type, support_count=support_count,
+                )
+            else:
+                session.run(
+                    "MATCH (e:Entity {entity_key: $entity_key}) SET e.active = false, e.support_count = 0",
+                    entity_key=entity_key,
+                )
+
+    def sync_fact(self, fact_key: str, subject_key: str, predicate: str, object_key: str, support_count: int):
+        self.connect()
+        with self._driver.session() as session:
+            if support_count > 0:
+                session.run(
+                    """
+                    MERGE (s:Entity {entity_key: $subject_key})
+                    MERGE (o:Entity {entity_key: $object_key})
+                    MERGE (f:Fact {fact_key: $fact_key})
+                    SET f.subject_key = $subject_key, f.predicate = $predicate, f.object_key = $object_key,
+                        f.support_count = $support_count, f.active = true
+                    MERGE (s)-[:SUBJECT_OF]->(f)
+                    MERGE (f)-[:OBJECT_OF]->(o)
+                    """,
+                    fact_key=fact_key, subject_key=subject_key, predicate=predicate,
+                    object_key=object_key, support_count=support_count,
+                )
+            else:
+                session.run(
+                    "MATCH (f:Fact {fact_key: $fact_key}) SET f.active = false, f.support_count = 0",
+                    fact_key=fact_key,
+                )
+
+    def sync_entity_attribute(self, attr_full_key: str, owner_key: str, attr_key: str, attr_value: str, support_count: int):
+        self.connect()
+        with self._driver.session() as session:
+            if support_count > 0:
+                session.run(
+                    """
+                    MERGE (e:Entity {entity_key: $owner_key})
+                    MERGE (a:Attribute {attr_full_key: $attr_full_key})
+                    SET a.owner_key = $owner_key, a.owner_type = 'ENTITY',
+                        a.key = $attr_key, a.value = $attr_value,
+                        a.support_count = $support_count, a.active = true
+                    MERGE (e)-[:HAS_ATTRIBUTE]->(a)
+                    """,
+                    attr_full_key=attr_full_key, owner_key=owner_key,
+                    attr_key=attr_key, attr_value=attr_value, support_count=support_count,
+                )
+            else:
+                session.run(
+                    "MATCH (a:Attribute {attr_full_key: $attr_full_key}) SET a.active = false, a.support_count = 0",
+                    attr_full_key=attr_full_key,
+                )
+
+    def sync_fact_attribute(self, attr_full_key: str, fact_key: str, attr_key: str, attr_value: str, support_count: int):
+        self.connect()
+        with self._driver.session() as session:
+            if support_count > 0:
+                session.run(
+                    """
+                    MATCH (f:Fact {fact_key: $fact_key})
+                    MERGE (a:Attribute {attr_full_key: $attr_full_key})
+                    SET a.owner_key = $fact_key, a.owner_type = 'FACT',
+                        a.key = $attr_key, a.value = $attr_value,
+                        a.support_count = $support_count, a.active = true
+                    MERGE (f)-[:HAS_ATTRIBUTE]->(a)
+                    """,
+                    attr_full_key=attr_full_key, fact_key=fact_key,
+                    attr_key=attr_key, attr_value=attr_value, support_count=support_count,
+                )
+            else:
+                session.run(
+                    "MATCH (a:Attribute {attr_full_key: $attr_full_key}) SET a.active = false, a.support_count = 0",
+                    attr_full_key=attr_full_key,
+                )
+
+    def sync_from_affected(self, affected_key: str, affected_type: str, support_count: int) -> bool:
+        """Unified sync entry. Parses affected_key based on affected_type."""
+        self.connect()
+        if support_count > 0:
+            if affected_type == "ENTITY":
+                self.sync_entity(affected_key, support_count)
+            elif affected_type == "FACT":
+                parts = affected_key.split("|")
+                if len(parts) >= 3:
+                    self.sync_fact(affected_key, parts[0], parts[1], parts[2], support_count)
+            elif affected_type == "ENTITY_ATTRIBUTE":
+                parts = affected_key.split("|")
+                if len(parts) >= 3:
+                    self.sync_entity_attribute(affected_key, parts[0], parts[1], parts[2], support_count)
+            elif affected_type == "FACT_ATTRIBUTE":
+                parts = affected_key.split("|")
+                if len(parts) >= 5:
+                    fact_key = "|".join(parts[:3])
+                    self.sync_fact_attribute(affected_key, fact_key, parts[3], parts[4], support_count)
+            return True
+        else:
+            if affected_type == "ENTITY":
+                self.sync_entity(affected_key, 0)
+            elif affected_type == "FACT":
+                self.sync_fact(affected_key, "", "", "", 0)
+            elif affected_type in ("ENTITY_ATTRIBUTE", "FACT_ATTRIBUTE"):
+                self.sync_entity_attribute(affected_key, "", "", "", 0)
+            return True
+
+    def get_all_entities_evidence(self) -> list[dict]:
+        self.connect()
+        with self._driver.session() as session:
+            result = session.run(
+                "MATCH (e:Entity) WHERE e.active = true RETURN e.entity_key AS entity_key, e.name AS name, e.type AS type, e.support_count AS support_count"
+            )
+            return [dict(r) for r in result]
+
+    def get_all_facts_evidence(self) -> list[dict]:
+        self.connect()
+        with self._driver.session() as session:
+            result = session.run(
+                """
+                MATCH (f:Fact) WHERE f.active = true
+                MATCH (s:Entity {entity_key: f.subject_key})
+                MATCH (o:Entity {entity_key: f.object_key})
+                RETURN f.fact_key AS fact_key, s.name AS subject_name, f.predicate AS predicate,
+                       o.name AS object_name, f.support_count AS support_count
+                """
+            )
+            return [dict(r) for r in result]

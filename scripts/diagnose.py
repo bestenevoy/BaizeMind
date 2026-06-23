@@ -425,36 +425,37 @@ def check_neo4j() -> bool:
     try:
         from src.knowledge_graph.neo4j_manager import Neo4jManager  # noqa: C0415
         from src.knowledge_graph.entity_extractor import EntityExtractor  # noqa: C0415
+        from src.knowledge_graph.evidence import EntityEvidence, make_entity_key  # noqa: C0415
 
         neo4j = Neo4jManager()
         neo4j.connect()
-        neo4j.init_schema()
+        neo4j.init_evidence_schema()
 
         # 清理之前测试数据
         neo4j.query("MATCH (n {source: '_diagnose_test'}) DETACH DELETE n")
 
-        # 插入测试实体
-        test_entity = {"name": "Python", "type": "PROGRAMMING_LANGUAGE", "description": "一种编程语言", "chunk_id": "_diag_test_0", "source": "_diagnose_test"}
-        neo4j.upsert_entity(test_entity)
+        # 插入测试实体 (evidence model)
+        entity_key = make_entity_key("ProgrammingLanguage", "Python")
+        neo4j.sync_entity_with_name(entity_key, "Python", "ProgrammingLanguage", 1)
+        neo4j.query("MATCH (e:Entity {entity_key: $k}) SET e.source = '_diagnose_test'", {"k": entity_key})
 
         # 查询
         stats = neo4j.get_stats()
-        print(ok(f"Neo4j 连接成功 → 实体: {stats['entity_count']}, 关系: {stats['relation_count']}"))
+        print(ok(f"Neo4j 连接成功 → 实体: {stats['entity_count']}, Fact: {stats['fact_count']}"))
 
         neighbors = neo4j.get_neighbors("Python", max_hops=1)
         print(ok(f"Neo4j 邻居查询成功 → {len(neighbors)} 条记录"))
 
-        # 测试实体抽取（需要 DeepSeek API）
+        # 测试证据抽取（需要 DeepSeek API）
         try:
-            extractor = EntityExtractor(use_langextract=False)
-            result = extractor.extract("苹果公司在1984年推出了Macintosh电脑。")
-            entities = result.get("entities", [])
-            if len(entities) > 0:
-                print(ok(f"实体抽取测试通过 → 抽取到 {len(entities)} 个实体"))
+            extractor = EntityExtractor()
+            items = extractor.extract_evidence("苹果公司在1984年推出了Macintosh电脑。")
+            if len(items) > 0:
+                print(ok(f"证据抽取测试通过 → 抽取到 {len(items)} 条证据"))
             else:
-                print(warn("实体抽取返回空结果（可能是 LLM 未响应）"))
+                print(warn("证据抽取返回空结果（可能是 LLM 未响应）"))
         except Exception as e:
-            print(warn(f"实体抽取跳过（LLM 调用失败）: {e}"))
+            print(warn(f"证据抽取跳过（LLM 调用失败）: {e}"))
 
         # 清理
         neo4j.query("MATCH (n {source: '_diagnose_test'}) DETACH DELETE n")

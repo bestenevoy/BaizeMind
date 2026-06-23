@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""批量文档导入脚本"""
+"""批量文档导入脚本 — evidence-driven flow"""
 import sys
 from pathlib import Path
+import hashlib
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -14,7 +15,10 @@ from src.embeddings.bge_m3 import BGEM3Embedding
 from src.retrieval.vector_retriever import MilvusVectorRetriever
 from src.retrieval.bm25_retriever import BM25Retriever
 from src.knowledge_graph.entity_extractor import EntityExtractor
-from src.knowledge_graph.neo4j_manager import Neo4jManager
+from src.knowledge_graph.chunk_manager import create_or_reuse_chunk, build_sync_tasks
+from src.knowledge_graph.evidence_writer import write_evidence
+from src.knowledge_graph.graph_sync_worker import process_pending_tasks
+from src.storage import doc_store
 from config.settings import settings
 import numpy as np
 
@@ -22,18 +26,19 @@ import numpy as np
 def ingest(file_path: str):
     path = Path(file_path)
     doc_id = path.stem
+    doc_version = 1
 
     print(f"[Ingest] Processing: {path} (doc_id={doc_id})")
 
     # 1. Parse
-    print("  [1/5] Parsing with MinerU...")
+    print("  [1/6] Parsing with MinerU...")
     parser = MinerUParser()
     result = parser.parse(path, doc_id)
     markdown = result.get("markdown", "")
     print(f"  -> Parsed {len(markdown)} chars of markdown")
 
     # 2. Chunk
-    print("  [2/5] Chunking...")
+    print("  [2/6] Chunking...")
     h_chunker = HierarchicalChunker(chunk_size=settings.chunk_size, chunk_overlap=settings.chunk_overlap)
     chunks = h_chunker.chunk(doc_id, markdown)
 
@@ -46,40 +51,66 @@ def ingest(file_path: str):
     chunks = merger.deduplicate(chunks)
     print(f"  -> Created {len(chunks)} chunks ({len(table_chunks)} table chunks)")
 
-    # 3. Embed & Index in Milvus
-    print("  [3/5] Embedding & indexing...")
-    embedding = BGEM3Embedding()
-    texts = [c["text"] for c in chunks]
-    all_emb = []
-    for i in range(0, len(texts), settings.bge_m3_batch_size):
-        batch = texts[i: i + settings.bge_m3_batch_size]
-        all_emb.append(embedding.encode_dense(batch))
-    embeddings = np.concatenate(all_emb) if all_emb else np.array([])
+    # 3. Chunk dedup & ref management
+    print("  [3/6] Chunk dedup & ref management...")
+    new_chunks = []
 
-    vector_retriever = MilvusVectorRetriever()
-    vector_retriever.ensure_collection()
-    vector_retriever.insert(chunks, embeddings)
-    print(f"  -> Inserted {len(chunks)} vectors")
+    for i, chunk in enumerate(chunks):
+        ch, is_new = create_or_reuse_chunk(chunk["text"])
+        chunk["chunk_hash"] = ch
+        doc_store.create_doc_chunk_ref(doc_id, doc_version, ch, i)
+        doc_store.update_chunk_ref_count(ch)
+        if is_new:
+            new_chunks.append(chunk)
 
-    # 4. BM25 Index
-    print("  [4/5] Building BM25 index...")
-    bm25 = BM25Retriever()
-    bm25.load()
-    bm25.merge_chunks(chunks)
-    bm25.save()
-    print("  -> BM25 index saved")
+    print(f"  -> {len(new_chunks)} new chunks need embedding")
 
-    # 5. Knowledge Graph
-    print("  [5/5] Extracting entities & building graph...")
+    # 4. Embed & Index in Milvus + BM25
+    if new_chunks:
+        print("  [4/6] Embedding & indexing...")
+        embedding = BGEM3Embedding()
+        texts = [c["text"] for c in new_chunks]
+        embeddings = embedding.encode_dense_all(texts, batch_size=settings.bge_m3_batch_size, concurrency=8)
+
+        vector_retriever = MilvusVectorRetriever()
+        vector_retriever.ensure_collection()
+        vector_retriever.insert(new_chunks, embeddings)
+        print(f"  -> Inserted {len(new_chunks)} vectors")
+
+        bm25 = BM25Retriever()
+        bm25.load()
+        bm25.merge_chunks(new_chunks)
+        bm25.save()
+        print("  -> BM25 index saved")
+    else:
+        print("  [4/6] No new chunks — skipped embedding")
+
+    # 5. Evidence Extraction
+    print("  [5/6] Extracting evidence...")
     extractor = EntityExtractor()
-    extracted = extractor.extract_from_chunks(chunks)
-    entities = [e for e in extracted if "type" in e and "name" in e]
-    relations = [r for r in extracted if "predicate" in r]
-    neo4j = Neo4jManager()
-    neo4j.connect()
-    neo4j.init_schema()
-    neo4j.batch_import(entities, relations)
-    print(f"  -> Imported {len(entities)} entities, {len(relations)} relations")
+    all_affected_keys: dict[str, set[str]] = {}
+
+    for chunk in new_chunks:
+        ch = chunk["chunk_hash"]
+        items = extractor.extract_evidence(chunk["text"], chunk_hash=ch)
+        if items:
+            result = write_evidence(ch, items)
+            for t, keys in result.get("affected_keys", {}).items():
+                if t not in all_affected_keys:
+                    all_affected_keys[t] = set()
+                all_affected_keys[t].update(keys)
+
+    print(f"  -> Evidence written, affected keys: {sum(len(v) for v in all_affected_keys.values())}")
+
+    # 6. Sync Neo4j
+    print("  [6/6] Syncing knowledge graph...")
+    if all_affected_keys:
+        tasks = build_sync_tasks(all_affected_keys, doc_id=doc_id, doc_version=doc_version)
+        doc_store.create_sync_tasks_batch(tasks)
+        result = process_pending_tasks()
+        print(f"  -> Sync: {result['success']} success, {result['failed']} failed")
+    else:
+        print("  -> No changes to sync")
 
     print(f"[Done] Document {doc_id} ingested successfully!")
 

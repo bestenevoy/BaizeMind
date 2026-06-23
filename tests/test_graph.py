@@ -4,9 +4,9 @@
 def test_entity_extractor_parse():
     from src.knowledge_graph.entity_extractor import EntityExtractor
     extractor = EntityExtractor()
-    result = extractor._parse_response('{"entities": [{"name": "Test", "type": "Org"}], "relations": []}')
-    assert len(result["entities"]) == 1
-    assert result["entities"][0]["name"] == "Test"
+    result = extractor._parse_response('{"evidence_items": [{"type": "ENTITY", "entity_name": "Test", "entity_type": "Org"}]}')
+    assert len(result["evidence_items"]) == 1
+    assert result["evidence_items"][0]["entity_name"] == "Test"
 
 
 def test_neo4j_manager_init():

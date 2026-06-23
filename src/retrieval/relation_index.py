@@ -64,27 +64,51 @@ class RelationIndex:
             logger.info(f"Created relation index collection: {self.collection_name}")
 
     def build_from_neo4j(self) -> int:
-        """Extract all relations from Neo4j, embed them, and insert into Milvus."""
+        """Extract all relations from Neo4j, embed them, and insert into Milvus.
+        Supports both legacy (:RELATES_TO) and new (:Fact) models."""
         from src.knowledge_graph.neo4j_manager import Neo4jManager
 
         self.ensure_collection()
         neo4j = Neo4jManager()
         neo4j.connect()
 
+        relations = []
+        seen = set()
+
         with neo4j._driver.session() as session:
-            result = session.run(
-                """
-                MATCH (s:Entity)-[r:RELATES_TO]->(o:Entity)
-                RETURN s.name AS subject, r.type AS predicate, o.name AS object
-                """
-            )
-            relations = []
-            seen = set()
-            for rec in result:
-                key = (rec["subject"], rec["predicate"], rec["object"])
-                if key not in seen:
-                    seen.add(key)
-                    relations.append(dict(rec))
+            # Try new Fact model first
+            try:
+                result = session.run(
+                    """
+                    MATCH (f:Fact) WHERE f.active = true
+                    OPTIONAL MATCH (s:Entity {entity_key: f.subject_key})
+                    OPTIONAL MATCH (o:Entity {entity_key: f.object_key})
+                    RETURN coalesce(s.name, f.subject_key) AS subject,
+                           f.predicate AS predicate,
+                           coalesce(o.name, f.object_key) AS object
+                    """
+                )
+                for rec in result:
+                    key = (rec["subject"], rec["predicate"], rec["object"])
+                    if key not in seen:
+                        seen.add(key)
+                        relations.append(dict(rec))
+            except Exception:
+                pass
+
+            # Fallback: legacy RELATES_TO model
+            if not relations:
+                result = session.run(
+                    """
+                    MATCH (s:Entity)-[r:RELATES_TO]->(o:Entity)
+                    RETURN s.name AS subject, r.type AS predicate, o.name AS object
+                    """
+                )
+                for rec in result:
+                    key = (rec["subject"], rec["predicate"], rec["object"])
+                    if key not in seen:
+                        seen.add(key)
+                        relations.append(dict(rec))
 
         if not relations:
             logger.info("No relations found in Neo4j. Build the knowledge graph first.")
@@ -161,6 +185,79 @@ class RelationIndex:
             })
         self._client.insert(collection_name=self.collection_name, data=data)
         self._client.flush(self.collection_name)
+
+    def upsert_relation(self, subject: str, predicate: str, object_: str):
+        """Single relation upsert into Milvus (for incremental updates)."""
+        self.ensure_collection()
+        text = f"{subject} {predicate} {object_}"
+        record = {
+            "id": f"rel:{subject}|{predicate}|{object_}",
+            "subject": subject,
+            "predicate": predicate,
+            "object": object_,
+            "text": text,
+            "metadata": {},
+        }
+        embedding = self._embedding.encode_dense([text])
+        self._insert([record], embedding)
+
+    def delete_relation(self, fact_key: str):
+        """Delete a single relation from Milvus."""
+        self.ensure_collection()
+        if not self._client.has_collection(self.collection_name):
+            return
+        self._client.delete(
+            collection_name=self.collection_name,
+            filter=f'id == "rel:{fact_key}"',
+        )
+
+    def build_from_evidence(self) -> int:
+        """Build relation index from SQLite Evidence (instead of Neo4j)."""
+        from src.storage import doc_store
+
+        self.ensure_collection()
+        conn = doc_store._get_conn()
+        rows = conn.execute(
+            """SELECT DISTINCT subject_key, predicate, object_key,
+                      subject_name, object_name
+               FROM evidence WHERE active = 1 AND evidence_type = 'FACT'"""
+        ).fetchall()
+        conn.close()
+
+        relations = []
+        seen = set()
+        for r in rows:
+            d = dict(r)
+            key = (d["subject_name"], d["predicate"], d["object_name"])
+            if key not in seen:
+                seen.add(key)
+                relations.append(d)
+
+        if not relations:
+            logger.info("No active FACT evidence found.")
+            return 0
+
+        texts = []
+        records = []
+        for rel in relations:
+            subj = rel.get("subject_name", rel["subject_key"])
+            pred = rel["predicate"]
+            objj = rel.get("object_name", rel["object_key"])
+            text = f"{subj} {pred} {objj}"
+            texts.append(text)
+            records.append({
+                "id": f"rel:{subj}|{pred}|{objj}",
+                "subject": subj,
+                "predicate": pred,
+                "object": objj,
+                "text": text,
+                "metadata": {},
+            })
+
+        embeddings = self._embed(records, texts)
+        self._insert(records, embeddings)
+        logger.info(f"Relation index built from evidence: {len(records)} relations")
+        return len(records)
 
     def clear(self):
         self.ensure_collection()

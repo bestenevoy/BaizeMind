@@ -158,6 +158,67 @@ class EntityIndex:
         self._client.insert(collection_name=self.collection_name, data=data)
         self._client.flush(self.collection_name)
 
+    def upsert_entity(self, entity_key: str, name: str, entity_type: str, description: str = ""):
+        """Single entity upsert into Milvus (for incremental updates)."""
+        self.ensure_collection()
+        text = f"{name}: {description}" if description else name
+        record = {
+            "id": f"entity:{name}",
+            "entity_name": name,
+            "entity_type": entity_type,
+            "description": description,
+            "text": text,
+            "metadata": {"entity_key": entity_key},
+        }
+        embedding = self._embedding.encode_dense([text])
+        self._insert([record], embedding)
+
+    def delete_entity(self, entity_key_or_name: str):
+        """Delete a single entity from Milvus."""
+        self.ensure_collection()
+        if not self._client.has_collection(self.collection_name):
+            return
+        self._client.delete(
+            collection_name=self.collection_name,
+            filter=f'id == "entity:{entity_key_or_name}" or entity_name == "{entity_key_or_name}"',
+        )
+
+    def build_from_evidence(self) -> int:
+        """Build entity index from SQLite Evidence (instead of Neo4j)."""
+        from src.storage import doc_store
+
+        self.ensure_collection()
+        conn = doc_store._get_conn()
+        rows = conn.execute(
+            """SELECT DISTINCT entity_key, entity_name, entity_type
+               FROM evidence WHERE active = 1 AND evidence_type = 'ENTITY'"""
+        ).fetchall()
+        conn.close()
+
+        entities = [dict(r) for r in rows]
+        if not entities:
+            logger.info("No active ENTITY evidence found.")
+            return 0
+
+        texts = []
+        records = []
+        for e in entities:
+            text = f"{e['entity_name']}: {e['entity_type']}"
+            texts.append(text)
+            records.append({
+                "id": f"entity:{e['entity_name']}",
+                "entity_name": e["entity_name"],
+                "entity_type": e.get("entity_type", "Unknown"),
+                "description": "",
+                "text": text,
+                "metadata": {"entity_key": e["entity_key"]},
+            })
+
+        embeddings = self._embed(records, texts)
+        self._insert(records, embeddings)
+        logger.info(f"Entity index built from evidence: {len(records)} entities")
+        return len(records)
+
     def clear(self):
         self.ensure_collection()
         if self._client.has_collection(self.collection_name):

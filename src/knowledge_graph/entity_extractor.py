@@ -1,14 +1,12 @@
 import json
 import re
-from typing import Any
 
 from src.llm.deepseek import get_chat_llm
-from config.prompts import ENTITY_RELATION_SYSTEM, ENTITY_RELATION_EXAMPLE
+from config.prompts import EVIDENCE_EXTRACTION_SYSTEM, EVIDENCE_EXTRACTION_EXAMPLE
 
 
 class EntityExtractor:
-    def __init__(self, use_langextract: bool = False):
-        self.use_langextract = use_langextract
+    def __init__(self):
         self._llm = None
 
     def _get_llm(self):
@@ -16,62 +14,63 @@ class EntityExtractor:
             self._llm = get_chat_llm(temperature=0.1)
         return self._llm
 
-    def extract(self, text: str) -> dict[str, Any]:
-        if self.use_langextract:
-            return self._extract_with_langextract(text)
-        return self._extract_with_llm(text)
-
-    def _extract_with_llm(self, text: str) -> dict:
-        llm = self._get_llm()
-        prompt = f"{ENTITY_RELATION_SYSTEM}\n\nExample:\n{ENTITY_RELATION_EXAMPLE}\n\nText: {text[:4000]}\n\nResponse:"
-        resp = llm.invoke(prompt)
-        return self._parse_response(resp.content)
-
-    def _extract_with_langextract(self, text: str) -> dict:
-        import langextract as lx
-        from langextract.factory import ModelConfig
-
-        examples = [
-            lx.data.ExampleData(
-                text=ENTITY_RELATION_EXAMPLE.split('Text: "')[1].split('"')[0],
-                extractions=[
-                    lx.data.Extraction(extraction_class="entity", extraction_text="Apple Inc.",
-                                       attributes={"type": "Organization", "description": "Technology company"}),
-                    lx.data.Extraction(extraction_class="entity", extraction_text="Xnor.ai",
-                                       attributes={"type": "Organization", "description": "AI startup"}),
-                    lx.data.Extraction(extraction_class="entity", extraction_text="iOS",
-                                       attributes={"type": "Product", "description": "Mobile operating system"}),
-                    lx.data.Extraction(extraction_class="relation",
-                                       extraction_text="Apple Inc. acquired Xnor.ai",
-                                       attributes={"predicate": "acquired"}),
-                    lx.data.Extraction(extraction_class="relation",
-                                       extraction_text="Xnor.ai integrated into iOS",
-                                       attributes={"predicate": "provides_technology_for"}),
-                ],
-            )
-        ]
-
-        from config.settings import settings
-        result = lx.extract(
-            text_or_documents=text,
-            prompt_description="Extract entities (Person, Organization, Product, Technology, Document, Event, Concept, Location) and relations from enterprise documents.",
-            examples=examples,
-            config=ModelConfig(
-                model_id=settings.deepseek_chat_model,
-                provider="openai",
-                provider_kwargs={"api_key": settings.deepseek_api_key, "base_url": settings.deepseek_base_url},
-            ),
+    def extract_evidence(self, text: str, chunk_hash: str = "") -> list:
+        from src.knowledge_graph.evidence import (
+            EntityEvidence, EntityAttributeEvidence, FactEvidence, FactAttributeEvidence,
         )
-        entities = []
-        relations = []
-        for ext in result.extractions:
-            if ext.extraction_class == "entity":
-                entities.append({"name": ext.extraction_text, **ext.attributes})
-            elif ext.extraction_class == "relation":
-                parts = ext.extraction_text.split(" - ", 1) if " - " in ext.extraction_text else [ext.extraction_text, ""]
-                subject_obj = parts[0]
-                relations.append({**ext.attributes, "text": ext.extraction_text, "subject_obj": subject_obj})
-        return {"entities": entities, "relations": relations}
+
+        llm = self._get_llm()
+        prompt = f"{EVIDENCE_EXTRACTION_SYSTEM}\n\nExample:\n{EVIDENCE_EXTRACTION_EXAMPLE}\n\nText: {text[:4000]}\n\nResponse:"
+        resp = llm.invoke(prompt)
+        data = self._parse_response(resp.content)
+
+        items = []
+        for item in data.get("evidence_items", []):
+            etype = item.get("type", "").upper()
+            conf = float(item.get("confidence", 0.5))
+            ev_text = text[:200]
+
+            if etype == "ENTITY":
+                items.append(EntityEvidence(
+                    chunk_hash=chunk_hash,
+                    entity_name=item.get("entity_name", ""),
+                    entity_type=item.get("entity_type", "Unknown"),
+                    confidence=conf,
+                    evidence_text=ev_text,
+                ))
+            elif etype == "ENTITY_ATTRIBUTE":
+                items.append(EntityAttributeEvidence(
+                    chunk_hash=chunk_hash,
+                    entity_key=item.get("entity_key", ""),
+                    attr_key=item.get("attr_key", ""),
+                    attr_value=item.get("attr_value", ""),
+                    confidence=conf,
+                    evidence_text=ev_text,
+                ))
+            elif etype == "FACT":
+                items.append(FactEvidence(
+                    chunk_hash=chunk_hash,
+                    subject_name=item.get("subject_name", ""),
+                    subject_type=item.get("subject_type", "Unknown"),
+                    predicate=item.get("predicate", ""),
+                    object_name=item.get("object_name", ""),
+                    object_type=item.get("object_type", "Unknown"),
+                    confidence=conf,
+                    evidence_text=ev_text,
+                ))
+            elif etype == "FACT_ATTRIBUTE":
+                items.append(FactAttributeEvidence(
+                    chunk_hash=chunk_hash,
+                    subject_key=item.get("subject_key", ""),
+                    predicate=item.get("predicate", ""),
+                    object_key=item.get("object_key", ""),
+                    attr_key=item.get("attr_key", ""),
+                    attr_value=item.get("attr_value", ""),
+                    confidence=conf,
+                    evidence_text=ev_text,
+                ))
+
+        return items
 
     @staticmethod
     def _parse_response(content: str) -> dict:
@@ -81,21 +80,4 @@ class EntityExtractor:
                 return json.loads(match.group())
         except json.JSONDecodeError:
             pass
-        return {"entities": [], "relations": []}
-
-    def extract_from_chunks(self, chunks: list[dict]) -> list[dict]:
-        all_results = []
-        seen_entities = set()
-
-        for chunk in chunks:
-            result = self.extract(chunk["text"][:4000])
-            for entity in result.get("entities", []):
-                if entity["name"] not in seen_entities:
-                    seen_entities.add(entity["name"])
-                    entity["chunk_id"] = chunk.get("chunk_id", "")
-                    all_results.append(entity)
-            for relation in result.get("relations", []):
-                relation["chunk_id"] = chunk.get("chunk_id", "")
-                all_results.append(relation)
-
-        return all_results
+        return {"evidence_items": []}

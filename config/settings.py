@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     layout_detection_model_dir: str = "./PP-DocLayoutV3/PaddlePaddle/PP-DocLayoutV3"
     cuda_visible_devices: str = "0"
 
+    # Knowledge Graph
+    graph_sync_max_retries: int = 3
+    graph_sync_batch_size: int = 50
+    chunk_gc_ttl_days: int = 30  # days before inactive chunks are physically deleted
+
     # Microsoft GraphRAG
     graphrag_root_dir: str = "./data/graphrag"
     graphrag_community_level: int = 2

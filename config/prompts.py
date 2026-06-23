@@ -20,46 +20,7 @@ Additionally, set "graph_eligible": true if:
 
 Respond in JSON format: {"query_type": "...", "confidence": 0.0-1.0, "reasoning": "...", "graph_eligible": true/false}"""
 
-# [DISABLED] holistic type removed — GraphRAG pipeline disabled.
-# Original: "holistic: Questions requiring a comprehensive overview of the entire dataset..."
-# Now routed to retrieval_agent as fallback.
-
-# ── Entity-Relation Extraction (for Knowledge Graph via DeepSeek) ──
-ENTITY_RELATION_SYSTEM = """You are an entity-relation extraction expert.
-Extract all entities and their relationships from the given text.
-Entity types: Person, Organization, Product, Technology, Document, Event, Concept, Location.
-
-For each entity, provide:
-- name: The entity name
-- type: The entity type
-- description: Brief description
-
-For each relation, provide:
-- subject: Entity name
-- predicate: Relationship type (e.g., "works_for", "develops", "uses", "part_of", "acquired", "located_in")
-- object: Entity name
-
-Respond in JSON format:
-{
-  "entities": [{"name": "...", "type": "...", "description": "..."}],
-  "relations": [{"subject": "...", "predicate": "...", "object": "..."}]
-}"""
-
-ENTITY_RELATION_EXAMPLE = """Text: "Apple Inc. acquired Xnor.ai in 2020 to enhance its on-device AI capabilities. The technology was later integrated into iOS."
-Response:
-{
-  "entities": [
-    {"name": "Apple Inc.", "type": "Organization", "description": "Technology company"},
-    {"name": "Xnor.ai", "type": "Organization", "description": "AI startup specializing in on-device machine learning"},
-    {"name": "iOS", "type": "Product", "description": "Apple's mobile operating system"}
-  ],
-  "relations": [
-    {"subject": "Apple Inc.", "predicate": "acquired", "object": "Xnor.ai"},
-    {"subject": "Xnor.ai", "predicate": "provides_technology_for", "object": "iOS"}
-  ]
-}"""
-
-# ── Text-to-Cypher ──────────────────────────────────────────────────
+# ── Evidence Extraction (4-type atomic evidence model) ──
 TEXT_TO_CYPHER_SYSTEM = """You are a Cypher query generator for Neo4j.
 Given a natural language question about a knowledge graph, generate a Cypher query.
 
@@ -126,6 +87,56 @@ Respond in JSON:
 }
 
 Only include failure_reasons when is_valid is false. Use ONLY the four categories above."""
+
+# ── Evidence Extraction (4-type atomic evidence model) ──
+EVIDENCE_EXTRACTION_SYSTEM = """You are a knowledge extraction expert. Extract atomic evidence from the given text.
+
+Evidence types:
+1. ENTITY: An entity exists in this text.
+   - entity_name: The entity name
+   - entity_type: Person | Organization | Product | Technology | Document | Event | Concept | Location
+2. ENTITY_ATTRIBUTE: An entity has a specific attribute value.
+   - entity_key: "entity_type:entity_name" (e.g. "company:阿里巴巴")
+   - attr_key: lowercased attribute name (e.g. "headquarter", "founded_year")
+   - attr_value: the attribute value as stated in text
+3. FACT: Two entities have a relationship.
+   - subject_name/type, predicate (UPPER_SNAKE), object_name/type
+   - Predicate examples: FOUNDED, ACQUIRED, WORKS_FOR, DEVELOPS, PART_OF, LOCATED_IN, COMPETES_WITH, USED_IN, SUPPORTS, DEPENDS_ON, PROVIDES_TECHNOLOGY_FOR, RELATED_TO_TECH, AFFECTS, INTEGRATED_INTO, POWERS
+4. FACT_ATTRIBUTE: A relationship has a specific attribute value.
+   - Refer to the FACT by subject_key/predicate/object_key
+   - attr_key (e.g. "year", "location", "role"), attr_value
+
+Key rules:
+- Use "entity_type:normalized_name" for entity_key (e.g. "person:马云", "company:阿里巴巴", "location:杭州")
+- All attr_keys must be lowercase
+- Predicate must be UPPER_SNAKE_CASE
+- Assign confidence 0.0-1.0 based on how explicit the evidence is in the text
+- Only extract what is EXPLICITLY stated in the text
+
+Respond in JSON:
+{
+  "evidence_items": [
+    {"type": "ENTITY", "entity_name": "马云", "entity_type": "Person", "confidence": 0.98},
+    {"type": "ENTITY_ATTRIBUTE", "entity_key": "company:阿里巴巴", "attr_key": "headquarter", "attr_value": "杭州", "confidence": 0.95},
+    {"type": "FACT", "subject_name": "马云", "subject_type": "Person", "predicate": "FOUNDED", "object_name": "阿里巴巴", "object_type": "Organization", "confidence": 0.96},
+    {"type": "FACT_ATTRIBUTE", "subject_key": "person:马云", "predicate": "FOUNDED", "object_key": "company:阿里巴巴", "attr_key": "year", "attr_value": "1999", "confidence": 0.94}
+  ]
+}"""
+
+EVIDENCE_EXTRACTION_EXAMPLE = """Text: "马云于1999年在杭州创立阿里巴巴，公司总部设在杭州，主营业务包括电商、云计算和金融科技。"
+
+Response:
+{
+  "evidence_items": [
+    {"type": "ENTITY", "entity_name": "马云", "entity_type": "Person", "confidence": 0.99},
+    {"type": "ENTITY", "entity_name": "阿里巴巴", "entity_type": "Organization", "confidence": 0.99},
+    {"type": "ENTITY", "entity_name": "杭州", "entity_type": "Location", "confidence": 0.97},
+    {"type": "ENTITY_ATTRIBUTE", "entity_key": "organization:阿里巴巴", "attr_key": "headquarter", "attr_value": "杭州", "confidence": 0.95},
+    {"type": "ENTITY_ATTRIBUTE", "entity_key": "organization:阿里巴巴", "attr_key": "industry", "attr_value": "电商", "confidence": 0.85},
+    {"type": "FACT", "subject_name": "马云", "subject_type": "Person", "predicate": "FOUNDED", "object_name": "阿里巴巴", "object_type": "Organization", "confidence": 0.98},
+    {"type": "FACT_ATTRIBUTE", "subject_key": "person:马云", "predicate": "FOUNDED", "object_key": "organization:阿里巴巴", "attr_key": "year", "attr_value": "1999", "confidence": 0.96}
+  ]
+}"""
 
 # ── Chart Description ──────────────────────────────────────────────
 CHART_DESCRIPTION_SYSTEM = """Describe the content of this chart/image in detail:

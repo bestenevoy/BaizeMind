@@ -1,6 +1,7 @@
 import json
 import shutil
 import sqlite3
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -42,9 +43,88 @@ def init_db():
             path TEXT PRIMARY KEY,
             created_at TEXT NOT NULL
         );
+
+        -- Evidence pipeline tables
+        CREATE TABLE IF NOT EXISTS chunk_content (
+            chunk_hash TEXT PRIMARY KEY,
+            text TEXT NOT NULL,
+            milvus_id TEXT,
+            ref_count INTEGER NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS doc_chunk_ref (
+            doc_id TEXT NOT NULL,
+            doc_version INTEGER NOT NULL DEFAULT 1,
+            chunk_hash TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL DEFAULT 0,
+            page_no INTEGER,
+            active INTEGER NOT NULL DEFAULT 1,
+            is_stale INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (doc_id, doc_version, chunk_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_dcr_chunk_hash ON doc_chunk_ref(chunk_hash, active);
+        CREATE INDEX IF NOT EXISTS idx_dcr_doc_id ON doc_chunk_ref(doc_id, active, is_stale);
+
+        CREATE TABLE IF NOT EXISTS evidence (
+            evidence_id TEXT PRIMARY KEY,
+            chunk_hash TEXT NOT NULL,
+            evidence_type TEXT NOT NULL,
+            entity_key TEXT,
+            entity_name TEXT,
+            entity_type TEXT,
+            subject_key TEXT,
+            subject_name TEXT,
+            subject_type TEXT,
+            predicate TEXT,
+            object_key TEXT,
+            object_name TEXT,
+            object_type TEXT,
+            attr_owner_type TEXT,
+            attr_key TEXT,
+            attr_value TEXT,
+            evidence_text TEXT DEFAULT '',
+            confidence REAL NOT NULL DEFAULT 0.5,
+            extractor_version TEXT DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ev_chunk ON evidence(chunk_hash, active);
+        CREATE INDEX IF NOT EXISTS idx_ev_type ON evidence(active, evidence_type);
+        CREATE INDEX IF NOT EXISTS idx_ev_entity ON evidence(entity_key, active);
+        CREATE INDEX IF NOT EXISTS idx_ev_fact ON evidence(subject_key, predicate, object_key, active);
+        CREATE INDEX IF NOT EXISTS idx_ev_entity_attr ON evidence(entity_key, attr_key, attr_value, active);
+        CREATE INDEX IF NOT EXISTS idx_ev_fact_attr ON evidence(subject_key, predicate, object_key, attr_key, attr_value, active);
+
+        CREATE TABLE IF NOT EXISTS graph_sync_task (
+            task_id TEXT PRIMARY KEY,
+            doc_id TEXT,
+            doc_version INTEGER,
+            chunk_hash TEXT,
+            affected_key TEXT NOT NULL,
+            affected_type TEXT NOT NULL,
+            operation TEXT NOT NULL DEFAULT 'UPSERT',
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_gst_status ON graph_sync_task(status);
     """)
     try:
         conn.execute("ALTER TABLE documents ADD COLUMN processing_stage TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE documents ADD COLUMN doc_version INTEGER NOT NULL DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE documents ADD COLUMN doc_hash TEXT NOT NULL DEFAULT ''")
     except sqlite3.OperationalError:
         pass
     # Normalize existing folders without leading slash
@@ -337,3 +417,328 @@ def _folder_has_docs(path: str) -> bool:
     ).fetchone()
     conn.close()
     return row["cnt"] > 0 if row else False
+
+
+# ═══════════════════════════════════════════════════════════════
+# ChunkContent — unique content deduplication
+# ═══════════════════════════════════════════════════════════════
+
+def get_chunk_content(chunk_hash: str) -> Optional[dict]:
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM chunk_content WHERE chunk_hash = ?", (chunk_hash,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def create_chunk_content(chunk_hash: str, text: str, milvus_id: str = "") -> dict:
+    conn = _get_conn()
+    now = datetime.now().isoformat()
+    conn.execute(
+        "INSERT OR IGNORE INTO chunk_content (chunk_hash, text, milvus_id, ref_count, active, created_at) VALUES (?, ?, ?, 0, 1, ?)",
+        (chunk_hash, text, milvus_id, now),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM chunk_content WHERE chunk_hash = ?", (chunk_hash,)).fetchone()
+    conn.close()
+    return dict(row) if row else {}
+
+
+def update_chunk_ref_count(chunk_hash: str):
+    """Recalculate ref_count from DocChunkRef."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM doc_chunk_ref WHERE chunk_hash = ? AND active = 1",
+        (chunk_hash,),
+    ).fetchone()
+    new_count = row["cnt"] if row else 0
+    conn.execute(
+        "UPDATE chunk_content SET ref_count = ? WHERE chunk_hash = ?",
+        (new_count, chunk_hash),
+    )
+    was_zero = False
+    became_zero = False
+    old = conn.execute("SELECT active, ref_count FROM chunk_content WHERE chunk_hash = ?", (chunk_hash,)).fetchone()
+    if old:
+        was_zero = old["ref_count"] == 0
+        became_zero = new_count == 0 and old["ref_count"] > 0
+    conn.commit()
+    conn.close()
+    return {"chunk_hash": chunk_hash, "ref_count": new_count, "was_zero": was_zero, "became_zero": became_zero}
+
+
+def deactivate_chunk_content(chunk_hash: str):
+    conn = _get_conn()
+    conn.execute("UPDATE chunk_content SET active = 0 WHERE chunk_hash = ?", (chunk_hash,))
+    conn.commit()
+    conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# DocChunkRef — Document ↔ Chunk reference
+# ═══════════════════════════════════════════════════════════════
+
+def create_doc_chunk_ref(doc_id: str, doc_version: int, chunk_hash: str, chunk_index: int = 0, page_no: Optional[int] = None):
+    conn = _get_conn()
+    now = datetime.now().isoformat()
+    conn.execute(
+        """INSERT OR REPLACE INTO doc_chunk_ref (doc_id, doc_version, chunk_hash, chunk_index, page_no, active, is_stale, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)""",
+        (doc_id, doc_version, chunk_hash, chunk_index, page_no, now, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def mark_doc_chunk_refs_stale(doc_id: str):
+    conn = _get_conn()
+    conn.execute("UPDATE doc_chunk_ref SET is_stale = 1 WHERE doc_id = ? AND active = 1", (doc_id,))
+    conn.commit()
+    conn.close()
+
+
+def unmark_doc_chunk_ref(doc_id: str, chunk_hash: str, chunk_index: int = 0):
+    conn = _get_conn()
+    now = datetime.now().isoformat()
+    conn.execute(
+        "UPDATE doc_chunk_ref SET is_stale = 0, chunk_index = ?, updated_at = ? WHERE doc_id = ? AND chunk_hash = ?",
+        (chunk_index, now, doc_id, chunk_hash),
+    )
+    conn.commit()
+    conn.close()
+
+
+def deactivate_stale_doc_chunk_refs(doc_id: str) -> list[str]:
+    """Deactivate stale refs, return list of affected chunk_hashes."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT chunk_hash FROM doc_chunk_ref WHERE doc_id = ? AND is_stale = 1 AND active = 1",
+        (doc_id,),
+    ).fetchall()
+    affected = [r["chunk_hash"] for r in rows]
+    if affected:
+        conn.execute(
+            "UPDATE doc_chunk_ref SET active = 0, is_stale = 0, updated_at = ? WHERE doc_id = ? AND is_stale = 1 AND active = 1",
+            (datetime.now().isoformat(), doc_id),
+        )
+    conn.commit()
+    conn.close()
+    return affected
+
+
+def get_doc_chunk_refs(doc_id: str, doc_version: Optional[int] = None) -> list[dict]:
+    conn = _get_conn()
+    if doc_version is not None:
+        rows = conn.execute(
+            "SELECT * FROM doc_chunk_ref WHERE doc_id = ? AND doc_version = ? AND active = 1 ORDER BY chunk_index",
+            (doc_id, doc_version),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM doc_chunk_ref WHERE doc_id = ? AND active = 1 ORDER BY chunk_index",
+            (doc_id,),
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ═══════════════════════════════════════════════════════════════
+# Evidence — Source of Truth
+# ═══════════════════════════════════════════════════════════════
+
+def insert_evidence_batch(items: list[dict]) -> int:
+    """Insert evidence records. Each item is an evidence dict (from Evidence.to_dict())."""
+    if not items:
+        return 0
+    conn = _get_conn()
+    now = datetime.now().isoformat()
+    for item in items:
+        item.setdefault("evidence_text", "")
+        item.setdefault("extractor_version", "")
+        item.setdefault("confidence", 0.5)
+        conn.execute(
+            """INSERT OR REPLACE INTO evidence
+               (evidence_id, chunk_hash, evidence_type, entity_key, entity_name, entity_type,
+                subject_key, subject_name, subject_type, predicate, object_key, object_name, object_type,
+                attr_owner_type, attr_key, attr_value,
+                evidence_text, confidence, extractor_version, active, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+            (
+                item["evidence_id"], item["chunk_hash"], item["evidence_type"],
+                item.get("entity_key"), item.get("entity_name"), item.get("entity_type"),
+                item.get("subject_key"), item.get("subject_name"), item.get("subject_type"),
+                item.get("predicate"), item.get("object_key"), item.get("object_name"), item.get("object_type"),
+                item.get("attr_owner_type"), item.get("attr_key"), item.get("attr_value"),
+                item.get("evidence_text", ""), item.get("confidence", 0.5),
+                item.get("extractor_version", ""), now, now,
+            ),
+        )
+    conn.commit()
+    conn.close()
+    return len(items)
+
+
+def deactivate_evidence_by_chunk(chunk_hash: str) -> list[dict]:
+    """Deactivate all evidence for a chunk. Returns affected keys for Neo4j sync."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT evidence_type, entity_key, subject_key, predicate, object_key, attr_key, attr_value FROM evidence WHERE chunk_hash = ? AND active = 1",
+        (chunk_hash,),
+    ).fetchall()
+    affected = []
+    for r in rows:
+        t = r["evidence_type"]
+        if t == "ENTITY":
+            affected.append({"affected_type": t, "affected_key": r["entity_key"]})
+        elif t == "ENTITY_ATTRIBUTE":
+            key = f"{r['entity_key']}|{r['attr_key']}|{r['attr_value']}"
+            affected.append({"affected_type": t, "affected_key": key})
+        elif t == "FACT":
+            key = f"{r['subject_key']}|{r['predicate']}|{r['object_key']}"
+            affected.append({"affected_type": t, "affected_key": key})
+        elif t == "FACT_ATTRIBUTE":
+            fact_key = f"{r['subject_key']}|{r['predicate']}|{r['object_key']}"
+            key = f"{fact_key}|{r['attr_key']}|{r['attr_value']}"
+            affected.append({"affected_type": t, "affected_key": key})
+    now = datetime.now().isoformat()
+    conn.execute(
+        "UPDATE evidence SET active = 0, updated_at = ? WHERE chunk_hash = ? AND active = 1",
+        (now, chunk_hash),
+    )
+    conn.commit()
+    conn.close()
+    return affected
+
+
+def reactivate_evidence_by_chunk(chunk_hash: str) -> list[dict]:
+    """Reactivate evidence when chunk ref_count goes 0→1. Returns affected keys for Neo4j sync."""
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE evidence SET active = 1, updated_at = ? WHERE chunk_hash = ? AND active = 0",
+        (datetime.now().isoformat(), chunk_hash),
+    )
+    rows = conn.execute(
+        "SELECT DISTINCT evidence_type, entity_key, subject_key, predicate, object_key, attr_key, attr_value FROM evidence WHERE chunk_hash = ? AND active = 1",
+        (chunk_hash,),
+    ).fetchall()
+    conn.commit()
+    conn.close()
+    affected = []
+    for r in rows:
+        t = r["evidence_type"]
+        if t == "ENTITY":
+            affected.append({"affected_type": t, "affected_key": r["entity_key"]})
+        elif t == "ENTITY_ATTRIBUTE":
+            key = f"{r['entity_key']}|{r['attr_key']}|{r['attr_value']}"
+            affected.append({"affected_type": t, "affected_key": key})
+        elif t == "FACT":
+            key = f"{r['subject_key']}|{r['predicate']}|{r['object_key']}"
+            affected.append({"affected_type": t, "affected_key": key})
+        elif t == "FACT_ATTRIBUTE":
+            fact_key = f"{r['subject_key']}|{r['predicate']}|{r['object_key']}"
+            key = f"{fact_key}|{r['attr_key']}|{r['attr_value']}"
+            affected.append({"affected_type": t, "affected_key": key})
+    return affected
+
+
+def count_active_evidence(
+    affected_type: str,
+    entity_key: Optional[str] = None,
+    subject_key: Optional[str] = None,
+    predicate: Optional[str] = None,
+    object_key: Optional[str] = None,
+    attr_key: Optional[str] = None,
+    attr_value: Optional[str] = None,
+) -> int:
+    """Recalculate support_count from active evidence."""
+    conn = _get_conn()
+    if affected_type == "ENTITY":
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM evidence WHERE active = 1 AND evidence_type = 'ENTITY' AND entity_key = ?",
+            (entity_key,),
+        ).fetchone()
+    elif affected_type == "FACT":
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM evidence WHERE active = 1 AND evidence_type = 'FACT' AND subject_key = ? AND predicate = ? AND object_key = ?",
+            (subject_key, predicate, object_key),
+        ).fetchone()
+    elif affected_type == "ENTITY_ATTRIBUTE":
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM evidence WHERE active = 1 AND evidence_type = 'ENTITY_ATTRIBUTE' AND entity_key = ? AND attr_key = ? AND attr_value = ?",
+            (entity_key, attr_key, attr_value),
+        ).fetchone()
+    elif affected_type == "FACT_ATTRIBUTE":
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM evidence WHERE active = 1 AND evidence_type = 'FACT_ATTRIBUTE' AND subject_key = ? AND predicate = ? AND object_key = ? AND attr_key = ? AND attr_value = ?",
+            (subject_key, predicate, object_key, attr_key, attr_value),
+        ).fetchone()
+    else:
+        row = None
+    conn.close()
+    return row["cnt"] if row else 0
+
+
+# ═══════════════════════════════════════════════════════════════
+# GraphSyncTask — Neo4j eventual consistency queue
+# ═══════════════════════════════════════════════════════════════
+
+def create_sync_tasks_batch(tasks: list[dict]) -> int:
+    """Batch insert sync tasks. Each task: {doc_id, doc_version, chunk_hash, affected_key, affected_type, operation}."""
+    if not tasks:
+        return 0
+    conn = _get_conn()
+    now = datetime.now().isoformat()
+    for t in tasks:
+        task_id = f"sync_{uuid.uuid4().hex[:12]}"
+        conn.execute(
+            """INSERT OR REPLACE INTO graph_sync_task
+               (task_id, doc_id, doc_version, chunk_hash, affected_key, affected_type, operation, status, retry_count, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)""",
+            (
+                task_id, t.get("doc_id"), t.get("doc_version"), t.get("chunk_hash"),
+                t["affected_key"], t["affected_type"], t.get("operation", "UPSERT"),
+                now, now,
+            ),
+        )
+    conn.commit()
+    conn.close()
+    return len(tasks)
+
+
+def get_pending_sync_tasks(limit: int = 100) -> list[dict]:
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM graph_sync_task WHERE status = 'PENDING' ORDER BY created_at LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def mark_sync_task_status(task_id: str, status: str):
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE graph_sync_task SET status = ?, updated_at = ? WHERE task_id = ?",
+        (status, datetime.now().isoformat(), task_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def mark_sync_task_retry(task_id: str):
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE graph_sync_task SET retry_count = retry_count + 1, status = 'PENDING', updated_at = ? WHERE task_id = ?",
+        (datetime.now().isoformat(), task_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def cleanup_old_sync_tasks(days: int = 7):
+    conn = _get_conn()
+    conn.execute(
+        "DELETE FROM graph_sync_task WHERE status = 'SUCCESS' AND updated_at < datetime('now', ?)",
+        (f'-{days} days',),
+    )
+    conn.commit()
+    conn.close()

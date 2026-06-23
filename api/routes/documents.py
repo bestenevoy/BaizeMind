@@ -103,6 +103,40 @@ async def delete_document(doc_id: str):
     if not doc:
         raise HTTPException(404, f"Document {doc_id} not found")
 
+    await _delete_document_evidence(doc_id, doc)
+    return {"status": "deleted", "doc_id": doc_id}
+
+
+async def _delete_document_evidence(doc_id: str, doc: dict):
+    from src.knowledge_graph.chunk_manager import (
+        build_sync_tasks, process_chunk_ref_one_to_zero,
+    )
+    from src.knowledge_graph.graph_sync_worker import process_pending_tasks
+
+    all_affected: dict[str, set[str]] = {}
+
+    refs = doc_store.get_doc_chunk_refs(doc_id)
+    for ref in refs:
+        doc_store.create_doc_chunk_ref(ref["doc_id"], ref["doc_version"],
+                                        ref["chunk_hash"], ref["chunk_index"],
+                                        ref.get("page_no"))
+    doc_store.mark_doc_chunk_refs_stale(doc_id)
+    stale_hashes = doc_store.deactivate_stale_doc_chunk_refs(doc_id)
+
+    for sh in stale_hashes:
+        affected = process_chunk_ref_one_to_zero(sh)
+        for item in affected:
+            t = item["affected_type"]
+            k = item["affected_key"]
+            if t not in all_affected:
+                all_affected[t] = set()
+            all_affected[t].add(k)
+
+    if all_affected:
+        tasks = build_sync_tasks(all_affected, doc_id=doc_id)
+        doc_store.create_sync_tasks_batch(tasks)
+        process_pending_tasks()
+
     try:
         from src.retrieval.vector_retriever import MilvusVectorRetriever
         vr = MilvusVectorRetriever()
@@ -118,15 +152,7 @@ async def delete_document(doc_id: str):
     except Exception:
         pass
 
-    try:
-        from src.knowledge_graph.neo4j_manager import Neo4jManager
-        neo4j = Neo4jManager()
-        neo4j.delete_entities_by_doc(doc_id)
-    except Exception:
-        pass
-
     doc_store.delete_document(doc_id)
-    return {"status": "deleted", "doc_id": doc_id}
 
 
 @router.put("/{doc_id}/move", response_model=DocumentInfo)
@@ -273,7 +299,12 @@ async def remove_tag(doc_id: str, tag: str):
 
 
 def _process_document(doc_id: str, file_path: str, folder: str):
+    _process_document_evidence(doc_id, file_path, folder)
+
+
+def _process_document_evidence(doc_id: str, file_path: str, folder: str):
     import time
+    import hashlib
     start = time.time()
 
     try:
@@ -282,6 +313,10 @@ def _process_document(doc_id: str, file_path: str, folder: str):
         parser = MinerUParser()
         result = parser.parse(file_path, doc_id)
         markdown = result.get("markdown", "")
+
+        doc_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()[:32]
+        doc_version = doc_store.get_document(doc_id).get("doc_version", 1)
+        doc_store.update_document(doc_id, doc_hash=doc_hash)
 
         doc_store.update_document(doc_id, processing_stage="切分文本块")
         from src.chunker.hierarchical_chunker import HierarchicalChunker
@@ -304,39 +339,87 @@ def _process_document(doc_id: str, file_path: str, folder: str):
         for chunk in chunks:
             chunk["folder"] = folder
 
+        doc_store.update_document(doc_id, processing_stage="Chunk去重与引用管理")
+        from src.knowledge_graph.chunk_manager import (
+            compute_chunk_hash, update_document_refs, build_sync_tasks,
+            process_chunk_ref_zero_to_one, process_chunk_ref_one_to_zero,
+        )
+
+        chunk_hashes = []
+        new_chunk_texts = []
+        all_affected_keys: dict[str, set[str]] = {}
+
+        for i, chunk in enumerate(chunks):
+            ch = compute_chunk_hash(chunk["text"])
+            chunk_hashes.append(ch)
+            chunk["chunk_hash"] = ch
+
+            existing = doc_store.get_chunk_content(ch)
+            if not existing:
+                new_chunk_texts.append(chunk)
+
+        ref_result = update_document_refs(doc_id, doc_version, [
+            {"text": c["text"], "chunk_index": i} for i, c in enumerate(chunks)
+        ])
+
+        for ch in ref_result["restored_hashes"]:
+            affected = process_chunk_ref_zero_to_one(ch)
+            merge_affected_keys(all_affected_keys, affected)
+
+        for ch in ref_result["zero_ref_hashes"]:
+            affected = process_chunk_ref_one_to_zero(ch)
+            merge_affected_keys(all_affected_keys, affected)
+
         doc_store.update_document(doc_id, processing_stage="向量嵌入")
         from src.embeddings.bge_m3 import BGEM3Embedding
         from src.retrieval.vector_retriever import MilvusVectorRetriever
 
-        embedding = BGEM3Embedding()
-        texts = [c["text"] for c in chunks]
-        embeddings = embedding.encode_dense_all(texts, batch_size=settings.bge_m3_batch_size, concurrency=8)
+        if new_chunk_texts:
+            embedding = BGEM3Embedding()
+            texts = [c["text"] for c in new_chunk_texts]
+            embeddings = embedding.encode_dense_all(texts, batch_size=settings.bge_m3_batch_size, concurrency=8)
 
-        doc_store.update_document(doc_id, processing_stage="写入向量库")
-        vector_retriever = MilvusVectorRetriever()
-        vector_retriever.ensure_collection()
-        vector_retriever.insert(chunks, embeddings)
+            doc_store.update_document(doc_id, processing_stage="写入向量库")
+            vector_retriever = MilvusVectorRetriever()
+            vector_retriever.ensure_collection()
+            vector_retriever.insert(new_chunk_texts, embeddings)
+
+            for nc in new_chunk_texts:
+                doc_store.create_chunk_content(nc["chunk_hash"], nc["text"],
+                                               milvus_id=nc.get("chunk_id", ""))
 
         doc_store.update_document(doc_id, processing_stage="构建BM25索引")
         from src.retrieval.bm25_retriever import BM25Retriever
         bm25 = BM25Retriever()
         bm25.load()
-        bm25.merge_chunks(chunks)
-        bm25.save()
+        if new_chunk_texts:
+            bm25.merge_chunks(new_chunk_texts)
+            bm25.save()
 
-        doc_store.update_document(doc_id, processing_stage="构建知识图谱")
+        doc_store.update_document(doc_id, processing_stage="Evidence抽取")
         from src.knowledge_graph.entity_extractor import EntityExtractor
-        from src.knowledge_graph.neo4j_manager import Neo4jManager
+        from src.knowledge_graph.evidence_writer import write_evidence
 
         extractor = EntityExtractor()
-        extracted = extractor.extract_from_chunks(chunks)
-        entities = [e for e in extracted if "type" in e and "name" in e]
-        relations = [r for r in extracted if "predicate" in r]
+        neo4j = None
 
-        neo4j = Neo4jManager()
-        neo4j.connect()
-        neo4j.init_schema()
-        neo4j.batch_import(entities, relations, doc_id=doc_id)
+        for chunk in chunks:
+            ch = chunk["chunk_hash"]
+            if ch not in [nc["chunk_hash"] for nc in new_chunk_texts]:
+                continue
+
+            evidence_items = extractor.extract_evidence(chunk["text"], chunk_hash=ch)
+            if evidence_items:
+                result = write_evidence(ch, evidence_items)
+                merge_affected_keys(all_affected_keys, result["affected_keys"])
+
+        doc_store.update_document(doc_id, processing_stage="同步知识图谱")
+        if all_affected_keys:
+            tasks = build_sync_tasks(all_affected_keys, doc_id=doc_id, doc_version=doc_version)
+            doc_store.create_sync_tasks_batch(tasks)
+
+            from src.knowledge_graph.graph_sync_worker import process_pending_tasks
+            process_pending_tasks()
 
         doc_store.update_document(doc_id, processing_stage="自动标签")
         from src.storage.auto_tagger import generate_tags
@@ -345,11 +428,23 @@ def _process_document(doc_id: str, file_path: str, folder: str):
             doc_store.update_document(doc_id, tags=tags)
 
         elapsed = (time.time() - start) * 1000
-        doc_store.update_document(doc_id, status="completed", processing_stage="完成", chunk_count=len(chunks), processing_time_ms=elapsed)
+        doc_store.update_document(doc_id, status="completed", processing_stage="完成",
+                                  chunk_count=len(chunks), processing_time_ms=elapsed,
+                                  doc_version=doc_version + 1)
 
     except Exception as e:
         elapsed = (time.time() - start) * 1000
         doc_store.update_document(doc_id, status="failed", processing_time_ms=elapsed, error=str(e))
+
+
+def merge_affected_keys(target: dict[str, set[str]], source: list[dict]):
+    """Merge deactivate/reactivate affected key results into target dict."""
+    for item in source:
+        t = item["affected_type"]
+        k = item["affected_key"]
+        if t not in target:
+            target[t] = set()
+        target[t].add(k)
 
 
 # ── Folder Management ──
@@ -380,7 +475,7 @@ async def delete_folder(folder_path: str):
     if not has_docs and count == 0:
         doc_store.delete_folder_marker(path)
 
-    # Clean up Milvus, BM25, Neo4j for deleted docs
+    # Clean up Milvus, BM25 for deleted docs
     for d in docs:
         did = d["doc_id"]
         try:
@@ -394,12 +489,6 @@ async def delete_folder(folder_path: str):
             bm25 = BM25Retriever()
             bm25.load()
             bm25.remove_by_doc_id(did)
-        except Exception:
-            pass
-        try:
-            from src.knowledge_graph.neo4j_manager import Neo4jManager
-            neo4j = Neo4jManager()
-            neo4j.delete_entities_by_doc(did)
         except Exception:
             pass
 

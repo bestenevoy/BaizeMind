@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""知识图谱构建脚本 - 对已索引文档的Chunk进行实体关系抽取并导入Neo4j"""
+"""知识图谱构建脚本 — 对已索引文档的Chunk进行实体关系抽取并以Evidence驱动的模式导入Neo4j"""
 import sys
 from pathlib import Path
 
@@ -7,11 +7,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.retrieval.bm25_retriever import BM25Retriever
 from src.knowledge_graph.entity_extractor import EntityExtractor
-from src.knowledge_graph.neo4j_manager import Neo4jManager
+from src.knowledge_graph.chunk_manager import compute_chunk_hash, create_or_reuse_chunk, build_sync_tasks
+from src.knowledge_graph.evidence_writer import write_evidence
+from src.knowledge_graph.graph_sync_worker import process_pending_tasks
+from src.storage import doc_store
 
 
 def build_graph():
-    print("Building knowledge graph...")
+    print("Building knowledge graph (evidence-driven)...")
 
     bm25 = BM25Retriever()
     bm25.load()
@@ -23,24 +26,34 @@ def build_graph():
     print(f"Processing {len(chunks)} chunks...")
 
     extractor = EntityExtractor()
-    neo4j = Neo4jManager()
-    neo4j.connect()
-    neo4j.init_schema()
+    all_affected_keys: dict[str, set[str]] = {}
+    evidence_count = 0
 
-    batch_size = 10
-    for i in range(0, len(chunks), batch_size):
-        batch = chunks[i: i + batch_size]
-        extracted = extractor.extract_from_chunks(batch)
-        entities = [e for e in extracted if "type" in e and "name" in e]
-        relations = [r for r in extracted if "predicate" in r]
-        neo4j.batch_import(entities, relations)
-        print(f"  Batch {i // batch_size + 1}/{len(chunks) // batch_size + 1}: "
-              f"{len(entities)} entities, {len(relations)} relations")
+    for i, chunk in enumerate(chunks):
+        ch = compute_chunk_hash(chunk["text"])
+        create_or_reuse_chunk(chunk["text"])
+        items = extractor.extract_evidence(chunk["text"], chunk_hash=ch)
+        if items:
+            result = write_evidence(ch, items)
+            evidence_count += result["count"]
+            for t, keys in result.get("affected_keys", {}).items():
+                if t not in all_affected_keys:
+                    all_affected_keys[t] = set()
+                all_affected_keys[t].update(keys)
 
-    stats = neo4j.get_stats()
+        if (i + 1) % 10 == 0:
+            print(f"  Progress: {i + 1}/{len(chunks)} chunks, {evidence_count} evidence records")
+
+    print(f"\n  Total evidence: {evidence_count} records")
+    print(f"  Affected keys: {sum(len(v) for v in all_affected_keys.values())}")
+
+    if all_affected_keys:
+        tasks = build_sync_tasks(all_affected_keys)
+        doc_store.create_sync_tasks_batch(tasks)
+        result = process_pending_tasks()
+        print(f"  Sync: {result['success']} success, {result['failed']} failed")
+
     print(f"\nGraph built successfully!")
-    print(f"  Entities: {stats['entity_count']}")
-    print(f"  Relations: {stats['relation_count']}")
 
 
 if __name__ == "__main__":
