@@ -1,11 +1,16 @@
 import time
 import os
+import logging
 
 from fastapi import APIRouter
 
 from api.schemas import SystemStatsResponse, ConnectivityResult, GraphOverviewResponse, GraphNode, GraphEdge, EntityDetailResponse, ChunkInfo
 from config.settings import settings
 from src.retrieval.vector_retriever import MilvusVectorRetriever
+from src.retrieval.bm25_retriever import BM25Retriever
+from src.retrieval.hybrid_retriever import HybridRetriever
+from src.retrieval.reranker import Reranker
+from src.embeddings.bge_m3 import BGEM3Embedding
 from src.knowledge_graph.neo4j_manager import Neo4jManager
 from src.storage import doc_store, config_overrides
 from pydantic import BaseModel
@@ -436,6 +441,137 @@ async def get_graph_entity_detail(entity_name: str):
         documents=documents,
         related_chunks=chunks,
     )
+
+
+# ── Search Debug ──
+
+logger = logging.getLogger(__name__)
+
+
+class SearchDebugRequest(BaseModel):
+    query: str
+    folder: str | None = None
+    tags: list[str] | None = None
+    top_k: int = 20
+
+
+@router.post("/search")
+async def search_debug(body: SearchDebugRequest):
+    query = body.query
+    current_threshold = settings.retrieval_similarity_threshold
+
+    doc_filter = None
+    if body.folder or body.tags:
+        ids = doc_store.get_doc_ids_by_filter(folder=body.folder or None, tags=body.tags or None)
+        if not ids:
+            return {"query": query, "threshold": current_threshold, "stages": {}, "filtered_count": 0, "message": "No documents match the folder/tag filter"}
+        id_list = " ".join(f'"{d}"' for d in ids)
+        doc_filter = f"doc_id in [{id_list}]"
+
+    embedding = BGEM3Embedding()
+    vector_retriever = MilvusVectorRetriever()
+    bm25_retriever = BM25Retriever()
+    reranker = Reranker()
+
+    k = settings.hybrid_rrf_k
+    dense_weight = settings.hybrid_dense_weight
+    bm25_weight = settings.hybrid_bm25_weight
+
+    # Stage 1: Dense search
+    query_vec = embedding.encode_query_dense(query)
+    expr = f'doc_id == "{doc_filter}"' if doc_filter else None
+    dense_results = vector_retriever.search(query_vec, top_k=body.top_k, expr=expr)
+
+    # Stage 2: BM25 search
+    bm25_results = bm25_retriever.search(query, top_k=body.top_k)
+
+    # Stage 3: RRF fusion (before threshold)
+    scores_raw: dict[str, tuple[dict, float]] = {}
+    scores_dense: dict[str, float] = {}
+    scores_bm25: dict[str, float] = {}
+    for rank, doc in enumerate(dense_results):
+        cid = doc.get("chunk_id", "")
+        scores_raw[cid] = (doc, scores_raw.get(cid, (doc, 0.0))[1] + dense_weight / (k + rank + 1))
+        scores_dense[cid] = doc.get("score", 0)
+    for rank, doc in enumerate(bm25_results):
+        cid = doc.get("chunk_id", "")
+        scores_raw[cid] = (doc, scores_raw.get(cid, (doc, 0.0))[1] + bm25_weight / (k + rank + 1))
+        scores_bm25[cid] = doc.get("score", 0)
+
+    ranked_rrf = sorted(scores_raw.items(), key=lambda x: x[1][1], reverse=True)
+    max_rrf = ranked_rrf[0][1][1] if ranked_rrf else 1.0
+
+    # RRF results with pass/fail for threshold
+    rrf_debug = []
+    for cid, (doc, raw_score) in ranked_rrf:
+        normalized = raw_score / max_rrf if max_rrf > 0 else 0
+        rrf_debug.append({
+            "chunk_id": cid,
+            "doc_id": doc.get("doc_id", ""),
+            "text_preview": doc.get("text", "")[:200],
+            "rrf_raw": round(raw_score, 8),
+            "rrf_normalized": round(normalized, 4),
+            "rrf_pass_threshold": current_threshold == 0 or normalized >= current_threshold,
+            "dense_score": round(scores_dense.get(cid, 0), 6),
+            "bm25_score": round(scores_bm25.get(cid, 0), 6),
+        })
+
+    # Stage 4: Reranker
+    rrf_passed = [doc for cid, (doc, _) in ranked_rrf
+                  if current_threshold == 0 or (max_rrf > 0 and (_ / max_rrf) >= current_threshold)]
+    all_for_rerank = rrf_passed[:body.top_k] if rrf_passed else [doc for _, (doc, _) in ranked_rrf[:body.top_k]]
+    reranked = reranker.rerank(query, all_for_rerank, top_k=min(10, len(all_for_rerank)))
+
+    rerank_debug = []
+    for r in reranked:
+        rs = r.get("rerank_score", r.get("score", 0))
+        rerank_debug.append({
+            "chunk_id": r.get("chunk_id", ""),
+            "doc_id": r.get("doc_id", ""),
+            "text_preview": r.get("text", "")[:200],
+            "rerank_score": round(rs, 4) if isinstance(rs, (int, float)) else 0,
+            "rerank_pass_threshold": current_threshold == 0 or (isinstance(rs, (int, float)) and rs >= current_threshold),
+        })
+
+    # Build filename cache
+    doc_name_cache: dict[str, str] = {}
+    for item in rrf_debug + rerank_debug:
+        did = item.get("doc_id", "")
+        if did and did not in doc_name_cache:
+            d = doc_store.get_document(did)
+            doc_name_cache[did] = d["filename"] if d else did
+
+    for item in rrf_debug + rerank_debug:
+        item["filename"] = doc_name_cache.get(item.get("doc_id", ""), "")
+
+    # Final filtered view
+    final = [r for r in rerank_debug if r["rerank_pass_threshold"]]
+    filter_drop = len(rerank_debug) - len(final)
+
+    return {
+        "query": query,
+        "threshold": current_threshold,
+        "stages": {
+            "dense_top5": [{
+                "chunk_id": d.get("chunk_id", ""),
+                "doc_id": d.get("doc_id", ""),
+                "filename": doc_name_cache.get(d.get("doc_id", ""), ""),
+                "text_preview": d.get("text", "")[:150],
+                "score": round(d.get("score", 0), 4),
+            } for d in dense_results[:5]],
+            "bm25_top5": [{
+                "chunk_id": d.get("chunk_id", ""),
+                "doc_id": d.get("doc_id", ""),
+                "filename": doc_name_cache.get(d.get("doc_id", ""), ""),
+                "text_preview": d.get("text", "")[:150],
+                "score": round(d.get("score", 0), 4),
+            } for d in bm25_results[:5]],
+            "rrf": rrf_debug[:20],
+            "rerank": rerank_debug,
+        },
+        "final_count": len(final),
+        "filtered_out_by_rerank_threshold": filter_drop,
+    }
 
 
 # ── Runtime Config Overrides ──

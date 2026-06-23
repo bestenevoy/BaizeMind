@@ -445,8 +445,8 @@ class AgenticRAGWorkflow:
                 doc_context = self.retrieval_agent.extract_context(state["documents"])
                 context = f"{context}\n\n[Retrieved Documents]\n{doc_context}" if context else doc_context
                 citations = [
-                    f"{d.get('doc_id', '?')}_{d.get('chunk_id', '?')}"
-                    for d in state["documents"][:10]
+                    f"[{i + 1}] {d.get('doc_id', '?')}/{d.get('chunk_id', '?')}"
+                    for i, d in enumerate(state["documents"][:10])
                 ]
 
             if state.get("graph_context"):
@@ -503,7 +503,7 @@ class AgenticRAGWorkflow:
             issues = validation.get("issues", [])
             feedback_parts = []
             reason_map = {
-                "missing_citation": "Answer lacks source citations for factual claims. Cite every claim with [Source: doc_id, chunk_id].",
+                "missing_citation": "Answer lacks source citations for factual claims. Cite every claim with [N], where N is the context chunk number (e.g. [1], [2]).",
                 "unsupported_claim": "Answer contains claims not supported by context. Remove or limit to evidence in context only.",
                 "context_insufficient": "Context lacks information to answer. State 'insufficient information' rather than guessing.",
                 "conflict_detected": "Context has conflicting information. Acknowledge the conflict explicitly.",

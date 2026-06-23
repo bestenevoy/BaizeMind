@@ -89,6 +89,7 @@ export function ChatPanel({ folder, tags }: ChatPanelProps) {
               chunk_id: d.chunk_id as string,
               text: d.text as string,
               score: d.score as number,
+              filename: d.filename as string | undefined,
             }))
           }
 

@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from api.schemas import QARequest, QAResponse
 from src.agents.workflow import get_workflow
+from src.storage.doc_store import get_document
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +31,20 @@ async def ask(request: QARequest):
         elapsed = (time.time() - start) * 1000
 
         docs = result.get("documents", [])
-        retrieved_docs = [
-            {
-                "doc_id": d.get("doc_id", "?"),
+        doc_name_cache: dict[str, str] = {}
+        retrieved_docs = []
+        for d in docs[:10]:
+            did = d.get("doc_id", "?")
+            if did not in doc_name_cache:
+                doc = get_document(did)
+                doc_name_cache[did] = doc["filename"] if doc else did
+            retrieved_docs.append({
+                "doc_id": did,
                 "chunk_id": d.get("chunk_id", "?"),
                 "text": d.get("text", "")[:500],
                 "score": d.get("score", 0.0) if isinstance(d.get("score"), (int, float)) else 0.0,
-            }
-            for d in docs[:10]
-        ]
+                "filename": doc_name_cache[did],
+            })
 
         return QAResponse(
             query=request.query,
@@ -100,17 +106,23 @@ async def ask_stream(request: QARequest):
                     }
                 elif node_name == "retrieval_agent":
                     docs = node_output.get("documents", [])
+                    doc_name_cache: dict[str, str] = {}
+                    doc_items = []
+                    for d in docs[:5]:
+                        did = d.get("doc_id", "?")
+                        if did not in doc_name_cache:
+                            doc = get_document(did)
+                            doc_name_cache[did] = doc["filename"] if doc else did
+                        doc_items.append({
+                            "doc_id": did,
+                            "chunk_id": d.get("chunk_id", "?"),
+                            "text": d.get("text", "")[:300],
+                            "score": d.get("score", 0.0) if isinstance(d.get("score"), (int, float)) else 0.0,
+                            "filename": doc_name_cache[did],
+                        })
                     payload["result"] = {
                         "count": len(docs),
-                        "documents": [
-                            {
-                                "doc_id": d.get("doc_id", "?"),
-                                "chunk_id": d.get("chunk_id", "?"),
-                                "text": d.get("text", "")[:300],
-                                "score": d.get("score", 0.0) if isinstance(d.get("score"), (int, float)) else 0.0,
-                            }
-                            for d in docs[:5]
-                        ],
+                        "documents": doc_items,
                     }
                 elif node_name == "graph_agent":
                     graph_context = node_output.get("graph_context", "")

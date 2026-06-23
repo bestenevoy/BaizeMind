@@ -6,7 +6,7 @@ import remarkMath from 'remark-math'
 import { User, Bot, Copy, Check, ChevronDown, ChevronRight, FileText, Search, Brain, GitGraph, MessageSquare, ShieldCheck, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { useState } from 'react'
+import { useState, useRef, useMemo, useCallback } from 'react'
 import type { RetreivedDoc, StreamStep } from '@/lib/api'
 
 export interface Message {
@@ -59,7 +59,7 @@ function StepResult({ step }: { step: StreamStep }) {
           <div className="mt-1 space-y-1">
             {(result.documents as Array<Record<string, unknown>>)?.map((doc, i) => (
               <div key={i} className="bg-muted/30 rounded p-1.5 text-xs">
-                <div className="text-muted-foreground">{String(doc.doc_id)}/{String(doc.chunk_id)} ({(Number(doc.score)).toFixed(3)})</div>
+                <div className="text-muted-foreground">[{i + 1}] {String(doc.doc_id)}/{String(doc.chunk_id)} ({(Number(doc.score)).toFixed(3)})</div>
                 <p className="whitespace-pre-wrap break-all">{doc.text as string}</p>
               </div>
             ))}
@@ -82,6 +82,8 @@ export function ChatMessage({ message }: { message: Message }) {
   const [copied, setCopied] = useState(false)
   const [showContext, setShowContext] = useState(false)
   const [showSteps, setShowSteps] = useState(false)
+  const [activeCitation, setActiveCitation] = useState<number | null>(null)
+  const chunkRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const isUser = message.role === 'user'
 
   const handleCopy = async () => {
@@ -90,7 +92,82 @@ export function ChatMessage({ message }: { message: Message }) {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const handleCitationClick = useCallback((seq: number) => {
+    if (!message.retrieved_docs || seq > message.retrieved_docs.length) return
+    setActiveCitation(seq)
+    setShowContext(true)
+    setTimeout(() => {
+      const el = chunkRefs.current.get(seq)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }, 120)
+  }, [message.retrieved_docs])
+
+  const scrollToChunk = useCallback((seq: number) => {
+    handleCitationClick(seq)
+  }, [handleCitationClick])
+
   const hasContent = message.content?.length > 0
+
+  const processedContent = useMemo(() => {
+    if (isUser || !hasContent) return message.content
+    return message.content.replace(
+      /\[(\d+)\]/g,
+      (_: string, n: string) => `<a class="citation-ref" href="#chunk-${n}" data-seq="${n}">[${n}]</a>`
+    )
+  }, [message.content, isUser, hasContent])
+
+  const markdownComponents = useMemo(() => ({
+    p: ({ children, ...props }: React.HTMLProps<HTMLParagraphElement>) => <p className="mb-2 last:mb-0" {...props}>{children}</p>,
+    a: ({ href, className, children, ...props }: React.HTMLProps<HTMLAnchorElement> & { 'data-seq'?: string }) => {
+      if (className === 'citation-ref') {
+        const seq = parseInt(props['data-seq'] || '0', 10)
+        if (!seq || !message.retrieved_docs || seq > message.retrieved_docs.length) {
+          return <span className="font-semibold text-primary/70">[{seq}]</span>
+        }
+        return (
+          <a
+            className="citation-ref inline-flex items-center"
+            href={`#chunk-${seq}`}
+            onClick={(e) => { e.preventDefault(); handleCitationClick(seq) }}
+            title={`查看来源 #${seq}`}
+            style={{
+              cursor: 'pointer',
+              fontWeight: 600,
+              color: 'hsl(var(--primary))',
+              textDecoration: 'underline',
+              textUnderlineOffset: '2px'
+            }}
+          >
+            {children}
+          </a>
+        )
+      }
+      return <a href={href} className="underline" target="_blank" rel="noopener noreferrer">{children}</a>
+    },
+    code: ({ className, children, ...props }: React.HTMLProps<HTMLElement>) => {
+      const isInline = !className
+      return isInline ? (
+        <code className="bg-muted-foreground/10 px-1 py-0.5 rounded text-xs" {...props}>
+          {children}
+        </code>
+      ) : (
+        <pre className="bg-muted-foreground/10 p-2 rounded-md overflow-x-auto">
+          <code className={className} {...props}>
+            {children}
+          </code>
+        </pre>
+      )
+    },
+    table: ({ children, ...props }: React.HTMLProps<HTMLTableElement>) => (
+      <div className="overflow-x-auto my-2">
+        <table className="min-w-full text-xs border-collapse" {...props}>{children}</table>
+      </div>
+    ),
+    th: ({ children, ...props }: React.HTMLProps<HTMLTableHeaderCellElement>) => <th className="border border-border px-2 py-1 bg-muted font-semibold" {...props}>{children}</th>,
+    td: ({ children, ...props }: React.HTMLProps<HTMLTableDataCellElement>) => <td className="border border-border px-2 py-1" {...props}>{children}</td>,
+  }), [message.retrieved_docs, handleCitationClick])
 
   return (
     <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
@@ -136,32 +213,9 @@ export function ChatMessage({ message }: { message: Message }) {
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm, remarkMath]}
                   rehypePlugins={[rehypeRaw, rehypeKatex]}
-                  components={{
-                    p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                    code: ({ className, children, ...props }) => {
-                      const isInline = !className
-                      return isInline ? (
-                        <code className="bg-muted-foreground/10 px-1 py-0.5 rounded text-xs" {...props}>
-                          {children}
-                        </code>
-                      ) : (
-                        <pre className="bg-muted-foreground/10 p-2 rounded-md overflow-x-auto">
-                          <code className={className} {...props}>
-                            {children}
-                          </code>
-                        </pre>
-                      )
-                    },
-                    table: ({ children }) => (
-                      <div className="overflow-x-auto my-2">
-                        <table className="min-w-full text-xs border-collapse">{children}</table>
-                      </div>
-                    ),
-                    th: ({ children }) => <th className="border border-border px-2 py-1 bg-muted font-semibold">{children}</th>,
-                    td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
-                  }}
+                  components={markdownComponents}
                 >
-                  {message.content}
+                  {processedContent}
                 </ReactMarkdown>
               </div>
             )}
@@ -187,8 +241,14 @@ export function ChatMessage({ message }: { message: Message }) {
         {!isUser && message.citations && message.citations.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1">
             {message.citations.slice(0, 5).map((cit, i) => (
-              <Badge key={i} variant="outline" className="text-xs">
-                [{i + 1}] {cit}
+              <Badge
+                key={i}
+                variant="outline"
+                className="text-xs cursor-pointer hover:bg-muted transition-colors"
+                onClick={() => scrollToChunk(i + 1)}
+                title="点击查看来源"
+              >
+                {cit}
               </Badge>
             ))}
           </div>
@@ -205,10 +265,17 @@ export function ChatMessage({ message }: { message: Message }) {
             {showContext && (
               <div className="mt-2 space-y-2">
                 {message.retrieved_docs.map((doc, i) => (
-                  <div key={i} className="bg-muted/50 rounded p-2 text-xs">
+                  <div
+                    key={i}
+                    id={`chunk-${i + 1}`}
+                    ref={(el) => { if (el) chunkRefs.current.set(i + 1, el) }}
+                    className={`bg-muted/50 rounded p-2 text-xs transition-all duration-300 ${
+                      activeCitation === i + 1 ? 'ring-2 ring-primary bg-muted/70' : ''
+                    }`}
+                  >
                     <div className="flex items-center gap-1 text-muted-foreground mb-1">
                       <FileText className="h-3 w-3" />
-                      {doc.doc_id}/{doc.chunk_id}
+                      {doc.filename || doc.doc_id}
                       <span className="ml-auto">score: {doc.score.toFixed(3)}</span>
                     </div>
                     <p className="whitespace-pre-wrap break-all leading-relaxed">{doc.text}</p>

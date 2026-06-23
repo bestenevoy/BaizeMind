@@ -49,7 +49,7 @@ Answer the question STRICTLY using only the provided context below.
 CRITICAL RULES:
 1. ONLY use information explicitly stated in the provided context. Do NOT use your own knowledge.
 2. If the context does NOT contain the information needed to answer, say: "提供的文档中没有足够的信息来回答这个问题。"
-3. ALWAYS cite the source for every factual claim using [Source: doc_id, chunk_id]
+3. ALWAYS cite the source for every factual claim by appending [N] directly at the end of the relevant sentence (e.g. "营收为100亿 [1]."). Do NOT write verbose phrases like "根据上下文[1]", "据[1]显示" — just place [N] after the claim.
 4. NEVER fabricate or guess information not present in the context
 5. For multi-hop questions, show reasoning step by step, citing each step's source
 6. Keep answers concise and factual

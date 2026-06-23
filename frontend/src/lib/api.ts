@@ -5,6 +5,7 @@ export interface RetreivedDoc {
   chunk_id: string
   text: string
   score: number
+  filename?: string
 }
 
 export interface QAResponse {
@@ -374,6 +375,47 @@ export async function healthCheck(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+// ── Search Debug ──
+
+export interface SearchDebugChunk {
+  chunk_id: string
+  doc_id: string
+  filename: string
+  text_preview: string
+  score?: number
+  rrf_raw?: number
+  rrf_normalized?: number
+  rrf_pass_threshold?: boolean
+  dense_score?: number
+  bm25_score?: number
+  rerank_score?: number
+  rerank_pass_threshold?: boolean
+}
+
+export interface SearchDebugResponse {
+  query: string
+  threshold: number
+  stages: {
+    dense_top5: SearchDebugChunk[]
+    bm25_top5: SearchDebugChunk[]
+    rrf: SearchDebugChunk[]
+    rerank: SearchDebugChunk[]
+  }
+  final_count: number
+  filtered_out_by_rerank_threshold: number
+  message?: string
+}
+
+export async function searchDebug(query: string, folder?: string | null, tags?: string[], topK?: number): Promise<SearchDebugResponse> {
+  const res = await fetch(`${API_BASE}/system/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, folder: folder || undefined, tags: tags?.length ? tags : undefined, top_k: topK || 20 }),
+  })
+  if (!res.ok) throw new Error(`Search debug failed: ${res.statusText}`)
+  return res.json()
 }
 
 // ── Config Overrides ──

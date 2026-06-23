@@ -78,7 +78,7 @@ class RetrievalAgent:
     def extract_context(self, results: list[dict]) -> str:
         deduped = self._dedup_by_text(self._dedup_by_chunk_id(results))
         parts = []
-        for r in deduped:
-            source = f"[Source: {r.get('doc_id', '?')}_{r.get('chunk_id', '?')}]"
+        for i, r in enumerate(deduped):
+            source = f"[{i + 1}]"
             parts.append(f"{source}\n{r.get('text', '')}")
         return "\n\n---\n\n".join(parts)

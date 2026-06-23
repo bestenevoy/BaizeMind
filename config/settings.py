@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     hybrid_sparse_weight: float = 0.3
     hybrid_bm25_weight: float = 0.4
     hybrid_rrf_k: int = 60
-    retrieval_similarity_threshold: float = 0.0  # 0 = disabled; set e.g. 0.3 to filter low-relevance chunks
+    retrieval_similarity_threshold: float = 0.6
     reranker_method: str = "embedding"  # "embedding" | "llm" | "hybrid"
 
     # Graph relation type filtering: high-relevance types for multi-hop/entity enrichment
