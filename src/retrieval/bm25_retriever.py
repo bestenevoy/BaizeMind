@@ -82,13 +82,27 @@ class BM25Retriever:
         model_file = self.index_path / "bm25_model.pkl"
         data_file = self.index_path / "bm25_data.json"
         if model_file.exists() and data_file.exists():
-            with open(model_file, "rb") as f:
-                self._model = pickle.load(f)
-            with open(data_file) as f:
-                data = json.load(f)
-            self._chunks = data["chunks"]
-            self._corpus = data["corpus"]
-            self._chunk_ids = set(data.get("chunk_ids", []) or [])
+            try:
+                with open(model_file, "rb") as f:
+                    self._model = pickle.load(f)
+                with open(data_file) as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._chunks = data.get("chunks", [])
+                    self._corpus = data.get("corpus", [])
+                    self._chunk_ids = set(data.get("chunk_ids", []) or [])
+                else:
+                    logger.warning("BM25 data file has unexpected format, treating as empty")
+                    self._model = None
+                    self._chunks = []
+                    self._corpus = []
+                    self._chunk_ids = set()
+            except Exception as e:
+                logger.warning(f"Failed to load BM25 index: {e}, treating as empty")
+                self._model = None
+                self._chunks = []
+                self._corpus = []
+                self._chunk_ids = set()
 
     def remove_by_doc_id(self, doc_id: str):
         if not self._model:
