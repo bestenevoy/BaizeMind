@@ -407,10 +407,12 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str):
 
         extractor = EntityExtractor()
 
-        for chunk in chunks:
+        evidence_chunks = [c for c in chunks if c["chunk_hash"] in {nc["chunk_hash"] for nc in new_chunk_texts}]
+        total_evidence = len(evidence_chunks)
+
+        for i, chunk in enumerate(evidence_chunks):
             ch = chunk["chunk_hash"]
-            if ch not in [nc["chunk_hash"] for nc in new_chunk_texts]:
-                continue
+            doc_store.update_document(doc_id, processing_stage=f"Evidence抽取 {i + 1}/{total_evidence}")
 
             try:
                 evidence_items = extractor.extract_evidence(chunk["text"], chunk_hash=ch)
@@ -456,14 +458,19 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str):
         doc_store.update_document(doc_id, status="failed", processing_time_ms=elapsed, error=full_error[:2000])
 
 
-def merge_affected_keys(target: dict[str, set[str]], source: list[dict]):
-    """Merge deactivate/reactivate affected key results into target dict."""
-    for item in source:
-        t = item["affected_type"]
-        k = item["affected_key"]
-        if t not in target:
-            target[t] = set()
-        target[t].add(k)
+def merge_affected_keys(target: dict[str, set[str]], source: list[dict] | dict[str, set[str]]):
+    if isinstance(source, dict):
+        for t, keys in source.items():
+            if t not in target:
+                target[t] = set()
+            target[t].update(keys)
+    else:
+        for item in source:
+            t = item["affected_type"]
+            k = item["affected_key"]
+            if t not in target:
+                target[t] = set()
+            target[t].add(k)
 
 
 # ── Folder Management ──
