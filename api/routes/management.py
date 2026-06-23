@@ -614,12 +614,12 @@ def _run_build_graph():
         bm25 = BM25Retriever()
         bm25.load()
         if bm25._model is None:
-            _finish_build({"success": False, "message": "BM25 index not found. Please ingest documents first, then try again."})
+            _finish_build({"success": False, "message": "BM25 index not found. Re-upload documents first (BM25 is populated during ingestion)."})
             return
 
         chunks = bm25._chunks
         if not chunks:
-            _finish_build({"success": False, "message": "No chunks found. Please ingest documents first."})
+            _finish_build({"success": False, "message": "No chunks found. Re-upload documents first."})
             return
             return
 
