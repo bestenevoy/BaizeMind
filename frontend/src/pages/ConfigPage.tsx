@@ -198,6 +198,7 @@ export function ConfigPage() {
                       setRebuilding(false)
                       return
                     }
+                    const startTime = Date.now()
                     const poll = setInterval(async () => {
                       try {
                         const s = await buildGraphStatus()
@@ -214,6 +215,12 @@ export function ConfigPage() {
                         } else if (s.running) {
                           const pct = s.total > 0 ? Math.round(s.progress / s.total * 100) : 0
                           document.title = `[${pct}%] 重建图谱...`
+                        }
+                        if (Date.now() - startTime > 300000) {
+                          clearInterval(poll)
+                          setRebuilding(false)
+                          alert('重建图谱超时（5分钟），请检查服务状态后重试')
+                          loadConfig()
                         }
                       } catch {}
                     }, 2000)

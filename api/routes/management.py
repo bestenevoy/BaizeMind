@@ -589,6 +589,11 @@ async def build_graph_status():
     return _build_status
 
 
+def _finish_build(result: dict):
+    global _build_status
+    _build_status = {"running": False, "progress": _build_status.get("total", 0), "total": _build_status.get("total", 0), "done": True, "result": result}
+
+
 def _run_build_graph():
     global _build_status
     try:
@@ -597,16 +602,19 @@ def _run_build_graph():
         from src.knowledge_graph.chunk_manager import compute_chunk_hash, create_or_reuse_chunk, build_sync_tasks
         from src.knowledge_graph.evidence_writer import write_evidence
         from src.knowledge_graph.graph_sync_worker import process_pending_tasks
-        from config.settings import settings
         from src.storage import doc_store
+
+        _build_status = {"running": True, "progress": 0, "total": 0, "done": False, "result": None}
 
         bm25 = BM25Retriever()
         bm25.load()
         if bm25._model is None:
-            bm25.rebuild_from_milvus()
+            _finish_build({"success": False, "message": "BM25 index not found. Please ingest documents first, then try again."})
+            return
+
         chunks = bm25._chunks
         if not chunks:
-            _build_status = {"running": False, "progress": 0, "total": 0, "done": True, "result": {"success": False, "message": "No chunks found"}}
+            _finish_build({"success": False, "message": "No chunks found. Please ingest documents first."})
             return
 
         logger.info(f"Building knowledge graph for {len(chunks)} chunks...")
@@ -646,8 +654,7 @@ def _run_build_graph():
                 if r["success"] + r["failed"] == 0:
                     break
 
-        _build_status = {
-            "running": False, "progress": len(chunks), "total": len(chunks), "done": True,
+        _build_status = {"running": False, "done": True, "progress": len(chunks), "total": len(chunks),
             "result": {
                 "success": True,
                 "chunks_processed": len(chunks),
@@ -660,7 +667,7 @@ def _run_build_graph():
         }
     except Exception as e:
         logger.error(f"Build graph failed: {e}", exc_info=True)
-        _build_status = {"running": False, "progress": 0, "total": 0, "done": True, "result": {"success": False, "message": str(e)}}
+        _finish_build({"success": False, "message": str(e)})
 
 
 @router.post("/build-graph")
