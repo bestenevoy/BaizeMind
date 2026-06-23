@@ -713,14 +713,31 @@ async def delete_inactive_graph():
         nm = Neo4jManager()
         nm.connect()
         with nm._driver.session() as session:
-            entities = session.run("MATCH (e:Entity) WHERE e.active = false DETACH DELETE e").consume()
-            facts = session.run("MATCH (f:Fact) WHERE f.active = false DETACH DELETE f").consume()
-            attrs = session.run("MATCH (a:Attribute) WHERE a.active = false DETACH DELETE a").consume()
+            # 包括 active=false 以及没有 active 属性的旧节点
+            entities = session.run(
+                "MATCH (e:Entity) WHERE e.active = false OR e.active IS NULL DETACH DELETE e"
+            ).consume()
+            facts = session.run(
+                "MATCH (f:Fact) WHERE f.active = false OR f.active IS NULL DETACH DELETE f"
+            ).consume()
+            attrs = session.run(
+                "MATCH (a:Attribute) WHERE a.active = false OR a.active IS NULL DETACH DELETE a"
+            ).consume()
+            # 也清理没有 support_count 或 support_count=0 的旧节点
+            entities2 = session.run(
+                "MATCH (e:Entity) WHERE e.support_count = 0 OR e.support_count IS NULL DETACH DELETE e"
+            ).consume()
+            facts2 = session.run(
+                "MATCH (f:Fact) WHERE f.support_count = 0 OR f.support_count IS NULL DETACH DELETE f"
+            ).consume()
+            attrs2 = session.run(
+                "MATCH (a:Attribute) WHERE a.support_count = 0 OR a.support_count IS NULL DETACH DELETE a"
+            ).consume()
         return {
             "success": True,
-            "entities_deleted": entities.counters.nodes_deleted,
-            "facts_deleted": facts.counters.nodes_deleted,
-            "attrs_deleted": attrs.counters.nodes_deleted,
+            "entities_deleted": entities.counters.nodes_deleted + entities2.counters.nodes_deleted,
+            "facts_deleted": facts.counters.nodes_deleted + facts2.counters.nodes_deleted,
+            "attrs_deleted": attrs.counters.nodes_deleted + attrs2.counters.nodes_deleted,
         }
     except Exception as e:
         return {"success": False, "message": str(e)}
