@@ -219,6 +219,10 @@ class TestProcessRefCountChanges:
         deactivate_chunk_evidence(chunk_hash)
         assert get_support_count("ENTITY", entity_key="organization:阿里巴巴") == 0
 
+        # Create a DocChunkRef to simulate chunk being referenced (ref_count > 0)
+        doc_store.create_doc_chunk_ref("test_doc_react", 1, chunk_hash, 0)
+        doc_store.update_chunk_ref_count(chunk_hash)
+
         affected = process_chunk_ref_zero_to_one(chunk_hash)
         assert len(affected) >= 1
         assert get_support_count("ENTITY", entity_key="organization:阿里巴巴") == 1

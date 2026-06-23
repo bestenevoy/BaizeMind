@@ -54,7 +54,6 @@ def update_document_refs(
         if already_refd:
             doc_store.unmark_doc_chunk_ref(doc_id, chunk_hash, chunk_index)
         else:
-            # Check if ChunkContent exists (Case 2: reuse)
             content = doc_store.get_chunk_content(chunk_hash)
             if content:
                 ref_info = doc_store.update_chunk_ref_count(chunk_hash)
@@ -62,20 +61,24 @@ def update_document_refs(
                     restored_hashes.append(chunk_hash)
                 doc_store.create_doc_chunk_ref(doc_id, doc_version, chunk_hash, chunk_index)
             else:
-                # Case 3: entirely new chunk — caller creates ChunkContent with milvus_id
                 doc_store.create_doc_chunk_ref(doc_id, doc_version, chunk_hash, chunk_index)
                 new_chunk_hashes.append(chunk_hash)
-
-            doc_store.update_chunk_ref_count(chunk_hash)
 
     # Step 3: Deactivate stale refs
     stale_hashes = doc_store.deactivate_stale_doc_chunk_refs(doc_id)
 
-    # Step 4: Process ref_count changes for stale chunks
+    # Step 4: Sync ref_count for all affected chunks
+    for sh in stale_hashes:
+        doc_store.update_chunk_ref_count(sh)
+    for ch in chunks:
+        chunk_hash = compute_chunk_hash(ch["text"])
+        doc_store.update_chunk_ref_count(chunk_hash)
+
+    # Step 5: Detect zero-ref chunks among stale hashes
     zero_ref_hashes = []
     for sh in stale_hashes:
-        ref_info = doc_store.update_chunk_ref_count(sh)
-        if ref_info.get("became_zero"):
+        content = doc_store.get_chunk_content(sh)
+        if content and content.get("ref_count", 0) == 0:
             zero_ref_hashes.append(sh)
 
     return {
@@ -87,20 +90,23 @@ def update_document_refs(
 
 
 def process_chunk_ref_zero_to_one(chunk_hash: str) -> list[dict]:
-    """Handle a chunk whose ref_count went from 0 to 1.
-    Reactivates evidence and returns affected keys.
+    """Handle a chunk whose ref_count is >= 1. Reactivates evidence if ref_count > 0.
+    Safe to call even if already > 0 (idempotent).
     """
-    doc_store.update_chunk_ref_count(chunk_hash)
+    ref_info = doc_store.update_chunk_ref_count(chunk_hash)
+    if ref_info.get("ref_count", 0) <= 0:
+        return []
     return doc_store.reactivate_evidence_by_chunk(chunk_hash)
 
 
 def process_chunk_ref_one_to_zero(chunk_hash: str) -> list[dict]:
-    """Handle a chunk whose ref_count went from 1 to 0.
-    Only deactivates evidence and ChunkContent if ref_count actually reached 0.
+    """Handle a chunk whose ref_count is 0. Deactivates evidence and ChunkContent.
+    Safe to call even if already zero (idempotent on evidence deactivation).
     Returns affected keys for Neo4j sync.
     """
     ref_info = doc_store.update_chunk_ref_count(chunk_hash)
-    if not ref_info.get("became_zero"):
+    # Only deactivate if ref_count is actually 0 (not just "became zero" — handles double-call)
+    if ref_info.get("ref_count", 1) > 0:
         return []
     affected = doc_store.deactivate_evidence_by_chunk(chunk_hash)
     doc_store.deactivate_chunk_content(chunk_hash)
