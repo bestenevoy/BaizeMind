@@ -323,14 +323,20 @@ async def get_graph_overview(doc_id: str = ""):
     if doc_id:
         result = neo4j.query(
             """
-            MATCH (n:Entity {doc_id: $doc_id})-[r:RELATES_TO]-(m:Entity {doc_id: $doc_id})
-            RETURN n, r, m
+            MATCH (s:Entity)-[:SUBJECT_OF]->(f:Fact)-[:OBJECT_OF]->(o:Entity)
+            WHERE (s)-[:SUBJECT_OF]->(f) AND (f)-[:OBJECT_OF]->(o)
+            RETURN s, f, o
+            LIMIT 500
             """,
-            {"doc_id": doc_id},
         )
     else:
         result = neo4j.query(
-            "MATCH (n:Entity)-[r:RELATES_TO]->(m:Entity) RETURN n, r, m LIMIT 500"
+            """
+            MATCH (s:Entity)-[:SUBJECT_OF]->(f:Fact)-[:OBJECT_OF]->(o:Entity)
+            WHERE s.active = true AND f.active = true AND o.active = true
+            RETURN s, f, o
+            LIMIT 500
+            """
         )
 
     nodes_map: dict[str, GraphNode] = {}
@@ -338,28 +344,28 @@ async def get_graph_overview(doc_id: str = ""):
     edges: list[GraphEdge] = []
 
     for row in result:
-        n = row["n"]
-        m = row["m"]
-        r = row["r"]
+        s = row["s"]
+        o = row["o"]
+        f = row["f"]
 
-        for entity in (n, m):
-            node_id = entity.get("name", "")
+        for entity in (s, o):
+            node_id = entity.get("name", "") or entity.get("entity_key", "")
             if node_id and node_id not in nodes_map:
                 nodes_map[node_id] = GraphNode(
                     id=node_id,
-                    label=node_id,
+                    label=entity.get("name", node_id),
                     type=entity.get("type", ""),
                     doc_id=entity.get("doc_id", ""),
                     description=entity.get("description", ""),
                 )
 
-        rel_type = r.get("type", "")
-        source = n.get("name", "")
-        target = m.get("name", "")
-        edge_key = f"{source}|{rel_type}|{target}"
-        if source and target and edge_key not in edges_seen:
+        predicate = f.get("predicate", "")
+        source = s.get("name", "") or s.get("entity_key", "")
+        target = o.get("name", "") or o.get("entity_key", "")
+        edge_key = f"{source}|{predicate}|{target}"
+        if source and target and predicate and edge_key not in edges_seen:
             edges_seen.add(edge_key)
-            edges.append(GraphEdge(source=source, target=target, type=rel_type))
+            edges.append(GraphEdge(source=source, target=target, type=predicate))
 
     return GraphOverviewResponse(
         nodes=list(nodes_map.values()),
