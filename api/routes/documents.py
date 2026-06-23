@@ -130,7 +130,11 @@ async def _delete_document_evidence(doc_id: str, doc: dict):
     if all_affected:
         tasks = build_sync_tasks(all_affected, doc_id=doc_id)
         doc_store.create_sync_tasks_batch(tasks)
-        process_pending_tasks()
+        from src.knowledge_graph.graph_sync_worker import process_pending_tasks
+        for _ in range(20):
+            r = process_pending_tasks()
+            if r["success"] + r["failed"] == 0:
+                break
 
     try:
         from src.retrieval.vector_retriever import MilvusVectorRetriever
@@ -429,7 +433,10 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str):
             doc_store.create_sync_tasks_batch(tasks)
 
             from src.knowledge_graph.graph_sync_worker import process_pending_tasks
-            process_pending_tasks()
+            for _ in range(20):
+                r = process_pending_tasks()
+                if r["success"] + r["failed"] == 0:
+                    break
 
         doc_store.update_document(doc_id, processing_stage="自动标签")
         from src.storage.auto_tagger import generate_tags
