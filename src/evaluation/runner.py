@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from src.evaluation.dataset import EvalDataset
-from src.evaluation.metrics import EvalMetrics
+from src.evaluation.metrics import EvalMetrics, compute_ragas_metrics
 from src.agents.workflow import get_workflow
 from config.settings import settings
 
@@ -62,7 +62,15 @@ class EvalRunner:
                 })
 
         elapsed = time.time() - start
-        metrics = self.metrics.compute_metrics(samples, results)
+
+        # Custom metrics (IR, hallucination, timing)
+        custom_metrics = self.metrics.compute_metrics(samples, results)
+
+        # Ragas QA-quality metrics (faithfulness, answer_relevancy, context_precision, context_recall, answer_correctness)
+        ragas_metrics = compute_ragas_metrics(samples, results)
+
+        # Merge: ragas metrics override/replace legacy equivalents
+        metrics = {**custom_metrics, **ragas_metrics}
 
         report = {
             "summary": metrics,
@@ -83,11 +91,22 @@ class EvalRunner:
         print("\n" + "=" * 50)
         print("Evaluation Summary")
         print("=" * 50)
-        for k, v in metrics.items():
-            if isinstance(v, float):
-                print(f"  {k}: {v:.4f}")
-            else:
-                print(f"  {k}: {v}")
+        print("  --- QA Quality (ragas) ---")
+        for k in ["faithfulness", "answer_relevancy", "context_precision", "context_recall", "answer_correctness"]:
+            if k in metrics:
+                print(f"  {k}: {metrics[k]:.4f}")
+        print("  --- Retrieval ---")
+        for k in ["recall_at_5", "recall_at_10", "precision_at_5", "ndcg_at_5", "mrr"]:
+            if k in metrics:
+                print(f"  {k}: {metrics[k]:.4f}")
+        print("  --- Hallucination ---")
+        for k in ["intrinsic_hallucination_rate", "extrinsic_hallucination_rate"]:
+            if k in metrics:
+                print(f"  {k}: {metrics[k]:.4f}")
+        print("  --- Other ---")
+        for k in ["citation_accuracy", "context_redundancy", "delta_ndcg"]:
+            if k in metrics:
+                print(f"  {k}: {metrics[k]:.4f}")
         print("=" * 50)
 
 
