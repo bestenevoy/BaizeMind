@@ -23,9 +23,10 @@ class EntityExtractor:
         prompt = f"{EVIDENCE_EXTRACTION_SYSTEM}\n\nExample:\n{EVIDENCE_EXTRACTION_EXAMPLE}\n\nText: {text[:4000]}\n\nResponse:"
         resp = llm.invoke(prompt)
         data = self._parse_response(resp.content)
+        raw_items = _parse_evidence_items(data)
 
         items = []
-        for item in data.get("evidence_items", []):
+        for item in raw_items:
             etype = item.get("type", "").upper()
             conf = float(item.get("confidence", 0.5))
             ev_text = text[:200]
@@ -78,6 +79,34 @@ class EntityExtractor:
             match = re.search(r"\{[\s\S]*\}", content)
             if match:
                 return json.loads(match.group())
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
             pass
         return {"evidence_items": []}
+
+
+def _parse_evidence_items(data: dict) -> list[dict]:
+    """Defensive parsing: handles LLM returning evidence_items as string, single dict, etc."""
+    items = data.get("evidence_items", [])
+
+    if isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    if isinstance(items, dict):
+        items = [items]
+
+    if not isinstance(items, list):
+        return []
+
+    result = []
+    for it in items:
+        if isinstance(it, str):
+            try:
+                result.append(json.loads(it))
+            except (json.JSONDecodeError, TypeError):
+                continue
+        elif isinstance(it, dict):
+            result.append(it)
+    return result
