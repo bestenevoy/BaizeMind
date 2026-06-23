@@ -402,17 +402,26 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str):
         from src.knowledge_graph.evidence_writer import write_evidence
 
         extractor = EntityExtractor()
-        neo4j = None
 
         for chunk in chunks:
             ch = chunk["chunk_hash"]
             if ch not in [nc["chunk_hash"] for nc in new_chunk_texts]:
                 continue
 
-            evidence_items = extractor.extract_evidence(chunk["text"], chunk_hash=ch)
-            if evidence_items:
-                result = write_evidence(ch, evidence_items)
-                merge_affected_keys(all_affected_keys, result["affected_keys"])
+            try:
+                evidence_items = extractor.extract_evidence(chunk["text"], chunk_hash=ch)
+                if evidence_items:
+                    result = write_evidence(ch, evidence_items)
+                    merge_affected_keys(all_affected_keys, result["affected_keys"])
+            except Exception as chunk_err:
+                import traceback as _tb
+                tb_str = _tb.format_exc()
+                chunk_text_preview = chunk["text"][:500]
+                raise RuntimeError(
+                    f"Evidence extraction failed for chunk_hash={ch[:16]}...: {chunk_err}\n"
+                    f"Chunk text preview: {chunk_text_preview}\n"
+                    f"Full traceback:\n{tb_str}"
+                ) from chunk_err
 
         doc_store.update_document(doc_id, processing_stage="同步知识图谱")
         if all_affected_keys:
@@ -434,8 +443,10 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str):
                                   doc_version=doc_version + 1)
 
     except Exception as e:
+        import traceback as _tb
         elapsed = (time.time() - start) * 1000
-        doc_store.update_document(doc_id, status="failed", processing_time_ms=elapsed, error=str(e))
+        full_error = f"{e}\n\nFull traceback:\n{_tb.format_exc()}"
+        doc_store.update_document(doc_id, status="failed", processing_time_ms=elapsed, error=full_error[:2000])
 
 
 def merge_affected_keys(target: dict[str, set[str]], source: list[dict]):
