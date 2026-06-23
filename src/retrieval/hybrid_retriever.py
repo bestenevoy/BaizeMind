@@ -23,17 +23,28 @@ class HybridRetriever:
         self,
         query: str,
         top_k: int = 20,
+        dense_query: Optional[str] = None,
+        bm25_query: Optional[str] = None,
         dense_weight: Optional[float] = None,
         sparse_weight: Optional[float] = None,
         bm25_weight: Optional[float] = None,
         doc_filter: Optional[str] = None,
     ) -> list[dict[str, Any]]:
+        """Hybrid retrieval with optional separate queries for dense vs BM25.
+
+        dense_query: Query text for vector search (defaults to `query`).
+            Keep this as natural language — dense embeddings are semantic.
+        bm25_query: Query text for BM25 keyword search (defaults to `query`).
+            Can be enriched with entity names, synonyms etc — BM25 rewards keyword matches.
+        """
         dense_weight = dense_weight or settings.hybrid_dense_weight
-        sparse_weight = sparse_weight or settings.hybrid_sparse_weight
         bm25_weight = bm25_weight or settings.hybrid_bm25_weight
 
-        dense_results = self._dense_search(query, top_k, doc_filter)
-        bm25_results = self._bm25_search(query, top_k)
+        dense_q = dense_query if dense_query else query
+        bm25_q = bm25_query if bm25_query else query
+
+        dense_results = self._dense_search(dense_q, top_k, doc_filter)
+        bm25_results = self._bm25_search(bm25_q, top_k)
 
         return self._rrf_fusion(
             {"dense": dense_results, "bm25": bm25_results},

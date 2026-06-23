@@ -7,6 +7,7 @@ from src.agents.query_router import QueryRouter
 from src.agents.retrieval_agent import RetrievalAgent
 from src.agents.graph_agent import GraphAgent
 from src.agents.answer_validator import AnswerValidator
+from src.retrieval.lightrag_retriever import LightRAGRetriever
 from src.llm.deepseek import get_chat_llm
 from config.prompts import ANSWER_GENERATION_SYSTEM
 from config.settings import settings
@@ -16,14 +17,18 @@ class AgentState(TypedDict):
     query: str
     query_type: str
     confidence: float
+    graph_eligible: bool
     documents: Annotated[list[dict], operator.add]
     graph_context: str
     graph_entities: list[str]
+    sub_queries: list[str]
     graphrag_context: str
+    retrieval_path: str
     draft_answer: str
     final_answer: str
     citations: list[str]
     validation: dict
+    validation_feedback: str
     iteration: int
     max_iterations: int
     error: str
@@ -37,20 +42,31 @@ class AgentState(TypedDict):
 # for compilation integrity but are unreachable.
 def _route_by_query_type(state: AgentState) -> str:
     query_type = state.get("query_type", "simple_fact")
+    graph_eligible = state.get("graph_eligible", False)
+
     if query_type == "chitchat":
         return "chitchat"
     if query_type == "holistic":
         return "retrieval_agent"  # DISABLED: was "graphrag_search"
-    if query_type in ("multi_hop", "comparison"):
-        return "graph_agent"
+
+    # LightRAG path: multi-hop/comparison/graph-eligible → vector-based entity navigation
+    needs_graph = query_type in ("multi_hop", "comparison") or (
+        query_type in ("simple_fact", "definition") and graph_eligible
+    )
+    if needs_graph:
+        return "lightrag_agent"
+
     return "retrieval_agent"
 
 
 def _route_for_multi_hop(state: AgentState) -> str:
     query_type = state.get("query_type", "simple_fact")
-    if query_type == "multi_hop":
+    graph_eligible = state.get("graph_eligible", False)
+
+    if query_type in ("multi_hop", "comparison"):
         return "retrieval_agent"
-    elif query_type == "comparison":
+    # simple_fact/definition w/ graph_eligible also needs retrieval after graph enrich
+    if query_type in ("simple_fact", "definition") and graph_eligible:
         return "retrieval_agent"
     return "answer_generator"
 
@@ -68,7 +84,10 @@ def _route_after_validation(state: AgentState) -> str:
     max_iter = state.get("max_iterations", settings.agent_max_iterations)
 
     if not validation.get("is_valid", True) and iteration < max_iter:
-        return "retrieval_agent"
+        failure_reasons = validation.get("failure_reasons", [])
+        if "context_insufficient" in failure_reasons:
+            return "retrieval_agent"
+        return "answer_generator"
     return END
 
 
@@ -78,6 +97,7 @@ class AgenticRAGWorkflow:
         self.retrieval_agent = RetrievalAgent()
         self.graph_agent = GraphAgent()
         self.answer_validator = AnswerValidator()
+        self.lightrag_retriever = LightRAGRetriever()
         self._llm = None
         self._graphrag_query = None
         self._graph = self._build_graph()
@@ -101,6 +121,7 @@ class AgenticRAGWorkflow:
         builder.add_node("chitchat", self._node_chitchat)
         builder.add_node("retrieval_agent", self._node_retrieval_agent)
         builder.add_node("graph_agent", self._node_graph_agent)
+        builder.add_node("lightrag_agent", self._node_lightrag_agent)
         # [DISABLED] GraphRAG node — retained for graph compilation, unreachable via routing
         builder.add_node("graphrag_search", self._node_graphrag_search)
         builder.add_node("answer_generator", self._node_answer_generator)
@@ -113,6 +134,7 @@ class AgenticRAGWorkflow:
         # [DISABLED] GraphRAG edge — retained for graph compilation
         builder.add_conditional_edges("graphrag_search", _route_after_graphrag)
         builder.add_edge("retrieval_agent", "answer_generator")
+        builder.add_edge("lightrag_agent", "answer_generator")
         builder.add_edge("answer_generator", "answer_validator")
         builder.add_conditional_edges("answer_validator", _route_after_validation)
 
@@ -123,13 +145,18 @@ class AgenticRAGWorkflow:
             "query": query,
             "query_type": "simple_fact",
             "confidence": 0.0,
+            "graph_eligible": False,
             "documents": [],
             "graph_context": "",
+            "graph_entities": [],
+            "sub_queries": [],
             "graphrag_context": "",
+            "retrieval_path": "",
             "draft_answer": "",
             "final_answer": "",
             "citations": [],
             "validation": {},
+            "validation_feedback": "",
             "iteration": 0,
             "max_iterations": settings.agent_max_iterations,
             "error": "",
@@ -143,13 +170,18 @@ class AgenticRAGWorkflow:
             "query": query,
             "query_type": "simple_fact",
             "confidence": 0.0,
+            "graph_eligible": False,
             "documents": [],
             "graph_context": "",
+            "graph_entities": [],
+            "sub_queries": [],
             "graphrag_context": "",
+            "retrieval_path": "",
             "draft_answer": "",
             "final_answer": "",
             "citations": [],
             "validation": {},
+            "validation_feedback": "",
             "iteration": 0,
             "max_iterations": settings.agent_max_iterations,
             "error": "",
@@ -172,6 +204,7 @@ class AgenticRAGWorkflow:
         return {
             "query_type": result["query_type"],
             "confidence": result["confidence"],
+            "graph_eligible": result.get("graph_eligible", False),
         }
 
     def _node_retrieval_agent(self, state: AgentState) -> dict:
@@ -186,14 +219,48 @@ class AgenticRAGWorkflow:
                     return {"documents": [], "error": "No documents match the filter"}
                 doc_filter = ids
 
-            query = state["query"]
+            original_query = state["query"]
             graph_entities = state.get("graph_entities", [])
+            sub_queries = state.get("sub_queries", [])
+
+            # Multi-query retrieval: search with each sub-question, merge results
+            if sub_queries:
+                seen_ids = set()
+                all_results = []
+                for sq in sub_queries[:3]:
+                    dense_q = sq
+                    bm25_q = sq
+                    if graph_entities:
+                        entity_suffix = " ".join(graph_entities[:10])
+                        bm25_q = f"{sq} {entity_suffix}"
+                    results = self.retrieval_agent.search(
+                        sq, doc_ids=doc_filter,
+                        dense_query=dense_q, bm25_query=bm25_q,
+                    )
+                    for r in results:
+                        cid = r.get("chunk_id", "")
+                        if cid and cid not in seen_ids:
+                            seen_ids.add(cid)
+                            all_results.append(r)
+                return {"documents": all_results[:20], "retrieval_path": f"[Multi-query] {len(sub_queries)} sub-queries → {len(all_results)} chunks"}
+
+            # Single query: dense stays natural language, BM25 gets entity enrichment
+            dense_query = original_query
+            bm25_query = original_query
             if graph_entities:
                 entity_suffix = " ".join(graph_entities[:10])
-                query = f"{query} {entity_suffix}"
+                bm25_query = f"{original_query} {entity_suffix}"
 
-            results = self.retrieval_agent.search(query, doc_ids=doc_filter)
-            return {"documents": results}
+            results = self.retrieval_agent.search(
+                original_query,
+                doc_ids=doc_filter,
+                dense_query=dense_query,
+                bm25_query=bm25_query,
+            )
+            return {
+                "documents": results,
+                "retrieval_path": "[Retrieval] hybrid (dense + BM25)",
+            }
         except Exception as e:
             return {"error": f"Retrieval failed: {e}"}
 
@@ -201,6 +268,18 @@ class AgenticRAGWorkflow:
         """Use LLM to select only query-relevant entities from graph expansion results."""
         if not paths:
             return []
+
+        # Pre-filter: only keep paths with whitelisted relation types (if whitelist is set)
+        whitelist = set(settings.graph_relation_whitelist) if settings.graph_relation_whitelist else None
+        if whitelist:
+            filtered_paths = []
+            for p in paths:
+                rel_types = p.get("relation_types", [])
+                if any(rt in whitelist for rt in rel_types):
+                    filtered_paths.append(p)
+            if filtered_paths:
+                paths = filtered_paths
+
         path_lines = []
         for p in paths:
             s = p.get("subject_name", "")
@@ -235,17 +314,99 @@ class AgenticRAGWorkflow:
                 graph_context = self.graph_agent.format_context(paths)
 
                 graph_entities = list(entities)
+                sub_queries: list[str] = []
                 if paths:
                     relevant = self._filter_relevant_entities(state["query"], paths)
                     for name in relevant:
                         if name not in graph_entities:
                             graph_entities.append(name)
+                    # Generate targeted sub-questions for multi-query retrieval
+                    if relevant:
+                        sub_queries = self.graph_agent.generate_sub_questions(
+                            state["query"], graph_entities, paths
+                        )
             else:
                 graph_context = "No entities found for graph expansion."
                 graph_entities = []
-            return {"graph_context": graph_context, "graph_entities": graph_entities}
+                sub_queries = []
+            return {
+                "graph_context": graph_context,
+                "graph_entities": graph_entities,
+                "sub_queries": sub_queries,
+            }
         except Exception as e:
-            return {"graph_context": f"Graph query failed: {e}", "graph_entities": [], "error": str(e)}
+            return {
+                "graph_context": f"Graph query failed: {e}",
+                "graph_entities": [],
+                "sub_queries": [],
+                "error": str(e),
+            }
+
+    def _node_lightrag_agent(self, state: AgentState) -> dict:
+        """LightRAG pipeline: entity_index → relation_index → graph_expand → chunk_retrieve.
+
+        Replaces the LLM-based NER + separate graph_expand + retrieval steps.
+        Falls back to existing graph_agent + retrieval if LightRAG indexes are empty.
+        """
+        try:
+            folder = state.get("folder", "") or None
+            tags = state.get("tags", []) or None
+            doc_filter = None
+            if folder or tags:
+                from src.storage.doc_store import get_doc_ids_by_filter
+                ids = get_doc_ids_by_filter(folder=folder, tags=tags)
+                if not ids:
+                    return {"documents": [], "retrieval_path": "No documents match filter"}
+                doc_filter = ids
+
+            # Check if LightRAG indexes are populated; fall back if not
+            if self.lightrag_retriever.entity_index.count() == 0:
+                # Fallback: use existing graph_agent + retrieval pipeline
+                graph_result = self._node_graph_agent(state)
+                if graph_result.get("graph_entities"):
+                    state_with_enrich = {**state, **graph_result}
+                    retrieval_result = self._node_retrieval_agent(state_with_enrich)
+                    return {
+                        **graph_result,
+                        **retrieval_result,
+                        "retrieval_path": "[Fallback] graph_agent→retrieval (LightRAG index empty)",
+                    }
+                # No entities at all — go straight to retrieval
+                retrieval_result = self._node_retrieval_agent(state)
+                return {
+                    **retrieval_result,
+                    "graph_context": "",
+                    "graph_entities": [],
+                    "retrieval_path": "[Fallback] retrieval_only (no entities)",
+                }
+
+            # Full LightRAG pipeline
+            result = self.lightrag_retriever.retrieve(
+                state["query"],
+                doc_filter=doc_filter,
+            )
+
+            return {
+                "documents": result["documents"],
+                "graph_context": result["graph_context"],
+                "graph_entities": result.get("entities_found", []),
+                "retrieval_path": result.get("retrieval_path", "[LightRAG]"),
+            }
+        except Exception as e:
+            logger = __import__("logging").getLogger(__name__)
+            logger.warning(f"LightRAG agent failed, falling back: {e}")
+            # Fallback to existing pipeline
+            from src.agents.retrieval_agent import RetrievalAgent
+            try:
+                results = self.retrieval_agent.search(state["query"])
+                return {
+                    "documents": results,
+                    "graph_context": "",
+                    "graph_entities": [],
+                    "retrieval_path": f"[Fallback after LightRAG error] retrieval_only",
+                }
+            except Exception:
+                return {"error": f"LightRAG/Retrieval failed: {e}"}
 
     # [DISABLED] GraphRAG search node — unreachable via current routing
     def _node_graphrag_search(self, state: AgentState) -> dict:
@@ -297,10 +458,21 @@ class AgenticRAGWorkflow:
                     "citations": [],
                 }
 
+            # Append retrieval path for observability (not visible to LLM but stored in state)
+            retrieval_path = state.get("retrieval_path", "")
+            if retrieval_path:
+                context = f"[Retrieval: {retrieval_path}]\n\n{context}"
+
             llm = self._get_llm()
             prompt = ANSWER_GENERATION_SYSTEM.format(
                 context=context[:8000], question=state["query"]
             )
+
+            # Incorporate validation feedback on retry
+            feedback = state.get("validation_feedback", "")
+            if feedback:
+                prompt += f"\n\n[Previous answer was rejected. Fix the following issues:]\n{feedback}"
+
             resp = llm.invoke(prompt)
 
             return {
@@ -326,14 +498,31 @@ class AgenticRAGWorkflow:
             new_iteration = state.get("iteration", 0) + 1
             final_answer = validation.get("improved_answer") or state.get("draft_answer", "")
 
+            # Build feedback string from failure reasons for retry
+            failure_reasons = validation.get("failure_reasons", [])
+            issues = validation.get("issues", [])
+            feedback_parts = []
+            reason_map = {
+                "missing_citation": "Answer lacks source citations for factual claims. Cite every claim with [Source: doc_id, chunk_id].",
+                "unsupported_claim": "Answer contains claims not supported by context. Remove or limit to evidence in context only.",
+                "context_insufficient": "Context lacks information to answer. State 'insufficient information' rather than guessing.",
+                "conflict_detected": "Context has conflicting information. Acknowledge the conflict explicitly.",
+            }
+            for reason in failure_reasons:
+                if reason in reason_map:
+                    feedback_parts.append(reason_map[reason])
+            feedback = "\n".join(feedback_parts) if feedback_parts else ""
+
             return {
                 "validation": validation,
+                "validation_feedback": feedback,
                 "final_answer": final_answer,
                 "iteration": new_iteration,
             }
         except Exception as e:
             return {
                 "validation": {"is_valid": True},
+                "validation_feedback": "",
                 "final_answer": state.get("draft_answer", ""),
                 "iteration": state.get("iteration", 0) + 1,
                 "error": str(e),

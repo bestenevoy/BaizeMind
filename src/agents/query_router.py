@@ -35,7 +35,8 @@ class QueryRouter:
                     "query_type": query_type,
                     "confidence": data.get("confidence", 0.5),
                     "reasoning": data.get("reasoning", ""),
+                    "graph_eligible": data.get("graph_eligible", False),
                 }
         except (json.JSONDecodeError, AttributeError):
             pass
-        return {"query_type": "simple_fact", "confidence": 0.3, "reasoning": "fallback classification"}
+        return {"query_type": "simple_fact", "confidence": 0.3, "reasoning": "fallback classification", "graph_eligible": False}

@@ -75,3 +75,42 @@ class GraphAgent:
             {**r, "graph_context": self.format_context(graph_context)}
             for r in results
         ]
+
+    def generate_sub_questions(
+        self, query: str, entities: list[str], paths: list[dict]
+    ) -> list[str]:
+        """Generate targeted sub-questions from graph entities and relations.
+
+        Instead of blindly appending entity names to the query (which helps BM25
+        but can distort dense embeddings), we generate focused sub-questions for
+        multi-query retrieval. Each sub-question addresses one aspect of the
+        original query, using graph-discovered entities and relations as anchors.
+        """
+        if not entities and not paths:
+            return []
+
+        relations_text = self.format_context(paths[:15]) if paths else ""
+        entities_text = ", ".join(entities[:10]) if entities else ""
+
+        llm = self._get_llm()
+        prompt = (
+            f"Given a user question and relevant entities/relations from a knowledge graph, "
+            f"generate 2-4 specific sub-questions for document retrieval. "
+            f"Each sub-question should focus on one aspect and use natural language "
+            f"(suitable for semantic search), not just keyword lists. "
+            f"Return ONLY a JSON array of strings.\n\n"
+            f"Original question: {query}\n\n"
+            f"Relevant entities: {entities_text}\n\n"
+            f"Graph relations:\n{relations_text}\n\n"
+            f"Sub-questions (JSON array):"
+        )
+        resp = llm.invoke(prompt)
+        try:
+            import json, re
+            match = re.search(r"\[.*?\]", resp.content, re.DOTALL)
+            if match:
+                subs = json.loads(match.group())
+                return [s for s in subs if isinstance(s, str)][:4]
+        except Exception:
+            pass
+        return []

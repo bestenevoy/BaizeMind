@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     milvus_port: int = 19530
     milvus_collection: str = "agentic_rag"
 
+    # LightRAG — Entity & Relation vector indexes
+    lightrag_entity_collection: str = "lightrag_entities"
+    lightrag_relation_collection: str = "lightrag_relations"
+    lightrag_entity_top_k: int = 10
+    lightrag_relation_top_k: int = 10
+    lightrag_graph_hops: int = 2
+    lightrag_retrieval_mode: str = "hybrid"  # "local" | "global" | "hybrid"
+
     # Neo4j
     neo4j_uri: str = "bolt://127.0.0.1:7687"
     neo4j_user: str = "neo4j"
@@ -52,12 +60,22 @@ class Settings(BaseSettings):
 
     # Retrieval
     hybrid_top_k: int = 20
-    hybrid_dense_weight: float = 0.5
+    hybrid_dense_weight: float = 0.6
     hybrid_sparse_weight: float = 0.3
-    hybrid_bm25_weight: float = 0.2
+    hybrid_bm25_weight: float = 0.4
     hybrid_rrf_k: int = 60
     retrieval_similarity_threshold: float = 0.0  # 0 = disabled; set e.g. 0.3 to filter low-relevance chunks
     reranker_method: str = "embedding"  # "embedding" | "llm" | "hybrid"
+
+    # Graph relation type filtering: high-relevance types for multi-hop/entity enrichment
+    # Only paths involving these relation types are forwarded to the LLM entity filter
+    graph_relation_whitelist: list[str] = [
+        "ACQUIRED", "RELATED_TO_TECH", "USED_IN", "AFFECTS",
+        "PART_OF", "DEPENDS_ON", "DEVELOPS", "PROVIDES_TECHNOLOGY_FOR",
+        "COMPETES_WITH", "INTEGRATED_INTO", "POWERS", "SUPPORTS",
+    ]
+    # Low-relevance types (skipped unless no whitelist matches exist):
+    # LOCATED_IN, FOUNDED_BY, CEO, HEADQUARTERED_IN, WORKS_FOR, MENTIONS, RELATES_TO
 
     # Agent
     agent_max_iterations: int = 5

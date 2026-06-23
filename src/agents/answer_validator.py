@@ -42,6 +42,7 @@ class AnswerValidator:
                     "citation_accuracy": data.get("citation_accuracy", 0.0),
                     "completeness_score": data.get("completeness_score", 0.0),
                     "issues": data.get("issues", []),
+                    "failure_reasons": data.get("failure_reasons", []),
                     "improved_answer": data.get("improved_answer"),
                 }
         except (json.JSONDecodeError, AttributeError):
@@ -52,5 +53,6 @@ class AnswerValidator:
             "citation_accuracy": 1.0,
             "completeness_score": 1.0,
             "issues": [],
+            "failure_reasons": [],
             "improved_answer": None,
         }

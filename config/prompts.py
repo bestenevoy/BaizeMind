@@ -13,7 +13,12 @@ Analyze the user's question and classify it into exactly ONE type:
 - definition: Questions asking for definitions, explanations of terms.
   Examples: "What is RAG?", "Explain transformer architecture."
 
-Respond in JSON format: {"query_type": "...", "confidence": 0.0-1.0, "reasoning": "..."}"""
+Additionally, set "graph_eligible": true if:
+- The query mentions 2+ distinct named entities (companies, people, products, technologies)
+- AND the query contains relationship/action words (acquired, developed, affects, caused, leads to, 收购, 影响, 开发, 导致, 对比, 竞争, 合作, 收购, compare, impact, relation, cause, develop, compete)
+- This signals that knowledge graph expansion could help even if the query_type is simple_fact
+
+Respond in JSON format: {"query_type": "...", "confidence": 0.0-1.0, "reasoning": "...", "graph_eligible": true/false}"""
 
 # [DISABLED] holistic type removed — GraphRAG pipeline disabled.
 # Original: "holistic: Questions requiring a comprehensive overview of the entire dataset..."
@@ -103,6 +108,12 @@ Check for:
 3. Completeness: Does the answer fully address the question?
 4. Consistency: Is the answer internally consistent?
 
+IMPORTANT: When the answer is NOT valid (is_valid: false), you MUST classify the failure into one or more of these categories:
+- missing_citation: Factual claims lack source references
+- unsupported_claim: The answer contains claims not found in any context
+- context_insufficient: The provided context lacks critical information to answer
+- conflict_detected: Context sources contain contradictory information
+
 Respond in JSON:
 {
   "is_valid": true/false,
@@ -110,8 +121,11 @@ Respond in JSON:
   "citation_accuracy": 0.0-1.0,
   "completeness_score": 0.0-1.0,
   "issues": ["issue1", "issue2"],
+  "failure_reasons": ["missing_citation", "unsupported_claim"],
   "improved_answer": "corrected answer if needed, or null"
-}"""
+}
+
+Only include failure_reasons when is_valid is false. Use ONLY the four categories above."""
 
 # ── Chart Description ──────────────────────────────────────────────
 CHART_DESCRIPTION_SYSTEM = """Describe the content of this chart/image in detail:

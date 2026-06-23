@@ -19,13 +19,25 @@ class RetrievalAgent:
             self._llm = get_chat_llm(temperature=0.0)
         return self._llm
 
-    def search(self, query: str, top_k: int = 20, doc_ids: list[str] | None = None) -> list[dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 20,
+        doc_ids: list[str] | None = None,
+        dense_query: str | None = None,
+        bm25_query: str | None = None,
+    ) -> list[dict[str, Any]]:
         doc_filter = None
         if doc_ids:
             id_list = " ".join(f'"{d}"' for d in doc_ids)
             doc_filter = f"doc_id in [{id_list}]"
-        results = self._retriever.retrieve(query, top_k=top_k, doc_filter=doc_filter)
-        ranked = self._reranker.rerank(query, results, top_k=min(10, len(results)))
+        results = self._retriever.retrieve(
+            query, top_k=top_k, doc_filter=doc_filter,
+            dense_query=dense_query, bm25_query=bm25_query,
+        )
+        # Rerank with the original natural language query (not entity-enriched)
+        rerank_query = dense_query if dense_query else query
+        ranked = self._reranker.rerank(rerank_query, results, top_k=min(10, len(results)))
 
         # Apply relevance threshold AFTER reranking
         threshold = settings.retrieval_similarity_threshold

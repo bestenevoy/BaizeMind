@@ -110,7 +110,7 @@ class Neo4jManager:
                 WHERE toLower(s.name) CONTAINS toLower($name)
                 RETURN s.name as subject_name, s.type as subject_type,
                        o.name as object_name, o.type as object_type,
-                       [r in relationships(path) | type(r)] as relation_types,
+                       [r in relationships(path) | r.type] as relation_types,
                        length(path) as distance
                 LIMIT 50
                 """ % max_hops,
@@ -138,7 +138,7 @@ class Neo4jManager:
                 WHERE toLower(s.name) CONTAINS toLower($subject)
                 AND toLower(o.name) CONTAINS toLower($object)
                 RETURN [n in nodes(path) | n.name] as nodes,
-                       [r in relationships(path) | type(r)] as relations,
+                       [r in relationships(path) | r.type] as relations,
                        length(path) as distance
                 LIMIT 10
                 """ % max_depth,

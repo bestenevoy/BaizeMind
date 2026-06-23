@@ -47,7 +47,7 @@ class ContextMerger:
         seen = set()
         result = []
         for chunk in chunks:
-            text_hash = hash(chunk["text"][:100])
+            text_hash = hash(chunk["text"][:500])
             if text_hash not in seen:
                 seen.add(text_hash)
                 result.append(chunk)
