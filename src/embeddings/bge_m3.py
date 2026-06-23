@@ -47,17 +47,21 @@ class BGEM3Embedding:
         return np.array([d["embedding"] for d in data], dtype=np.float32)
 
     def encode_dense(self, texts: list[str]) -> np.ndarray:
+        max_chars = settings.chunk_size
+        truncated = [t[:max_chars] if len(t) > max_chars else t for t in texts]
         if self.use_local and self._model is not None:
-            return np.array(self._model.encode(texts)["dense_vecs"], dtype=np.float32)
-        return self._get_api_embeddings(texts)
+            return np.array(self._model.encode(truncated)["dense_vecs"], dtype=np.float32)
+        return self._get_api_embeddings(truncated)
 
     def encode_dense_all(self, texts: list[str], batch_size: int = 32, concurrency: int = 8) -> np.ndarray:
         if not texts:
             return np.array([], dtype=np.float32)
         if self.use_local and self._model is not None:
-            return np.array(self._model.encode(texts)["dense_vecs"], dtype=np.float32)
+            return self.encode_dense(texts)
 
-        batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
+        max_chars = settings.chunk_size
+        truncated = [t[:max_chars] if len(t) > max_chars else t for t in texts]
+        batches = [truncated[i:i + batch_size] for i in range(0, len(truncated), batch_size)]
         max_workers = min(concurrency, len(batches))
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:

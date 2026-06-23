@@ -2,7 +2,7 @@ from typing import Any
 
 
 class ContextMerger:
-    def __init__(self, max_merge_chars: int = 1500):
+    def __init__(self, max_merge_chars: int = 512):
         self.max_merge_chars = max_merge_chars
 
     def merge(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
