@@ -471,7 +471,7 @@ export async function buildGraph(): Promise<BuildGraphResult> {
   return res.json()
 }
 
-export async function buildGraphStatus(): Promise<BuildGraphResult['status'] & { result?: BuildGraphResult }> {
+export async function buildGraphStatus(): Promise<BuildGraphResult['status'] & { result?: BuildGraphResult; phase?: string }> {
   const res = await fetch(`${API_BASE}/system/build-graph/status`)
   if (!res.ok) throw new Error(`Status check failed: ${res.statusText}`)
   return res.json()

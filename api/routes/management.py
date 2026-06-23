@@ -581,7 +581,7 @@ async def search_debug(body: SearchDebugRequest):
 
 import threading
 
-_build_status: dict = {"running": False, "progress": 0, "total": 0, "done": False, "result": None}
+_build_status: dict = {"running": False, "progress": 0, "total": 0, "done": False, "phase": "", "result": None}
 
 
 @router.get("/build-graph/status")
@@ -591,7 +591,12 @@ async def build_graph_status():
 
 def _finish_build(result: dict):
     global _build_status
-    _build_status = {"running": False, "progress": _build_status.get("total", 0), "total": _build_status.get("total", 0), "done": True, "result": result}
+    _build_status = {"running": False, "progress": _build_status.get("total", 0), "total": _build_status.get("total", 0), "done": True, "phase": "完成" if result.get("success") else "失败", "result": result}
+
+
+def _set_phase(phase: str):
+    global _build_status
+    _build_status["phase"] = phase
 
 
 def _run_build_graph():
@@ -604,7 +609,7 @@ def _run_build_graph():
         from src.knowledge_graph.graph_sync_worker import process_pending_tasks
         from src.storage import doc_store
 
-        _build_status = {"running": True, "progress": 0, "total": 0, "done": False, "result": None}
+        _build_status = {"running": True, "progress": 0, "total": 0, "done": False, "phase": "加载BM25索引", "result": None}
 
         bm25 = BM25Retriever()
         bm25.load()
@@ -616,9 +621,10 @@ def _run_build_graph():
         if not chunks:
             _finish_build({"success": False, "message": "No chunks found. Please ingest documents first."})
             return
+            return
 
         logger.info(f"Building knowledge graph for {len(chunks)} chunks...")
-        _build_status = {"running": True, "progress": 0, "total": len(chunks), "done": False, "result": None}
+        _build_status = {"running": True, "progress": 0, "total": len(chunks), "done": False, "phase": f"证据抽取 0/{len(chunks)}", "result": None}
 
         extractor = EntityExtractor()
         all_affected_keys: dict[str, set[str]] = {}
@@ -641,10 +647,12 @@ def _run_build_graph():
                 errors += 1
                 logger.warning(f"Evidence extraction failed for chunk {i}: {e}")
             _build_status["progress"] = i + 1
+            _build_status["phase"] = f"证据抽取 {i + 1}/{len(chunks)}"
 
         sync_success = 0
         sync_failed = 0
         if all_affected_keys:
+            _build_status["phase"] = "同步到Neo4j"
             tasks = build_sync_tasks(all_affected_keys)
             doc_store.create_sync_tasks_batch(tasks)
             for _ in range(50):

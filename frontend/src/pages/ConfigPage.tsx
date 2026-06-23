@@ -28,6 +28,7 @@ export function ConfigPage() {
   const [editValue, setEditValue] = useState('')
   const [saving, setSaving] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
+  const [rebuildPhase, setRebuildPhase] = useState('')
 
   const loadConfig = useCallback(async () => {
     setLoading(true)
@@ -192,6 +193,7 @@ export function ConfigPage() {
                   if (!confirm('重建知识图谱会重新抽取所有文档的实体和关系，可能需要几分钟。确定？')) return
                   try {
                     setRebuilding(true)
+                    setRebuildPhase('启动中...')
                     const start = await buildGraph()
                     if (!start.success) {
                       alert(`启动失败: ${start.message}`)
@@ -214,6 +216,7 @@ export function ConfigPage() {
                           loadConfig()
                         } else if (s.running) {
                           const pct = s.total > 0 ? Math.round(s.progress / s.total * 100) : 0
+                          setRebuildPhase(s.phase || `${pct}%`)
                           document.title = `[${pct}%] 重建图谱...`
                         }
                         if (Date.now() - startTime > 300000) {
@@ -232,7 +235,7 @@ export function ConfigPage() {
                 disabled={rebuilding}
               >
                 <GitGraph className="h-3.5 w-3.5 mr-1" />
-                {rebuilding ? '重建中...' : '重建知识图谱'}
+                {rebuilding ? (rebuildPhase || '重建中...') : '重建知识图谱'}
               </Button>
               <Button
                 variant="outline"
