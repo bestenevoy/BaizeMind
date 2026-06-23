@@ -579,9 +579,18 @@ async def search_debug(body: SearchDebugRequest):
 
 # ── Build Graph ──
 
+import threading
 
-@router.post("/build-graph")
-async def build_graph():
+_build_status: dict = {"running": False, "progress": 0, "total": 0, "done": False, "result": None}
+
+
+@router.get("/build-graph/status")
+async def build_graph_status():
+    return _build_status
+
+
+def _run_build_graph():
+    global _build_status
     try:
         from src.retrieval.bm25_retriever import BM25Retriever
         from src.knowledge_graph.entity_extractor import EntityExtractor
@@ -597,9 +606,11 @@ async def build_graph():
             bm25.rebuild_from_milvus()
         chunks = bm25._chunks
         if not chunks:
-            return {"success": False, "message": "No chunks found. Please ingest documents first."}
+            _build_status = {"running": False, "progress": 0, "total": 0, "done": True, "result": {"success": False, "message": "No chunks found"}}
+            return
 
         logger.info(f"Building knowledge graph for {len(chunks)} chunks...")
+        _build_status = {"running": True, "progress": 0, "total": len(chunks), "done": False, "result": None}
 
         extractor = EntityExtractor()
         all_affected_keys: dict[str, set[str]] = {}
@@ -621,6 +632,7 @@ async def build_graph():
             except Exception as e:
                 errors += 1
                 logger.warning(f"Evidence extraction failed for chunk {i}: {e}")
+            _build_status["progress"] = i + 1
 
         sync_success = 0
         sync_failed = 0
@@ -634,18 +646,29 @@ async def build_graph():
                 if r["success"] + r["failed"] == 0:
                     break
 
-        return {
-            "success": True,
-            "chunks_processed": len(chunks),
-            "evidence_count": evidence_count,
-            "affected_keys": sum(len(v) for v in all_affected_keys.values()),
-            "sync_success": sync_success,
-            "sync_failed": sync_failed,
-            "errors": errors,
+        _build_status = {
+            "running": False, "progress": len(chunks), "total": len(chunks), "done": True,
+            "result": {
+                "success": True,
+                "chunks_processed": len(chunks),
+                "evidence_count": evidence_count,
+                "affected_keys": sum(len(v) for v in all_affected_keys.values()),
+                "sync_success": sync_success,
+                "sync_failed": sync_failed,
+                "errors": errors,
+            },
         }
     except Exception as e:
         logger.error(f"Build graph failed: {e}", exc_info=True)
-        return {"success": False, "message": str(e)}
+        _build_status = {"running": False, "progress": 0, "total": 0, "done": True, "result": {"success": False, "message": str(e)}}
+
+
+@router.post("/build-graph")
+async def build_graph():
+    if _build_status.get("running"):
+        return {"success": False, "message": "Build already in progress", "status": _build_status}
+    threading.Thread(target=_run_build_graph, daemon=True).start()
+    return {"success": True, "message": "Build started", "status": _build_status}
 
 
 # ── Delete All ──

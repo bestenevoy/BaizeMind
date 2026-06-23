@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { getConfig, checkConnectivity, getSystemStats, listEditableConfig, updateConfigOverride, resetConfigOverride, cleanupOrphans, buildGraph, deleteAllVectors, deleteAllGraph, deleteInactiveGraph } from '@/lib/api'
+import { getConfig, checkConnectivity, getSystemStats, listEditableConfig, updateConfigOverride, resetConfigOverride, cleanupOrphans, buildGraph, buildGraphStatus, deleteAllVectors, deleteAllGraph, deleteInactiveGraph } from '@/lib/api'
 import type { ConfigResponse, ConnectivityResult, SystemStats, EditableConfigItem } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -192,15 +192,35 @@ export function ConfigPage() {
                   if (!confirm('重建知识图谱会重新抽取所有文档的实体和关系，可能需要几分钟。确定？')) return
                   try {
                     setRebuilding(true)
-                    const r = await buildGraph()
-                    if (r.success) {
-                      alert(`图谱重建完成:\n处理 chunk: ${r.chunks_processed}\n证据: ${r.evidence_count}\n同步: ${r.sync_success} 成功${r.sync_failed ? `, ${r.sync_failed} 失败` : ''}${r.errors ? `\n错误: ${r.errors}` : ''}`)
-                    } else {
-                      alert(`图谱重建失败: ${r.message}`)
+                    const start = await buildGraph()
+                    if (!start.success) {
+                      alert(`启动失败: ${start.message}`)
+                      setRebuilding(false)
+                      return
                     }
-                    loadConfig()
-                  } catch (e: any) { alert(`重建图谱失败: ${e?.message || e}`) }
-                  finally { setRebuilding(false) }
+                    const poll = setInterval(async () => {
+                      try {
+                        const s = await buildGraphStatus()
+                        if (s.done) {
+                          clearInterval(poll)
+                          setRebuilding(false)
+                          const r = s.result
+                          if (r?.success) {
+                            alert(`图谱重建完成:\n处理 chunk: ${r.chunks_processed}\n证据: ${r.evidence_count}\n同步: ${r.sync_success} 成功${r.sync_failed ? `, ${r.sync_failed} 失败` : ''}${r.errors ? `\n错误: ${r.errors}` : ''}`)
+                          } else {
+                            alert(`图谱重建失败: ${(r as any)?.message || 'unknown'}`)
+                          }
+                          loadConfig()
+                        } else if (s.running) {
+                          const pct = s.total > 0 ? Math.round(s.progress / s.total * 100) : 0
+                          document.title = `[${pct}%] 重建图谱...`
+                        }
+                      } catch {}
+                    }, 2000)
+                  } catch (e: any) {
+                    alert(`重建图谱失败: ${e?.message || e}`)
+                    setRebuilding(false)
+                  }
                 }}
                 disabled={rebuilding}
               >

@@ -456,6 +456,7 @@ export async function cleanupOrphans(): Promise<{ milvus_deleted: number; neo4j_
 export interface BuildGraphResult {
   success: boolean
   message?: string
+  status?: { running: boolean; progress: number; total: number; done: boolean; result?: Record<string, unknown> }
   chunks_processed?: number
   evidence_count?: number
   affected_keys?: number
@@ -467,6 +468,12 @@ export interface BuildGraphResult {
 export async function buildGraph(): Promise<BuildGraphResult> {
   const res = await fetch(`${API_BASE}/system/build-graph`, { method: 'POST' })
   if (!res.ok) throw new Error(`Build graph failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function buildGraphStatus(): Promise<BuildGraphResult['status'] & { result?: BuildGraphResult }> {
+  const res = await fetch(`${API_BASE}/system/build-graph/status`)
+  if (!res.ok) throw new Error(`Status check failed: ${res.statusText}`)
   return res.json()
 }
 
