@@ -109,6 +109,8 @@ class BM25Retriever:
 
     def search(self, query: str, top_k: int = 20) -> list[dict[str, Any]]:
         if self._model is None:
+            self.load()
+        if self._model is None:
             return []
         tokenized = tokenize(query)
         scores = self._model.get_scores(tokenized)

@@ -471,6 +471,9 @@ async def search_debug(body: SearchDebugRequest):
     embedding = BGEM3Embedding()
     vector_retriever = MilvusVectorRetriever()
     bm25_retriever = BM25Retriever()
+    bm25_retriever.load()
+    if bm25_retriever._model is None:
+        bm25_retriever.rebuild_from_milvus()
     reranker = Reranker()
 
     k = settings.hybrid_rrf_k
