@@ -25,6 +25,7 @@ PP-DocLayoutV3/
 # Node
 frontend/node_modules/
 frontend/dist/
+*.tsbuildinfo
 
 # IDE
 .vscode/
