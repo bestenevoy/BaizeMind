@@ -2,147 +2,187 @@
 
 ## 定位
 
-Agentic-GraphRAG 的准确架构分类是：
-
 > **Hybrid RAG + Graph-Enhanced Retrieval (LightRAG-style Navigation Layer)**
 
-不是传统的 GraphRAG（图谱直接生成答案），也不是纯 Vector RAG。知识图谱的角色是**导航层**，引导 Chunk 检索，最终仍以原始文档 Chunk 作为回答依据。
+知识图谱的角色是**导航层**（非直接答案来源），引导 Chunk 检索，最终仍以原始文档 Chunk 作为回答依据。不是传统 GraphRAG（图谱直接生成答案），也不是纯 Vector RAG。
 
 ---
 
-## 核心检索链路
+## 四层索引体系
 
-系统维护 **四层索引**，查询时按需组合：
+系统维护四层索引，查询时按需组合：
 
 ```
-                   ┌──────────────┐
-                   │  Neo4j KG    │  (实体 + 关系)
-                   └──────┬───────┘
-                          │
-     ┌────────────────────┼───────────────────┐
-     ▼                    ▼                   ▼
-Chunk Index         Entity Index        Relation Index
-(Milvus dense)      (Milvus)            (Milvus)
-     │                    │                   │
-     ▼                    ▼                   ▼
-BM25 Index
+                    ┌──────────────┐
+                    │  Neo4j KG    │  (实体 + 关系)
+                    └──────┬───────┘
+                           │
+      ┌────────────────────┼───────────────────┐
+      ▼                    ▼                   ▼
+Chunk Index          Entity Index         Relation Index
+(Milvus dense)       (Milvus dense)       (Milvus dense)
+      │                    │                   │
+      ▼                    ▼                   ▼
+BM25 Index            (LightRAG 层)       (LightRAG 层)
 (rank-bm25)
 ```
 
-- **Chunk Index**: 文档片段的 dense vector（1024 维 BGE-M3）+ BM25 关键词索引
-- **Entity Index**: 实体名称+描述的 dense vector，支持语义检索（如"收购边缘 AI 公司的手机厂商" → Apple）
-- **Relation Index**: 关系句子的 dense vector（如 "Apple ACQUIRED Xnor.ai"），支持全局主题检索
+| 索引层 | 存储 | 维度 | 用途 |
+|-------|------|------|------|
+| Chunk Index | Milvus `agentic_rag` + `rank_bm25.BM25Okapi` | 1024 | 文档片段的 dense + 关键词检索 |
+| Entity Index | Milvus `lightrag_entities` | BGE-M3 dim | 实体语义匹配，如"收购边缘 AI 公司的手机厂商" → Apple |
+| Relation Index | Milvus `lightrag_relations` | BGE-M3 dim | 关系语义匹配，如 "Apple ACQUIRED Xnor.ai" |
+| Neo4j KG | Neo4j bolt://7687 | — | 图遍历 / 2-hop 邻居 / 最短路径 |
 
 ---
 
-## 系统架构
+## 系统架构总览
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                      FastAPI Layer (:8000)                        │
-│  POST /api/v1/documents/upload   POST /api/v1/qa/ask             │
-│  GET  /api/v1/documents/*        POST /api/v1/qa/stream (SSE)    │
-│  GET  /api/v1/system/stats        GET /health                    │
-└───────────────────────────┬──────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                     FastAPI Layer (:8000)                             │
+│  POST /api/v1/documents/upload    POST /api/v1/qa/ask               │
+│  GET  /api/v1/documents/*         POST /api/v1/qa/stream (SSE)      │
+│  GET  /api/v1/system/*            GET /api/v1/evaluation/*          │
+│  GET  /health                                                         │
+└───────────────────────────┬──────────────────────────────────────────┘
                             │
-               ┌────────────┴────────────┐
-               │   Agent Workflow         │
-               │  (LangGraph StateGraph)  │
-               └────────────┬────────────┘
+                ┌───────────┴───────────┐
+                │   Agent Workflow       │
+                │  (LangGraph StateGraph) │
+                └───────────┬───────────┘
                             │
-    ┌───────────────────────┼───────────────────────┐
-    │                       │                       │
-    ▼                       ▼                       ▼
-Query Router         LightRAG Agent          Retrieval Agent
-(intent classify)    (entity+relation        (hybrid search)
-    │                 +graph+chunk)              │
-    │                       │               ┌────┴────┐
-    │                       │               ▼         ▼
-    │                       │          Dense Search  BM25
-    │                       │          (separate     (separate
-    │                       │           queries)      queries)
-    │                       │               └────┬────┘
-    │                       │                    ▼
-    │                       │           RRF Fusion (dense 0.6 + BM25 0.4)
-    │                       │                    │
-    ▼                       ▼                    ▼
- ┌────────┐          ┌──────────┐         ┌─────────┐
- │chitchat│          │ Answer   │         │ Reranker│
- │  LLM   │          │ Generator│         │         │
- └────────┘          └────┬─────┘         └─────────┘
-                          │
-                          ▼
-                   Answer Validator
-                   (structured failure
-                    reasons + feedback)
-                          │
-                          ▼
-                 Final Answer + Citations
+    ┌───────────────────────┼───────────────────────────┐
+    │                       │                           │
+    ▼                       ▼                           ▼
+Query Router           LightRAG Agent              Retrieval Agent
+(LLM 意图分类)       (entity → relation         (hybrid search)
+    │                  → graph → chunk)              │
+    │                       │                   ┌────┴─────┐
+    │     ┌─────────────────┘                   ▼          ▼
+    │     │ fallback (LightRAG index 为空时): Dense Search  BM25
+    │     │   graph_agent → retrieval_agent    (Milvus)    (jieba)
+    │     │                                       └────┬─────┘
+    ▼     ▼                                            ▼
+  ┌────────┐  ┌──────────┐                     RRF Fusion
+  │chitchat│  │  Answer  │                (dense 0.6 + BM25 0.4)
+  │  LLM   │  │ Generator│                          │
+  └────────┘  └────┬─────┘                     ┌─────┴─────┐
+                   │                           ▼           ▼
+                   ▼                       Reranker      Dedup
+            Answer Validator          (SiliconFlow/   (chunk_id)
+            (结构化失败原因)            local/TF-IDF)
+                   │
+                   ▼
+          Final Answer + Citations
 ```
 
 ---
 
 ## LangGraph 工作流详情
 
-### AgentState（17 个字段）
+### AgentState（19 字段）
 
 ```python
-query: str          # 原始用户问题
-query_type: str     # chitchat | simple_fact | multi_hop | comparison | definition
-confidence: float   # 分类置信度
-graph_eligible: bool  # 多实体+关系词 → 允许图谱增强（兜底路由信号）
+query: str              # 原始用户问题
+query_type: str         # chitchat | simple_fact | multi_hop | comparison | definition
+confidence: float       # 分类置信度 0.0-1.0
+graph_eligible: bool    # 多实体+关系词 → 允许图谱增强
 
-documents: list     # 检索到的 chunks（operator.add 累加）
-graph_context: str  # 图谱扩展后的格式化上下文
-graph_entities: list[str]  # 检索到的相关实体名
-sub_queries: list[str]     # 从图谱生成的检索子问题（LightRAG 特性）
+documents: list[dict]   # 检索到的 chunks (Annotated[list, operator.add])
+graph_context: str      # 图谱扩展后的格式化文本
+graph_entities: list[str]   # 相关实体名
+sub_queries: list[str]      # LightRAG/graph_agent 生成的检索子问题
+graphrag_context: str       # MS GraphRAG 结果 (unreachable)
 
-retrieval_path: str  # 检索路径说明（可观测性）
-draft_answer: str    # 生成答案草稿
-final_answer: str    # 最终答案
-citations: list      # 引用列表
-validation: dict     # 验证结果
-validation_feedback: str  # 结构化失败反馈（指导重试）
-iteration: int       # 当前迭代次数
-max_iterations: int  # 最大迭代次数 (默认 5)
-error: str           # 错误信息
-folder: str          # 文件夹过滤
-tags: list[str]      # 标签过滤
+retrieval_path: str     # 检索路径说明（可观测性）
+draft_answer: str       # 答案草稿
+final_answer: str       # 最终答案
+citations: list[str]    # 引用 doc_id_chunk_id 列表
+validation: dict        # 验证结果
+validation_feedback: str    # 结构化失败反馈
+
+iteration: int          # 当前迭代
+max_iterations: int     # 最大迭代 (默认 5)
+error: str              # 错误信息
+folder: str             # 文件夹过滤
+tags: list[str]         # 标签过滤
 ```
 
-### 路由逻辑
+### 节点 (8 个)
+
+| 节点 | 职责 |
+|------|------|
+| `query_router` | LLM 意图分类：query_type + confidence + graph_eligible |
+| `chitchat` | 直接 LLM 回答，无检索，立即终止 |
+| `retrieval_agent` | Hybrid (dense + BM25) → RRF fusion → rerank → dedup |
+| `graph_agent` | LLM NER → Neo4j expand → 子问题生成 → 实体富化 BM25 → retrieval_agent |
+| `lightrag_agent` | Entity Index + Relation Index → Neo4j expand → chunk retrieve（含 fallback） |
+| `graphrag_search` | **[UNREACHABLE]** MS GraphRAG global/local/drift search |
+| `answer_generator` | LLM 用检索上下文 + 图谱上下文生成答案 + 引用 |
+| `answer_validator` | 幻觉检测 + 结构化失败原因 + 循环重试 |
+
+### 边
+
+| 类型 | 源 → 目标 | 条件 |
+|------|-----------|------|
+| 固定 | START → query_router | — |
+| 固定 | chitchat → END | — |
+| 固定 | retrieval_agent → answer_generator | — |
+| 固定 | lightrag_agent → answer_generator | — |
+| 固定 | answer_generator → answer_validator | — |
+| 条件 | query_router → chitchat / retrieval_agent / lightrag_agent | `_route_by_query_type` |
+| 条件 | graph_agent → retrieval_agent | `_route_for_multi_hop`（无条件路由到 retrieval） |
+| 条件 | graphrag_search → ... | `_route_after_graphrag` [UNREACHABLE] |
+| 条件 | answer_validator → END / retrieval_agent / answer_generator | `_route_after_validation` |
+
+### 路由逻辑（`_route_by_query_type`）
 
 ```
-START → query_router
-           │
-           ├─ chitchat → chitchat → END
-           │
-           ├─ holistic → retrieval_agent → answer_generator → answer_validator
-           │              (Microsoft GraphRAG 已停用)
-           │
-           ├─ multi_hop / comparison → lightrag_agent → answer_generator → answer_validator
-           │   (LightRAG: entity_index → relation_index → graph_expand → chunk_retrieve)
-           │
-           ├─ simple_fact / definition + graph_eligible → lightrag_agent → ...
-           │   (兜底：多实体 + 关系词的简单事实也走图谱增强)
-           │
-           └─ simple_fact / definition → retrieval_agent → answer_generator → answer_validator
-               (纯检索，不引入图谱噪声)
+query_router
+  │
+  ├─ chitchat ⇒ chitchat → END
+  │
+  ├─ holistic ⇒ retrieval_agent → answer_generator → answer_validator → END/(loop)
+  │   (MS GraphRAG 已停用，改为走普通检索)
+  │
+  ├─ multi_hop / comparison / (simple_fact|definition + graph_eligible=True)
+  │   ⇒ lightrag_agent → answer_generator → answer_validator → END/(loop)
+  │   │
+  │   └─ lightrag_agent 内部:
+  │      ├─ LightRAG entity index 有数据 → Entity Index → Relation Index → Graph Expand → Chunk Retrieve
+  │      └─ entity index 为空 (.count() == 0) → fallback: graph_agent → retrieval_agent
+  │
+  └─ simple_fact / definition (graph_eligible=False)
+      ⇒ retrieval_agent → answer_generator → answer_validator → END/(loop)
 ```
 
-### 验证循环
+**关键变更**：`multi_hop` / `comparison` 的主路径是 `lightrag_agent`（而非 `graph_agent`）。`lightrag_agent` 在 LightRAG 索引为空时自动 fallback 到 `graph_agent → retrieval_agent` 路径，保证可用性。
+
+### 验证循环（`_route_after_validation`）
 
 ```
-answer_validator ── is_valid=true ──→ END
+answer_validator
+  │
+  ├─ is_valid=true 或 iteration >= max_iterations  → END
+  │
+  └─ is_valid=false 且 iteration < max_iterations:
        │
-       │ is_valid=false, iteration < max_iter
+       ├─ failure_reason 含 "context_insufficient"
+       │   → retrieval_agent（重新检索）
        │
-       ├─ failure_reason = "context_insufficient"
-       │     └─→ retrieval_agent (重新检索)
-       │
-       └─ failure_reason = "missing_citation" / "unsupported_claim" / "conflict_detected"
-             └─→ answer_generator (带结构化反馈修复答案)
+       └─ failure_reason 为 missing_citation / unsupported_claim / conflict_detected
+           → answer_generator（带结构化反馈修复）
 ```
+
+### 验证失败原因
+
+| 原因 | 含义 | 重试策略 |
+|------|------|---------|
+| `missing_citation` | 缺少来源引用 | → answer_generator（要求加引用） |
+| `unsupported_claim` | 包含无依据声明 | → answer_generator（要求只用上下文信息） |
+| `context_insufficient` | 上下文信息不足 | → retrieval_agent（重新检索） |
+| `conflict_detected` | 上下文矛盾 | → answer_generator（要求说明矛盾） |
 
 ---
 
@@ -150,81 +190,124 @@ answer_validator ── is_valid=true ──→ END
 
 ### 1. 文档解析 (`src/document_parser/`)
 
-| 模块 | 职责 | 技术 |
-|------|------|------|
-| `mineru_parser.py` | PDF/Office 解析 | MinerU CLI (`.venv/bin/mineru`), ModelScope 源 |
-| `ocr_parser.py` | 扫描件/图片 OCR | PaddleOCR-VL-1.5 |
-| `table_parser.py` | 表格解析 + 跨页合并 | HTML/Markdown, 表头匹配 |
-| `chart_parser.py` | 图表描述生成 | OCR + DeepSeek VLM |
-| `langchain_compat.py` | PaddleOCR 兼容补丁 | monkey-patch langchain 旧模块 (必须在 paddleocr import 之前加载) |
+| 文件 | 职责 | 技术细节 |
+|------|------|---------|
+| `mineru_parser.py` | PDF/Office 解析 | MinerU CLI (`.venv/bin/mineru`, 通过 `sys.executable.parent` 自动解析), ModelScope 源 |
+| `ocr_parser.py` | 扫描件/图片 OCR | PaddleOCR-VL-1.5 (`./PaddleOCR-VL-1.5/PaddlePaddle/PaddleOCR-VL-1.5`) |
+| `table_parser.py` | 表格解析 + 跨页合并 | HTML/Markdown，表头匹配 |
+| `chart_parser.py` | 图表描述生成 | DeepSeek VLM (vision model) |
+| `langchain_compat.py` | PaddleOCR 兼容 | monkey-patch 已删除的 langchain 模块（`langchain_community.document_loaders` → `langchain_core` 等），**必须在 paddleocr import 之前加载** |
+
+**重要**：MinerU CLI 不在系统 PATH 中，`mineru_parser.py` 通过 `sys.executable.parent` 自动定位 `.venv/bin/mineru`，不可直接用裸命令。
 
 ### 2. Chunk 切分 (`src/chunker/`)
 
-- **HierarchicalChunker** (`chunk_size=512, overlap=64`):
-  - 基于 Markdown H1-H6 标题构建层级树
-  - 每个 heading 下使用 `RecursiveCharacterTextSplitter` 按语义边界递归切分
-  - 分隔符优先级: `\n\n` → `\n` → `。` → `！` → `？` → `；` → `，` → 字符级
-  - 解决了中文文本无法简单 `split()` 的问题
-- **TableChunker**: >30 行的大表自动拆分，保留表头
-- **ContextMerger**: 相邻同类 chunk 合并 (max 1500 字符)，去重用 `hash(text[:500])`
+| 文件 | 职责 | 技术细节 |
+|------|------|---------|
+| `hierarchical_chunker.py` | 层级切分 | `chunk_size=512, overlap=64`；基于 Markdown H1-H6 标题构建层级树；每个 heading 下用 `RecursiveCharacterTextSplitter` 按语义边界递归切分，分隔符优先级: `\n\n` → `\n` → `。` → `！` → `？` → `；` → `，` → 字符级 |
+| `table_chunker.py` | 大表拆分 | >30 行表格自动拆分，保留表头 |
+| `context_merger.py` | 合并去重 | 相邻同类 chunk 合并 (max 1500 字符)，去重用 `hash(text[:500])` |
 
 ### 3. Embedding (`src/embeddings/`)
 
-- **BGE-M3**: 本地 FlagEmbedding (GPU) + SiliconFlow API 双路 fallback
-- 输出: dense (1024 维) + sparse (lexical weights)
-- 最长 8192 tokens
-- `encode_dense_all()`: ThreadPoolExecutor 并发批处理 (concurrency=8)，替代串行循环
+| 文件 | 职责 | 技术细节 |
+|------|------|---------|
+| `bge_m3.py` | BGE-M3 embedding | 本地 FlagEmbedding (GPU) + SiliconFlow API 双路；输出 dense (1024 维) + sparse (lexical weights)；最大 8192 tokens；`encode_dense_all()` 用 `ThreadPoolExecutor` 并发批处理 (concurrency=8)，替代串行循环 |
+
+默认使用 SiliconFlow API (`BGE_M3_USE_LOCAL=false`)。本地模式需 GPU + 下载 `BAAI/bge-m3` 模型。
 
 ### 4. 检索系统 (`src/retrieval/`)
 
 #### 4a. 基础检索器
 
-| 模块 | 算法 | 说明 |
-|------|------|------|
-| `vector_retriever.py` | COSINE + IVF_FLAT | Milvus 密集向量，管理 chunk 集合 |
-| `bm25_retriever.py` | Okapi BM25 | jieba 分词，增量追加 (O(1) dedup via `_chunk_ids` set)，约 5-10x 加速 |
-| `hybrid_retriever.py` | RRF (k=60) | **dense=0.6, BM25=0.4**，支持分离查询 (dense 保持自然语言，BM25 可增强实体词) |
-| `reranker.py` | 三策略 | 1) SiliconFlow rerank API (BGE-reranker-v2-m3) 2) 本地 BGE-M3 cosine 3) TF-IDF fallback |
+| 文件 | 类名 | 算法 | 技术细节 |
+|------|------|------|---------|
+| `vector_retriever.py` | `MilvusVectorRetriever` | COSINE + IVF_FLAT | Milvus dense vector 搜索，chunk collection `agentic_rag`；`nlist=128`, `nprobe=16`；支持 `doc_id` filter expression |
+| `bm25_retriever.py` | `BM25Retriever` | Okapi BM25 | `rank_bm25.BM25Okapi`, jieba 中文分词（fallback: `str.lower().split()`）；增量追加 via `_chunk_ids` set (O(1) dedup)；pickle 持久化到 `data/bm25_index/` |
+| `hybrid_retriever.py` | `HybridRetriever` | RRF | **dense=0.6, BM25=0.4, rrf_k=60**；支持分离 dense/bm25 查询；`retrieval_similarity_threshold` 过滤 (默认 0.0 = 禁用) |
+| `reranker.py` | `Reranker` | 三策略 | 见下 |
+| `graph_expander.py` | `GraphExpander` | 图遍历 | Neo4j `get_neighbors()` 2-hop 扩展，去重 by `path_string` |
 
-#### 4b. 关键优化：Dense/BM25 查询分离
-
-```
-dense_query = 原始自然语言问题  ← 保持语义完整性
-bm25_query  = 原始问题 + 相关实体词  ← 增强关键词命中
-```
-
-不把实体词拼到 dense query 末尾，防止改变语义向量方向。
-
-#### 4c. LightRAG 索引层 (`src/retrieval/`)
-
-| 模块 | 说明 |
-|------|------|
-| `entity_index.py` | 实体向量索引。collectio='lightrag_entities'，embed 实体姓名+描述 |
-| `relation_index.py` | 关系向量索引。collection='lightrag_relations'，embed 关系句子 (如 "Apple ACQUIRED Xnor.ai") |
-| `lightrag_retriever.py` | LightRAG 核心编排器，3 种模式 (local/global/hybrid) |
-
-**LightRAG 检索流程：**
+#### 4b. Dense/BM25 查询分离
 
 ```
-Query → EntityIndex.search(query) → top-k 实体
-     → RelationIndex.search(query) → top-k 关系
+dense_query = 原始自然语言问题         ← 保持语义完整性
+bm25_query  = 原始问题 + 实体名（最多10个） ← 增强关键词命中
+```
+
+实体名不拼到 dense query 末尾，防止改变语义向量方向。
+
+#### 4c. Reranker 三策略
+
+| 方法 | `settings.reranker_method` | 实现 |
+|------|--------------------------|------|
+| Cross-Encoder | `"embedding"` (默认) | SiliconFlow BGE-reranker-v2-m3 API → fallback 本地 BGE-M3 cosine → fallback TF-IDF |
+| LLM Listwise | `"llm"` | DeepSeek LLM 列表重排序 (JSON 索引输出) → fallback TF-IDF |
+| Hybrid | `"hybrid"` | Embedding 取 top_k×2 → LLM 精选 final top_k |
+
+#### 4d. LightRAG 层
+
+| 文件 | 类名 | 职责 | Collection |
+|------|------|------|-----------|
+| `entity_index.py` | `EntityIndex` | 实体向量索引 | `lightrag_entities` |
+| `relation_index.py` | `RelationIndex` | 关系向量索引 | `lightrag_relations` |
+| `lightrag_retriever.py` | `LightRAGRetriever` | 编排器，3 种模式 (local/global/hybrid) | — |
+
+**LightRAG 检索流程:**
+
+```
+Query → EntityIndex.search(query, top_k=10) → top-k 实体 (按名称+描述匹配)
+     → RelationIndex.search(query, top_k=10) → top-k 关系 (按 "S P O" 匹配)
      → Neo4j get_neighbors (2-hop) → 图谱扩展
      → Entity-enriched BM25 query + Natural dense query
-     → Chunk Retrieval (dense + BM25, RRF fusion)
-     → Rerank → dedup
+     → Hybrid Retriever (dense + BM25, RRF fusion)
+     → Rerank → dedup by chunk_id
 ```
 
-**与原有 Graph Agent 的关键区别：**
+**三种检索模式 (`settings.lightrag_retrieval_mode`):**
 
-| 维度 | 原 Graph Agent | LightRAG Agent |
-|------|---------------|----------------|
-| 实体提取 | LLM 调用 (NER) | Entity Index 向量搜索 |
-| 输入限制 | 仅从 query 文本提取 | 语义匹配 (query 无需包含实体名) |
-| 关系检索 | 无 | Relation Index 单独搜索 |
-| 成本 | 每 query 1 次额外 LLM 调用 | 仅向量搜索 (无额外 LLM 调用) |
-| 回退策略 | - | 若 LightRAG 索引为空 → 自动回退到 graph_agent+retrieval |
+| 模式 | 实体索引 | 关系索引 | 图谱扩展 | 适用场景 |
+|------|---------|---------|---------|---------|
+| `local` | 搜索 top-5 实体 | 不用 | 实体 2-hop | 查询聚焦特定实体 |
+| `global` | 不用 | 搜索 top-k 关系 | 关系主体 1-hop | 查询聚焦主题/模式 |
+| `hybrid` (默认) | 搜索 top-5 实体 | 搜索 top-k 关系 | 两者合并 | 通用 |
 
-#### 4d. 图谱关系白名单 (`config/settings.py`)
+**Fallback 机制**：`lightrag_agent` 在 entity index `.count() == 0` 时自动回退到 `graph_agent → retrieval_agent`，确保无 LightRAG 索引时也能正常工作。
+
+### 5. 知识图谱 (`src/knowledge_graph/`)
+
+| 文件 | 类名 | 职责 | 技术细节 |
+|------|------|------|---------|
+| `entity_extractor.py` | `EntityExtractor` | 实体关系抽取 | DeepSeek LLM few-shot (`ENTITY_RELATION_SYSTEM` + `ENTITY_RELATION_EXAMPLE`); 可选 LangExtract library (`use_langextract=False`) |
+| `neo4j_manager.py` | `Neo4jManager` | Neo4j CRUD | **UNWIND 批量插入** (~50x 加速)；`get_neighbors()` 用 `r.type` property 获取真实关系类型 (不用 `type(r)` Neo4j 函数)；`find_paths()` 最短路径 (case-insensitive) |
+| `graph_query.py` | `GraphQuery` | 自然语言查图 | LLM Text-to-Cypher (`TEXT_TO_CYPHER_SYSTEM`); `search_by_entity_name()` case-insensitive |
+| `graphrag_indexer.py` | `GraphRAGIndexer` | MS GraphRAG 索引 | 通过 subprocess 调用 `graphrag init/index` CLI；DeepSeek chat + SiliconFlow embedding |
+| `graphrag_query.py` | `GraphRAGQuery` | MS GraphRAG 查询 | Global/Local/DRIFT 三种搜索；LanceDB vector stores；Parquet 数据源 |
+
+#### 5a. Neo4j UNWIND 批量插入
+
+```python
+# 所有实体的单次 UNWIND 查询（1 次网络往返）
+UNWIND $entities AS e
+MERGE (n:Entity {name: e.name})
+SET n.type = e.type, n.description = e.description, n.doc_id = $doc_id
+
+# 所有关系的单次 UNWIND 查询（1 次网络往返）
+UNWIND $relations AS r
+MATCH (s:Entity {name: r.subject})
+MATCH (o:Entity {name: r.object})
+MERGE (s)-[rel:RELATES_TO {type: r.predicate}]->(o)
+```
+
+#### 5b. Microsoft GraphRAG
+
+> **当前状态**: 索引和查询功能完整实现，但 LangGraph 工作流中 `graphrag_search` 节点 **不可达**（`_route_by_query_type` 将 `holistic` 路由到 `retrieval_agent`，`_route_for_multi_hop` 无到此节点的路径）。节点和边保留以确保 StateGraph 编译完整性。
+
+CLI 可用: `uv run python scripts/build_graphrag.py`
+
+### 6. 图谱关系过滤
+
+**白名单** (`config/settings.py`):
 
 ```python
 graph_relation_whitelist = [
@@ -232,56 +315,59 @@ graph_relation_whitelist = [
     "PART_OF", "DEPENDS_ON", "DEVELOPS", "PROVIDES_TECHNOLOGY_FOR",
     "COMPETES_WITH", "INTEGRATED_INTO", "POWERS", "SUPPORTS",
 ]
-# 低权重关系 (跳过): LOCATED_IN, FOUNDED_BY, CEO, HEADQUARTERED_IN, WORKS_FOR, MENTIONS, RELATES_TO
+# 低权重（跳过，除非无白名单命中）:
+# LOCATED_IN, FOUNDED_BY, CEO, HEADQUARTERED_IN, WORKS_FOR, MENTIONS, RELATES_TO
 ```
 
-查询时，`_filter_relevant_entities` 先用白名单预过滤图谱路径，再交给 LLM 精选实体。减少 token 消耗和噪声。
+`_filter_relevant_entities()` 先用白名单预过滤图谱路径，再交给 LLM 精选实体，减少 token 消耗和噪声。
 
-### 5. 知识图谱 (`src/knowledge_graph/`)
+### 7. LLM 层 (`src/llm/`)
 
-| 模块 | 职责 | 细节 |
+| 函数 | 模型 | 用途 |
 |------|------|------|
-| `entity_extractor.py` | 实体关系抽取 | DeepSeek LLM few-shot / LangExtract |
-| `neo4j_manager.py` | Neo4j CRUD | UNWIND 批量插入 (~50x 加速), `get_neighbors()` 使用 `r.type` property 获取真实关系类型 (非 `type(r)` Neo4j 函数) |
-| `graph_query.py` | 图谱查询 | Text-to-Cypher, 实体检索, 路径查询 |
+| `get_chat_llm(temperature, model)` | `deepseek-v4-flash` (默认) | 意图分类 / 答案生成 / 实体抽取 / 验证 |
+| `get_reasoner_llm(temperature)` | `deepseek-v4-pro` | 推理任务（预留） |
 
-### 5b. Microsoft GraphRAG (`src/knowledge_graph/`)
+基于 LangChain `ChatOpenAI`，兼容 OpenAI API。
 
-> **当前状态: 已停用 (DISABLED)**。`holistic` 类型 query 不再路由到 GraphRAG Search，改为走 `retrieval_agent`。
-> GraphRAG 节点和边保留在 LangGraph 中以确保编译完整性，但路由不可达。
+### 8. 存储 (`src/storage/`)
 
-### 6. Agent 框架 (`src/agents/`)
-
-| 模块 | 职责 | 技术 |
-|------|------|------|
-| `query_router.py` | 意图分类 | DeepSeek LLM, 返回 query_type + graph_eligible |
-| `retrieval_agent.py` | 混合检索 + 重排序 + dedup | 支持分离 dense/bm25 查询, rerank 用原始自然语言 query |
-| `graph_agent.py` | 实体提取 + 图谱扩展 + 子问题生成 | LLM NER, Neo4j expand, `generate_sub_questions()` |
-| `answer_validator.py` | 幻觉检测 + 结构化失败原因 | 4 类 failure_reasons (见下) |
-| `workflow.py` | LangGraph StateGraph 编排 | 8 节点, 5 条条件边, 多轮迭代 |
-
-**Graph Agent 子问题生成** (`generate_sub_questions`):
-从图谱实体和关系生成 2-4 个自然语言子问题，用于多 query 检索，而非简单拼接实体名。每个子问题聚焦一个方面，适合语义搜索。
-
-**Answer Validator 结构化失败原因:**
-
-| 原因 | 含义 | 重试策略 |
+| 文件 | 职责 | 技术细节 |
 |------|------|---------|
-| `missing_citation` | 缺少来源引用 | → answer_generator (要求加引用) |
-| `unsupported_claim` | 包含无依据声明 | → answer_generator (要求只使用上下文信息) |
-| `context_insufficient` | 上下文信息不足 | → retrieval_agent (重新检索) |
-| `conflict_detected` | 上下文矛盾 | → answer_generator (要求说明矛盾) |
+| `doc_store.py` | SQLite 文档元数据 | `data/documents.db`，表 `documents` (17 列) + `folder_markers`；WAL 模式；支持 folder/tags/status 过滤；folder 层级管理（创建/删除/移动） |
+| `auto_tagger.py` | LLM 自动标签 | 根据文档内容自动分配标签 |
+| `config_overrides.py` | 运行时配置覆盖 | JSON 持久化的配置覆盖机制 |
 
-### 7. 存储 (`src/storage/`)
+`get_doc_ids_by_filter()` 用于检索阶段的文件夹/标签过滤 → Milvus `doc_id in [...]` filter。
 
-- SQLite (`data/documents.db`): 文档元数据 (文件夹/标签/状态), LLM 自动标签
-- `get_doc_ids_by_filter()`: 按 folder/tags 过滤 doc_ids，传给 Milvus expr 过滤
+### 9. Agent 工具 (`src/agents/tools.py`)
 
-### 8. 评测 (`src/evaluation/`)
+独立的 LangChain `@tool` 函数集，**不在主工作流中使用**，为备选 tool-calling Agent 路径预留：
 
-- 数据集: 105 条多类型 QA 样本
-- 指标: Recall@K, 语义相似度, LLM Judge, 引用准确度, 幻觉评分
-- 18 个优先级分层的评估指标 (P1/P2/P3)
+| 工具 | 功能 |
+|------|------|
+| `hybrid_search(query, top_k=10)` | Hybrid dense+BM25 搜索 |
+| `bm25_search(query, top_k=10)` | BM25 关键词搜索 |
+| `rerank_results(query, results, top_k=5)` | 重排序 |
+| `query_kg(question)` | Text-to-Cypher 图谱查询 |
+| `expand_path(entity_name, max_hops=2)` | 图谱路径扩展 |
+| `get_entity_info(name)` | 实体详情获取 |
+
+GraphRAG 工具 (`graphrag_global_search`, `graphrag_local_search`, `graphrag_drift_search`) 已注释移除。
+
+### 10. 评测 (`src/evaluation/`)
+
+| 文件 | 职责 | 技术细节 |
+|------|------|---------|
+| `dataset.py` | 数据集管理 | 105 条多类型 QA 样本 (JSON)，支持 CRUD / 导入导出 |
+| `runner.py` | 评测执行器 | 运行 LangGraph workflow 对每条样本，计算指标 |
+| `metrics.py` | 指标计算 | Recall@K, 语义相似度, LLM Judge, 引用准确度, 幻觉评分 |
+
+评测接口 (`/api/v1/evaluation`) 支持：
+- 数据集增删改查、批量导入导出
+- **LLM 自动生成 QA 对**（从文档 chunks）
+- 运行评测并保存结果
+- 结果浏览
 
 ---
 
@@ -292,83 +378,175 @@ graph_relation_whitelist = [
 ```
 原始文档 (PDF/Word/Excel/PPT/Image/TXT)
   │
-  ├─ [1] MinerU 解析 → Markdown + JSON 结构化
+  ├─ [1] MinerU 解析 → Markdown + JSON 结构化 (data/processed/)
   ├─ [2] Chunk 切分 (HierarchicalChunker + TableChunker + ContextMerger)
   ├─ [3] BGE-M3 Embedding → dense (1024维) + sparse
-  ├─ [4] Milvus 向量索引 + BM25 关键词索引
-  └─ [5] 实体关系抽取 → Neo4j UNWIND 批量导入
-       └─→ build_lightrag_index.py → Entity Index + Relation Index (Milvus)
+  ├─ [4] Milvus 向量索引 (agentic_rag) + BM25 关键词索引 (data/bm25_index/)
+  ├─ [5] 实体关系抽取 → Neo4j UNWIND 批量导入
+  ├─ [6] LLM 自动标签 → SQLite (data/documents.db)
+  └─ [7] build_lightrag_index.py → Entity Index + Relation Index (Milvus)
 ```
 
-### 问答推理 (当前主路径)
+### 问答推理（当前路径）
 
 ```
 用户查询
   │
-  ├─ query_router: LLM 意图分类
+  ├─ query_router: LLM 意图分类 (5 种类型 + graph_eligible)
   │
-  ├─ chitchat → 直接 LLM 回答
+  ├─ chitchat → 直接 LLM 回答 → END
+  │
+  ├─ holistic → retrieval_agent → answer_generator → answer_validator → END/(loop)
   │
   ├─ simple_fact / definition (无 graph_eligible):
-  │     retrieval_agent ── dense(query) ──► Milvus
-  │                     ── bm25(query) ──► BM25
-  │                     ── RRF fusion ──► rerank ──► dedup
-  │                     ──► answer_generator ──► answer_validator
+  │     retrieval_agent
+  │       ├─ dense(query) → Milvus (COSINE, nprobe=16)
+  │       ├─ bm25(query) → BM25 (jieba, BM25Okapi)
+  │       ├─ RRF fusion (dense=0.6, BM25=0.4, k=60)
+  │       ├─ Rerank (SiliconFlow cross-encoder → local cosine → TF-IDF fallback)
+  │       └─ Dedup by chunk_id
+  │     → answer_generator → answer_validator
   │
-  └─ multi_hop / comparison / simple_fact+graph_eligible:
-        lightrag_agent ── entity_index.search ──► top-k 实体
-                       ── relation_index.search ──► top-k 关系
-                       ── Neo4j expand ──► 图谱邻居
-                       ── entity-enriched bm25 + natural dense
-                       ── chunk retrieval + rerank + dedup
-                       ──► answer_generator ──► answer_validator
+  └─ multi_hop / comparison / graph_eligible:
+        lightrag_agent
+          ├─ LightRAG 索引有数据:
+          │   ├─ EntityIndex.search(query, top_k=10) → 语义匹配实体
+          │   ├─ RelationIndex.search(query, top_k=10) → 语义匹配关系
+          │   ├─ Neo4j get_neighbors (2-hop) → 图谱扩展
+          │   ├─ Entity-enriched BM25 + Natural dense query
+          │   ├─ Hybrid retrieve (dense + BM25, RRF fusion)
+          │   └─ Rerank + dedup
+          │
+          └─ LightRAG 索引为空 (fallback):
+              graph_agent
+                ├─ LLM NER → extract_entities_from_query
+                ├─ Neo4j get_neighbors (2-hop) → 图谱路径
+                ├─ _filter_relevant_entities (白名单 + LLM 精选)
+                ├─ generate_sub_questions (2-4 个自然语言子问题)
+                └─ → retrieval_agent
+                      ├─ 对每个 sub_query + 原始 query 执行 hybrid search
+                      ├─ 按 chunk_id 去重，最多 20 结果
+                      └─ → answer_generator → answer_validator
 ```
 
 ---
 
-## API 接口
+## API 接口总览
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/v1/documents/upload` | 上传文档，触发全流程处理 |
-| GET | `/api/v1/documents/status/{id}` | 查询处理状态 |
-| GET | `/api/v1/documents/` | 文档列表 (支持 folder/tags 过滤) |
-| DELETE | `/api/v1/documents/{id}` | 删除文档及关联数据 |
-| POST | `/api/v1/qa/ask` | 问答接口 |
-| POST | `/api/v1/qa/stream` | SSE 流式问答 |
-| GET | `/api/v1/system/stats` | 系统统计 (Milvus/Neo4j/SQLite) |
-| GET | `/health` | 健康检查 |
+| `POST` | `/api/v1/documents/upload` | 上传文档，触发全流程处理 |
+| `GET` | `/api/v1/documents/list` | 文档列表 (folder/tags/status 过滤) |
+| `GET` | `/api/v1/documents/{id}/status` | 查询处理状态 |
+| `GET` | `/api/v1/documents/{id}/chunks` | 获取文档 Chunks |
+| `GET` | `/api/v1/documents/{id}/content` | 获取文档 Markdown 内容 |
+| `DELETE` | `/api/v1/documents/{id}` | 级联删除 (Milvus + BM25 + Neo4j + SQLite) |
+| `PUT` | `/api/v1/documents/{id}/move` | 移动文档到文件夹 |
+| `POST` | `/api/v1/documents/{id}/tags` | 设置标签 |
+| `POST` | `/api/v1/documents/{id}/retry` | 重新处理失败文档 |
+| `GET/POST/DELETE` | `/api/v1/documents/folders/*` | 文件夹管理 |
+| `POST` | `/api/v1/qa/ask` | 问答 (非流式) |
+| `POST` | `/api/v1/qa/stream` | 问答 (SSE 流式) |
+| `GET` | `/api/v1/system/config` | 系统配置查看 |
+| `GET` | `/api/v1/system/connectivity-check` | 外部服务连通性检查 |
+| `GET` | `/api/v1/system/stats` | 系统统计 |
+| `POST` | `/api/v1/system/cleanup-orphans` | 清理孤儿数据 |
+| `GET` | `/api/v1/system/graph/overview` | 图谱可视化数据 |
+| `GET` | `/api/v1/system/graph/entity/{name}` | 实体详情 |
+| `GET/PUT/DELETE` | `/api/v1/system/config/editable/*` | 运行时配置覆盖 |
+| `*` | `/api/v1/evaluation/*` | 评测数据集 + 运行 |
+| `GET` | `/health` | 健康检查 |
+
+---
+
+## 配置参数总览
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `deepseek_chat_model` | `deepseek-v4-flash` | 对话 / 分类 / 生成模型 |
+| `deepseek_reasoner_model` | `deepseek-v4-pro` | 推理模型 (预留) |
+| `siliconflow_embedding_model` | `BAAI/bge-m3` | Embedding 模型 |
+| `siliconflow_rerank_model` | `BAAI/bge-reranker-v2-m3` | Reranker 模型 |
+| `chunk_size` | 512 | 切分窗口 |
+| `chunk_overlap` | 64 | 重叠窗口 |
+| `hybrid_dense_weight` | 0.6 | RRF dense 权重 |
+| `hybrid_bm25_weight` | 0.4 | RRF BM25 权重 |
+| `hybrid_rrf_k` | 60 | RRF 常数 |
+| `retrieval_similarity_threshold` | 0.0 | 检索过滤阈值 (0=禁用) |
+| `reranker_method` | `embedding` | 重排序策略 |
+| `milvus_collection` | `agentic_rag` | Chunk 向量集合名 |
+| `lightrag_entity_collection` | `lightrag_entities` | 实体向量集合名 |
+| `lightrag_relation_collection` | `lightrag_relations` | 关系向量集合名 |
+| `lightrag_entity_top_k` | 10 | 实体索引 Top K |
+| `lightrag_relation_top_k` | 10 | 关系索引 Top K |
+| `lightrag_graph_hops` | 2 | 图谱扩展跳数 |
+| `lightrag_retrieval_mode` | `hybrid` | LightRAG 检索模式 |
+| `agent_max_iterations` | 5 | 验证循环最大迭代 |
+| `agent_temperature` | 0.1 | LLM 默认温度 |
+| `bge_m3_batch_size` | 32 | Embedding 批处理大小 |
 
 ---
 
 ## 部署架构
 
 ```
-┌─────────────────────────────────────────────────┐
-│                    服务器                        │
-│  ┌──────────────┐  ┌──────────────┐             │
-│  │ FastAPI       │  │ React 前端    │            │
-│  │ :8000         │  │ :3000        │            │
-│  └──────┬────────┘  └──────────────┘            │
-│         │                                        │
-│  ┌──────┴───────────────────────────┐           │
-│  │         外部服务                  │           │
-│  │  ┌───────┐ ┌───────┐ ┌───────┐  │           │
-│  │  │ Milvus│ │ Neo4j │ │DeepSeek│ │           │
-│  │  │:19530 │ │:7687  │ │  API  │ │           │
-│  │  └───────┘ └───────┘ └───────┘  │           │
-│  │  ┌───────────┐                  │           │
-│  │  │SiliconFlow│                  │           │
-│  │  │BGE-M3 API │                  │           │
-│  │  └───────────┘                  │           │
-│  └────────────────────────────────┘            │
-│  ┌─────────────────────────────────┐           │
-│  │        GPU (可选)               │           │
-│  │  PaddleOCR-VL (文档 OCR)       │           │
-│  │  BGE-M3 本地推理 (备选)        │           │
-│  └─────────────────────────────────┘          │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                       服务器                             │
+│  ┌──────────────┐  ┌──────────────┐                     │
+│  │ FastAPI       │  │ React 前端    │                    │
+│  │ :8000         │  │ :3000        │                    │
+│  └──────┬────────┘  └──────────────┘                    │
+│         │                                                │
+│  ┌──────┴───────────────────────────────┐               │
+│  │            外部服务                    │               │
+│  │  ┌───────┐ ┌───────┐ ┌───────────┐   │               │
+│  │  │ Milvus│ │ Neo4j │ │ DeepSeek  │   │               │
+│  │  │:19530 │ │:7687  │ │ API       │   │               │
+│  │  └───────┘ └───────┘ └───────────┘   │               │
+│  │  ┌───────────┐                       │               │
+│  │  │SiliconFlow│                       │               │
+│  │  │API (BGE)  │                       │               │
+│  │  └───────────┘                       │               │
+│  └──────────────────────────────────────┘               │
+│  ┌──────────────────────────────────────┐               │
+│  │          本地资源 (可选)              │               │
+│  │  PaddleOCR-VL (文档 OCR)            │               │
+│  │  BGE-M3 本地推理 (备选)             │               │
+│  │  MinerU PDF 解析                     │               │
+│  └──────────────────────────────────────┘               │
+└─────────────────────────────────────────────────────────┘
 ```
+
+| 服务 | 端口 | 用途 |
+|------|------|------|
+| Milvus Standalone | 19530 | 向量检索 (Chunk + Entity + Relation) |
+| Neo4j | 7687 (bolt) | 知识图谱存储 + 路径扩展 |
+| DeepSeek API | remote | LLM 推理 (分类/生成/验证/抽取) |
+| SiliconFlow API | remote | BGE-M3 Embedding + BGE Reranker |
+
+---
+
+## 已完成的性能优化
+
+| 优化项 | 位置 | 效果 |
+|--------|------|------|
+| Neo4j UNWIND 批量插入 | `neo4j_manager.py:66-102` | ~50x 加速（2 次网络往返替代 N+M 次） |
+| BM25 增量追加 | `bm25_retriever.py:36-44` | ~5-10x 加速（O(1) dedup，仅 tokenize 新 chunk） |
+| Dense/BM25 查询分离 | `hybrid_retriever.py:31-57` | 语义检索不受实体词干扰 |
+| Embedding 并发批处理 | `bge_m3.py:54-70` | ~3-5x 加速（ThreadPoolExecutor, concurrency=8） |
+| 图谱关系白名单 | `settings.py:63-69`, `workflow.py:251-291` | 减少低权重关系噪声，降低 LLM token 消耗 |
+| Chunk 去重安全化 | `context_merger.py:41` | `hash(text[:500])` 替代 `text[:100]` |
+| Validator 结构化失败原因 | `prompts.py:97-114`, `answer_validator.py`, `workflow.py:398-442` | 按原因定向重试，不盲目烧 token |
+| Query Router 兜底 | `prompts.py:16-20`, `query_router.py`, `workflow.py:41-54` | `graph_eligible` 信号防止误分类 |
+| Graph Agent 子问题生成 | `graph_agent.py:70-101` | 多 query 检索替代简单实体拼接 |
+| RRF 权重优化 | `settings.py:56-58` | dense 0.5→0.6, BM25 0.2→0.4 |
+| Neo4j `type(r)` bugfix | `neo4j_manager.py:113,143` | `r.type` property 替代 `type(r)` 函数 |
+
+### 待优化瓶颈
+
+- 实体抽取: 每个文档 N 次串行 LLM 调用（可并行化，~10-20x 潜力）
+- Embedding 批次: 串行 HTTP 调用（可并发，~3-5x 潜力）
+- `chunk_size=512` 放大下游成本（更大 chunk = 更少 LLM/embedding 调用）
 
 ---
 
@@ -377,76 +555,96 @@ graph_relation_whitelist = [
 ```
 agentic-rag/
 ├── config/
-│   ├── settings.py            # pydantic-settings, 加载 .env
-│   └── prompts.py             # 全部 LLM prompt 模板
+│   ├── settings.py              # pydantic-settings (99 行), 加载 .env
+│   └── prompts.py               # 全部 LLM prompt (136 行)
 ├── src/
-│   ├── document_parser/       # 文档解析 (MinerU, PaddleOCR-VL, 表格/图表)
-│   ├── chunker/               # Chunk 切分 + 合并 + 去重
-│   ├── embeddings/            # BGE-M3 嵌入 (API + 本地 GPU 双路)
-│   ├── retrieval/             # 检索系统
-│   │   ├── vector_retriever.py    # Milvus chunk 向量检索
-│   │   ├── bm25_retriever.py      # BM25 关键词检索
-│   │   ├── hybrid_retriever.py    # RRF 混合检索 (支持分离 dense/bm25 查询)
-│   │   ├── reranker.py            # 多策略重排序
-│   │   ├── graph_expander.py      # Neo4j 图谱路径扩展
-│   │   ├── entity_index.py        # LightRAG 实体向量索引
-│   │   ├── relation_index.py      # LightRAG 关系向量索引
-│   │   └── lightrag_retriever.py  # LightRAG 编排器
-│   ├── knowledge_graph/       # 知识图谱
-│   │   ├── entity_extractor.py    # LLM 实体关系抽取
-│   │   ├── neo4j_manager.py       # Neo4j CRUD + 批量导入
-│   │   ├── graph_query.py         # Text-to-Cypher + 图谱查询
-│   │   ├── graphrag_indexer.py    # [已停用] MS GraphRAG 索引
-│   │   └── graphrag_query.py      # [已停用] MS GraphRAG 搜索
-│   ├── llm/                   # DeepSeek LLM 封装
-│   ├── agents/                # Agent 框架
-│   │   ├── query_router.py        # 意图分类 + graph_eligible 检测
-│   │   ├── retrieval_agent.py     # 检索编排 + dedup
-│   │   ├── graph_agent.py         # 实体提取 + 图谱扩展 + 子问题生成
-│   │   ├── answer_validator.py    # 幻觉检测 + 结构化失败原因
-│   │   └── workflow.py            # LangGraph StateGraph 工作流
-│   └── evaluation/            # 评测体系
-├── api/                       # FastAPI 路由
-│   ├── main.py
-│   ├── schemas.py
+│   ├── document_parser/         # 文档解析
+│   │   ├── mineru_parser.py     # MinerU CLI PDF/Office 解析
+│   │   ├── ocr_parser.py        # PaddleOCR-VL 扫描件 OCR
+│   │   ├── table_parser.py      # 表格解析 + 跨页合并
+│   │   ├── chart_parser.py      # 图表 VLM 描述生成
+│   │   └── langchain_compat.py  # PaddleOCR 兼容补丁 (必须先加载)
+│   ├── chunker/                 # Chunk 切分
+│   │   ├── hierarchical_chunker.py  # 层级切分 (chunk_size=512)
+│   │   ├── table_chunker.py         # 表格拆分
+│   │   └── context_merger.py        # 合并去重
+│   ├── embeddings/
+│   │   └── bge_m3.py            # BGE-M3 (API + 本地 GPU 双路)
+│   ├── retrieval/               # 检索系统
+│   │   ├── vector_retriever.py  # Milvus chunk 向量检索
+│   │   ├── bm25_retriever.py    # BM25 关键词检索
+│   │   ├── hybrid_retriever.py  # RRF 混合检索 (dense + BM25)
+│   │   ├── reranker.py          # 三策略重排序
+│   │   ├── graph_expander.py    # Neo4j 图谱路径扩展
+│   │   ├── entity_index.py      # LightRAG 实体向量索引
+│   │   ├── relation_index.py    # LightRAG 关系向量索引
+│   │   └── lightrag_retriever.py # LightRAG 编排器
+│   ├── knowledge_graph/         # 知识图谱
+│   │   ├── entity_extractor.py  # LLM 实体关系抽取
+│   │   ├── neo4j_manager.py     # Neo4j CRUD + UNWIND 批量导入
+│   │   ├── graph_query.py       # Text-to-Cypher + 图谱查询
+│   │   ├── graphrag_indexer.py  # MS GraphRAG 索引
+│   │   └── graphrag_query.py    # MS GraphRAG 查询 (3 种模式)
+│   ├── llm/
+│   │   └── deepseek.py          # ChatOpenAI 封装
+│   ├── agents/                  # Agent 框架
+│   │   ├── query_router.py      # 意图分类 + graph_eligible
+│   │   ├── retrieval_agent.py   # 检索编排 + 去重
+│   │   ├── graph_agent.py       # NER + 图谱扩展 + 子问题生成
+│   │   ├── answer_validator.py  # 幻觉检测 + 结构化失败原因
+│   │   ├── workflow.py          # LangGraph StateGraph (8 节点, 5 条件边)
+│   │   └── tools.py             # LangChain @tool (备选路径)
+│   ├── storage/
+│   │   ├── doc_store.py         # SQLite 文档元数据 (339 行)
+│   │   ├── auto_tagger.py       # LLM 自动标签
+│   │   └── config_overrides.py  # 运行时配置覆盖
+│   └── evaluation/
+│       ├── dataset.py           # 105 条 QA 样本管理
+│       ├── runner.py            # 评测执行
+│       └── metrics.py           # 指标计算
+├── api/
+│   ├── main.py                  # FastAPI app (lifespan BM25 rebuild)
 │   └── routes/
-│       ├── documents.py       # 文档 CRUD
-│       ├── qa.py              # 问答案 /ask + /stream
-│       ├── management.py      # 系统统计 / 索引重建
-│       └── evaluation.py      # 评测接口
+│       ├── documents.py         # 文档 CRUD + 文件夹管理 (412 行)
+│       ├── qa.py                # 问答 /ask + /stream (153 行)
+│       ├── management.py        # 系统配置/统计/图谱可视化 (478 行)
+│       └── evaluation.py        # 评测接口 (375 行)
 ├── scripts/
-│   ├── ingest_documents.py    # 文档导入
-│   ├── build_graph.py         # 构建 Neo4j 知识图谱
-│   ├── build_graphrag.py      # 构建 MS GraphRAG 索引 [已停用]
-│   ├── build_lightrag_index.py # 构建 LightRAG 实体+关系向量索引
-│   └── run_evaluation.py      # 运行评测
-├── tests/                     # 测试
-├── frontend/                  # React 前端 (Vite + Tailwind + shadcn/ui)
-└── data/
-    ├── raw/                   # 原始文档
-    ├── processed/             # MinerU 处理输出
-    ├── documents.db           # SQLite 文档元数据
-    ├── bm25_index/            # BM25 持久化索引
-    └── graphrag/              # MS GraphRAG 数据 [已停用]
+│   ├── ingest_documents.py      # 文档导入 CLI
+│   ├── build_graph.py           # 构建 Neo4j 知识图谱
+│   ├── build_graphrag.py        # 构建 MS GraphRAG 索引
+│   ├── build_lightrag_index.py  # 构建 LightRAG 实体+关系向量索引
+│   ├── run_evaluation.py        # 运行评测
+│   ├── diagnose.py              # 系统诊断
+│   └── setup_milvus.sh          # Milvus 容器部署脚本
+├── tests/                       # 测试
+├── frontend/                    # React 前端
+│   └── src/
+│       ├── App.tsx              # 主应用
+│       ├── components/          # 组件
+│       ├── pages/               # 页面
+│       ├── hooks/               # 自定义 hooks
+│       ├── lib/                 # 工具库
+│       └── contexts/            # React contexts
+├── data/
+│   ├── raw/                     # 原始文档
+│   ├── processed/               # MinerU 处理输出
+│   ├── documents.db             # SQLite 文档元数据
+│   ├── bm25_index/              # BM25 持久化索引
+│   └── graphrag/                # MS GraphRAG 数据
+└── pyproject.toml               # uv 项目配置
 ```
 
 ---
 
-## 已完成的优化
+## 外部服务依赖
 
-| 优化 | 文件 | 效果 |
-|------|------|------|
-| Neo4j UNWIND 批量插入 | `neo4j_manager.py:66-102` | ~50x 加速 |
-| BM25 增量追加 | `bm25_retriever.py:36-44` | ~5-10x 加速 |
-| Dense/BM25 查询分离 | `hybrid_retriever.py:31-57`, `workflow.py:209-249` | 语义检索不受实体词干扰 |
-| Embedding 并发批处理 | `bge_m3.py:54-70` | ~3-5x 加速 |
-| 图谱关系白名单 | `settings.py:63-69`, `workflow.py:251-291` | 减少低权重关系噪声 |
-| Chunk 去重安全化 | `context_merger.py:41` | hash(text[:500]) 替代 text[:100] |
-| Validator 结构化失败原因 | `prompts.py:97-114`, `answer_validator.py`, `workflow.py:73-83,398-442` | 按原因重试，不盲目烧 token |
-| Query Router 兜底 | `prompts.py:16-20`, `query_router.py`, `workflow.py:41-54` | graph_eligible 信号防止误分类 |
-| Graph Agent 子问题生成 | `graph_agent.py:70-101`, `workflow.py:213-232` | 多 query 检索替代实体拼接 |
-| RRF 权重优化 | `settings.py:56-58` | dense 0.5→0.6, BM25 0.2→0.4 |
-| Neo4j type(r) bugfix | `neo4j_manager.py:113,143` | r.type property 替代 type(r) 函数，获取真实关系谓词 |
+| 服务 | 端口 | 必需 | 用途 |
+|------|------|------|------|
+| Milvus Standalone | 19530 | 是 | Chunk + Entity + Relation 向量检索 |
+| Neo4j | 7687 (bolt) | 是 | 知识图谱存储 + 路径扩展 |
+| DeepSeek API | remote | 是 | 所有 LLM 调用 (chat + reasoning) |
+| SiliconFlow API | remote | 是 | BGE-M3 Embedding + BGE Reranker (default) |
 
 ---
 
@@ -459,20 +657,24 @@ uv run -m uvicorn api.main:app --host 0.0.0.0 --port 8000
 # 前端
 cd frontend && npm run dev
 
+# TypeCheck 前端
+cd frontend && npx tsc --noEmit
+
+# 文档导入
+uv run python scripts/ingest_documents.py <file>
+
+# 构建知识图谱
+uv run python scripts/build_graph.py
+
 # 构建 LightRAG 索引 (需先有 Neo4j 数据)
 uv run python scripts/build_lightrag_index.py
 
 # 安全测试 (无需外部服务)
 uv run -m pytest tests/test_parser.py tests/test_chunker.py tests/test_graph.py -v
+
+# 全量测试 (需 Milvus/Neo4j/models 运行)
+uv run -m pytest tests/ -v
+
+# 系统诊断
+uv run python scripts/diagnose.py
 ```
-
----
-
-## 外部服务依赖
-
-| 服务 | 端口 | 用途 |
-|------|------|------|
-| Milvus Standalone | 19530 | Chunk 向量检索 + Entity/Relation 向量索引 |
-| Neo4j | 7687 (bolt) | 知识图谱存储 + 路径扩展 |
-| DeepSeek API | remote | LLM 推理 (分类/生成/验证) |
-| SiliconFlow API | remote | BGE-M3 Embedding + BGE Reranker |
