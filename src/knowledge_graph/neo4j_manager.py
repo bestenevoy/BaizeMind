@@ -86,15 +86,15 @@ class Neo4jManager:
     def get_stats(self) -> dict:
         self.connect()
         with self._driver.session() as session:
-            nodes = session.run("MATCH (n:Entity) RETURN count(n) as count").single()
-            facts = session.run("MATCH (n:Fact) RETURN count(n) as count").single()
-            attrs = session.run("MATCH (n:Attribute) RETURN count(n) as count").single()
-            rels = session.run("MATCH ()-[r]->() RETURN count(r) as count").single()
+            nodes = session.run("MATCH (n:Entity) WHERE n.active = true RETURN count(n) as count").single()
+            facts = session.run("MATCH (n:Fact) WHERE n.active = true RETURN count(n) as count").single()
+            attrs = session.run("MATCH (n:Attribute) WHERE n.active = true RETURN count(n) as count").single()
+            rels = session.run("MATCH (n:Entity)-[r:SUBJECT_OF]->(:Fact) WHERE n.active = true RETURN count(r) as count UNION ALL MATCH (:Fact)-[r:OBJECT_OF]->(n:Entity) WHERE n.active = true RETURN count(r) as count UNION ALL MATCH (n)-[r:HAS_ATTRIBUTE]->(:Attribute) WHERE n.active = true RETURN count(r) as count").values()
             return {
                 "entity_count": nodes["count"] if nodes else 0,
                 "fact_count": facts["count"] if facts else 0,
                 "attribute_count": attrs["count"] if attrs else 0,
-                "relation_count": rels["count"] if rels else 0,
+                "relation_count": sum(r[0] for r in rels) if rels else 0,
             }
 
     # ═══════════════════════════════════════════════════════
@@ -141,7 +141,7 @@ class Neo4jManager:
                 )
             else:
                 session.run(
-                    "MATCH (e:Entity {entity_key: $entity_key}) SET e.active = false, e.support_count = 0",
+                    "MATCH (e:Entity {entity_key: $entity_key}) DETACH DELETE e",
                     entity_key=entity_key,
                 )
 
@@ -158,7 +158,7 @@ class Neo4jManager:
                 )
             else:
                 session.run(
-                    "MATCH (e:Entity {entity_key: $entity_key}) SET e.active = false, e.support_count = 0",
+                    "MATCH (e:Entity {entity_key: $entity_key}) DETACH DELETE e",
                     entity_key=entity_key,
                 )
 
@@ -181,7 +181,7 @@ class Neo4jManager:
                 )
             else:
                 session.run(
-                    "MATCH (f:Fact {fact_key: $fact_key}) SET f.active = false, f.support_count = 0",
+                    "MATCH (f:Fact {fact_key: $fact_key}) DETACH DELETE f",
                     fact_key=fact_key,
                 )
 
@@ -203,7 +203,7 @@ class Neo4jManager:
                 )
             else:
                 session.run(
-                    "MATCH (a:Attribute {attr_full_key: $attr_full_key}) SET a.active = false, a.support_count = 0",
+                    "MATCH (a:Attribute {attr_full_key: $attr_full_key}) DETACH DELETE a",
                     attr_full_key=attr_full_key,
                 )
 
@@ -225,7 +225,7 @@ class Neo4jManager:
                 )
             else:
                 session.run(
-                    "MATCH (a:Attribute {attr_full_key: $attr_full_key}) SET a.active = false, a.support_count = 0",
+                    "MATCH (a:Attribute {attr_full_key: $attr_full_key}) DETACH DELETE a",
                     attr_full_key=attr_full_key,
                 )
 
