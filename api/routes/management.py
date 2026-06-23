@@ -577,6 +577,125 @@ async def search_debug(body: SearchDebugRequest):
     }
 
 
+# ── Build Graph ──
+
+
+@router.post("/build-graph")
+async def build_graph():
+    try:
+        from src.retrieval.bm25_retriever import BM25Retriever
+        from src.knowledge_graph.entity_extractor import EntityExtractor
+        from src.knowledge_graph.chunk_manager import compute_chunk_hash, create_or_reuse_chunk, build_sync_tasks
+        from src.knowledge_graph.evidence_writer import write_evidence
+        from src.knowledge_graph.graph_sync_worker import process_pending_tasks
+        from config.settings import settings
+        from src.storage import doc_store
+
+        bm25 = BM25Retriever()
+        bm25.load()
+        if bm25._model is None:
+            bm25.rebuild_from_milvus()
+        chunks = bm25._chunks
+        if not chunks:
+            return {"success": False, "message": "No chunks found. Please ingest documents first."}
+
+        logger.info(f"Building knowledge graph for {len(chunks)} chunks...")
+
+        extractor = EntityExtractor()
+        all_affected_keys: dict[str, set[str]] = {}
+        evidence_count = 0
+        errors = 0
+
+        for i, chunk in enumerate(chunks):
+            try:
+                ch = compute_chunk_hash(chunk["text"])
+                create_or_reuse_chunk(chunk["text"])
+                items = extractor.extract_evidence(chunk["text"], chunk_hash=ch)
+                if items:
+                    result = write_evidence(ch, items)
+                    evidence_count += result["count"]
+                    for t, keys in result.get("affected_keys", {}).items():
+                        if t not in all_affected_keys:
+                            all_affected_keys[t] = set()
+                        all_affected_keys[t].update(keys)
+            except Exception as e:
+                errors += 1
+                logger.warning(f"Evidence extraction failed for chunk {i}: {e}")
+
+        sync_success = 0
+        sync_failed = 0
+        if all_affected_keys:
+            tasks = build_sync_tasks(all_affected_keys)
+            doc_store.create_sync_tasks_batch(tasks)
+            for _ in range(50):
+                r = process_pending_tasks()
+                sync_success += r["success"]
+                sync_failed += r["failed"]
+                if r["success"] + r["failed"] == 0:
+                    break
+
+        return {
+            "success": True,
+            "chunks_processed": len(chunks),
+            "evidence_count": evidence_count,
+            "affected_keys": sum(len(v) for v in all_affected_keys.values()),
+            "sync_success": sync_success,
+            "sync_failed": sync_failed,
+            "errors": errors,
+        }
+    except Exception as e:
+        logger.error(f"Build graph failed: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+
+# ── Delete All ──
+
+
+@router.post("/delete-all-vectors")
+async def delete_all_vectors():
+    try:
+        from src.retrieval.vector_retriever import MilvusVectorRetriever
+        vr = MilvusVectorRetriever()
+        vr.connect()
+        vr._client.drop_collection(vr.collection_name)
+        return {"success": True, "message": "All vectors deleted"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+@router.post("/delete-all-graph")
+async def delete_all_graph():
+    try:
+        from src.knowledge_graph.neo4j_manager import Neo4jManager
+        nm = Neo4jManager()
+        nm.connect()
+        with nm._driver.session() as session:
+            session.run("MATCH (n) DETACH DELETE n")
+        return {"success": True, "message": "All Neo4j nodes and relations deleted"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+@router.post("/delete-inactive-graph")
+async def delete_inactive_graph():
+    try:
+        from src.knowledge_graph.neo4j_manager import Neo4jManager
+        nm = Neo4jManager()
+        nm.connect()
+        with nm._driver.session() as session:
+            entities = session.run("MATCH (e:Entity) WHERE e.active = false DETACH DELETE e").consume()
+            facts = session.run("MATCH (f:Fact) WHERE f.active = false DETACH DELETE f").consume()
+            attrs = session.run("MATCH (a:Attribute) WHERE a.active = false DETACH DELETE a").consume()
+        return {
+            "success": True,
+            "entities_deleted": entities.counters.nodes_deleted,
+            "facts_deleted": facts.counters.nodes_deleted,
+            "attrs_deleted": attrs.counters.nodes_deleted,
+        }
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
 # ── Runtime Config Overrides ──
 
 class ConfigOverrideBody(BaseModel):

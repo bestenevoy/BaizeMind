@@ -453,6 +453,41 @@ export async function cleanupOrphans(): Promise<{ milvus_deleted: number; neo4j_
   return res.json()
 }
 
+export interface BuildGraphResult {
+  success: boolean
+  message?: string
+  chunks_processed?: number
+  evidence_count?: number
+  affected_keys?: number
+  sync_success?: number
+  sync_failed?: number
+  errors?: number
+}
+
+export async function buildGraph(): Promise<BuildGraphResult> {
+  const res = await fetch(`${API_BASE}/system/build-graph`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Build graph failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function deleteAllVectors(): Promise<{ success: boolean; message?: string }> {
+  const res = await fetch(`${API_BASE}/system/delete-all-vectors`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Delete vectors failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function deleteAllGraph(): Promise<{ success: boolean; message?: string }> {
+  const res = await fetch(`${API_BASE}/system/delete-all-graph`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Delete graph failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function deleteInactiveGraph(): Promise<{ success: boolean; entities_deleted?: number; facts_deleted?: number; attrs_deleted?: number; message?: string }> {
+  const res = await fetch(`${API_BASE}/system/delete-inactive-graph`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Delete inactive graph failed: ${res.statusText}`)
+  return res.json()
+}
+
 // ── Evaluation ──
 
 export interface EvalSample {

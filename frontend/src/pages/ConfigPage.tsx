@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { getConfig, checkConnectivity, getSystemStats, listEditableConfig, updateConfigOverride, resetConfigOverride, cleanupOrphans } from '@/lib/api'
+import { getConfig, checkConnectivity, getSystemStats, listEditableConfig, updateConfigOverride, resetConfigOverride, cleanupOrphans, buildGraph, deleteAllVectors, deleteAllGraph, deleteInactiveGraph } from '@/lib/api'
 import type { ConfigResponse, ConnectivityResult, SystemStats, EditableConfigItem } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, Wifi, Save, RotateCcw, Pencil, Trash2 } from 'lucide-react'
+import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, Wifi, Save, RotateCcw, Pencil, Trash2, GitGraph } from 'lucide-react'
 
 function StatusIcon({ status }: { status: string }) {
   if (status === 'ok')
@@ -27,6 +27,7 @@ export function ConfigPage() {
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [saving, setSaving] = useState(false)
+  const [rebuilding, setRebuilding] = useState(false)
 
   const loadConfig = useCallback(async () => {
     setLoading(true)
@@ -183,7 +184,29 @@ export function ConfigPage() {
                 </div>
               </div>
             ) : null}
-            <div className="flex justify-end mt-3">
+            <div className="flex justify-end gap-2 mt-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  if (!confirm('重建知识图谱会重新抽取所有文档的实体和关系，可能需要几分钟。确定？')) return
+                  try {
+                    setRebuilding(true)
+                    const r = await buildGraph()
+                    if (r.success) {
+                      alert(`图谱重建完成:\n处理 chunk: ${r.chunks_processed}\n证据: ${r.evidence_count}\n同步: ${r.sync_success} 成功${r.sync_failed ? `, ${r.sync_failed} 失败` : ''}${r.errors ? `\n错误: ${r.errors}` : ''}`)
+                    } else {
+                      alert(`图谱重建失败: ${r.message}`)
+                    }
+                    loadConfig()
+                  } catch (e: any) { alert(`重建图谱失败: ${e?.message || e}`) }
+                  finally { setRebuilding(false) }
+                }}
+                disabled={rebuilding}
+              >
+                <GitGraph className="h-3.5 w-3.5 mr-1" />
+                {rebuilding ? '重建中...' : '重建知识图谱'}
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -201,6 +224,58 @@ export function ConfigPage() {
               >
                 <Trash2 className="h-3.5 w-3.5 mr-1" />
                 清理孤立数据
+              </Button>
+              <Separator orientation="vertical" className="h-8" />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  if (!confirm('删除 Neo4j 中所有 active=false 的残留节点？')) return
+                  try {
+                    const r = await deleteInactiveGraph()
+                    alert(`清除完成:\n实体: ${r.entities_deleted}\n事实: ${r.facts_deleted}\n属性: ${r.attrs_deleted}`)
+                    loadConfig()
+                  } catch (e: any) { alert(`清除失败: ${e?.message || e}`) }
+                }}
+                className="text-orange-600 border-orange-300 hover:bg-orange-50 dark:hover:bg-orange-950"
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1" />
+                清空不活跃图谱
+              </Button>
+              <Separator orientation="vertical" className="h-8" />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  if (!confirm('⚠️ 删除 Milvus 中所有向量数据？此操作不可撤销！')) return
+                  if (!confirm('再次确认: 删除所有向量？')) return
+                  try {
+                    const r = await deleteAllVectors()
+                    alert(r.success ? '向量已全部删除' : `删除失败: ${r.message}`)
+                    loadConfig()
+                  } catch (e: any) { alert(`删除失败: ${e?.message || e}`) }
+                }}
+                className="text-red-600 border-red-300 hover:bg-red-50 dark:hover:bg-red-950"
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1" />
+                清空向量库
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  if (!confirm('⚠️ 删除 Neo4j 中所有节点和关系？此操作不可撤销！')) return
+                  if (!confirm('再次确认: 删除所有图谱数据？')) return
+                  try {
+                    const r = await deleteAllGraph()
+                    alert(r.success ? '图谱已全部删除' : `删除失败: ${r.message}`)
+                    loadConfig()
+                  } catch (e: any) { alert(`删除失败: ${e?.message || e}`) }
+                }}
+                className="text-red-600 border-red-300 hover:bg-red-50 dark:hover:bg-red-950"
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1" />
+                清空图谱库
               </Button>
             </div>
           </CardContent>
