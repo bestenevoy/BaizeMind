@@ -269,8 +269,8 @@ async def retry_document(doc_id: str, background_tasks: BackgroundTasks):
     doc = doc_store.get_document(doc_id)
     if not doc:
         raise HTTPException(404, f"Document {doc_id} not found")
-    if doc["status"] != "failed":
-        raise HTTPException(400, f"Document {doc_id} is not in failed status (current: {doc['status']})")
+    if doc["status"] not in ("failed", "completed"):
+        raise HTTPException(400, f"Document {doc_id} status '{doc['status']}' cannot be retried")
 
     file_path = doc.get("file_path", "")
     folder = doc.get("folder", "/")
@@ -407,10 +407,10 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str):
 
         extractor = EntityExtractor()
 
-        evidence_chunks = [c for c in chunks if c["chunk_hash"] in {nc["chunk_hash"] for nc in new_chunk_texts}]
-        total_evidence = len(evidence_chunks)
+        # Process all chunks for evidence (not just new ones), to support re-extraction
+        total_evidence = len(chunks)
 
-        for i, chunk in enumerate(evidence_chunks):
+        for i, chunk in enumerate(chunks):
             ch = chunk["chunk_hash"]
             doc_store.update_document(doc_id, processing_stage=f"Evidence抽取 {i + 1}/{total_evidence}")
 

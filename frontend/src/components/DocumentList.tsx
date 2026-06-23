@@ -186,7 +186,7 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
                 >
                   <FolderInput className="h-3 w-3" />
                 </Button>
-                {doc.status === 'failed' && (
+                {(doc.status === 'failed' || doc.status === 'completed') && (
                   <Button
                     variant="ghost"
                     size="icon"
