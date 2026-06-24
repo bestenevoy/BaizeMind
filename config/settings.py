@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     raw_dir: Path = data_dir / "raw"
     processed_dir: Path = data_dir / "processed"
     evaluation_dir: Path = data_dir / "evaluation"
+    log_dir: Path = data_dir / "logs"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

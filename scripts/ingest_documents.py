@@ -7,6 +7,9 @@ import hashlib
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.logging_config import setup_logging
+setup_logging()
+
 from src.document_parser.mineru_parser import MinerUParser
 from src.chunker.hierarchical_chunker import HierarchicalChunker
 from src.chunker.table_chunker import TableChunker

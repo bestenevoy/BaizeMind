@@ -5,7 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import documents, qa, management, evaluation
 from config.settings import settings
+from src.logging_config import setup_logging
 from src.retrieval.bm25_retriever import BM25Retriever
+
+setup_logging()
 
 
 @asynccontextmanager

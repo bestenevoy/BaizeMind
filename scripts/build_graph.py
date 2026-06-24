@@ -5,6 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.logging_config import setup_logging
+setup_logging()
+
 from src.retrieval.bm25_retriever import BM25Retriever
 from src.knowledge_graph.entity_extractor import EntityExtractor
 from src.knowledge_graph.chunk_manager import compute_chunk_hash, create_or_reuse_chunk, build_sync_tasks

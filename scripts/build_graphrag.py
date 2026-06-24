@@ -5,6 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.logging_config import setup_logging
+setup_logging()
+
 from src.knowledge_graph.graphrag_indexer import GraphRAGIndexer
 from src.retrieval.bm25_retriever import BM25Retriever
 from config.settings import settings

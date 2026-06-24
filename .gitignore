@@ -13,10 +13,7 @@ __pycache__/
 uv.lock
 
 # Data
-data/documents.db
-data/processed/
-data/raw/
-data/graphrag/
+data/
 
 # Models (downloaded)
 PaddleOCR-VL-1.5/

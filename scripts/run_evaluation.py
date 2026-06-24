@@ -5,6 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.logging_config import setup_logging
+setup_logging()
+
 from src.evaluation.runner import EvalRunner
 
 
