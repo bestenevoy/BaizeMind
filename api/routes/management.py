@@ -9,7 +9,6 @@ from config.settings import settings
 from src.retrieval.vector_retriever import MilvusVectorRetriever
 from src.retrieval.bm25_retriever import BM25Retriever
 from src.retrieval.hybrid_retriever import HybridRetriever
-from src.retrieval.reranker import Reranker
 from src.embeddings.bge_m3 import BGEM3Embedding
 from src.knowledge_graph.neo4j_manager import Neo4jManager
 from src.storage import doc_store, config_overrides
@@ -456,6 +455,26 @@ class SearchDebugRequest(BaseModel):
     top_k: int = 20
 
 
+def _build_rewrite_info(query: str, dense_query: str, bm25_query: str) -> dict:
+    try:
+        from src.retrieval.bm25_retriever import tokenize
+        dense_tokens = list(tokenize(dense_query))
+        bm25_tokens = list(tokenize(bm25_query))
+        query_tokens = list(tokenize(query)) if dense_query != query else []
+    except Exception:
+        dense_tokens, bm25_tokens, query_tokens = [], [], []
+
+    return {
+        "original": query,
+        "dense_query": dense_query,
+        "bm25_query": bm25_query,
+        "dense_tokens": dense_tokens,
+        "bm25_tokens": bm25_tokens,
+        "query_tokens": query_tokens,
+        "enabled": settings.query_rewrite_enabled,
+    }
+
+
 @router.post("/search")
 async def search_debug(body: SearchDebugRequest):
     query = body.query
@@ -473,45 +492,29 @@ async def search_debug(body: SearchDebugRequest):
         id_list = " ".join(f'"{d}"' for d in ids)
         doc_filter = f"doc_id in [{id_list}]"
 
-    embedding = BGEM3Embedding()
-    vector_retriever = MilvusVectorRetriever()
-    bm25_retriever = BM25Retriever()
-    bm25_retriever.load()
-    if bm25_retriever._model is None:
-        bm25_retriever.rebuild_from_milvus()
-    reranker = Reranker()
+    # Query rewriting (same as main chat)
+    dense_query = query
+    bm25_query = query
+    if settings.query_rewrite_enabled:
+        try:
+            from src.agents.workflow import get_workflow
+            dense_query, bm25_query = get_workflow()._rewrite_query(query)
+        except Exception:
+            pass
 
-    k = settings.hybrid_rrf_k
-    dense_weight = settings.hybrid_dense_weight
-    bm25_weight = settings.hybrid_bm25_weight
+    rewrite_info = _build_rewrite_info(query, dense_query, bm25_query)
 
-    # Stage 1: Dense search
-    query_vec = embedding.encode_query_dense(query)
-    expr = f'doc_id == "{doc_filter}"' if doc_filter else None
-    dense_results = vector_retriever.search(query_vec, top_k=body.top_k, expr=expr)
+    # Hybrid retrieval (same engine as main chat, always returns debug data)
+    hybrid = HybridRetriever()
+    _, debug = hybrid.retrieve(
+        query, top_k=body.top_k,
+        dense_query=dense_query, bm25_query=bm25_query,
+        doc_filter=doc_filter,
+    )
 
-    # Stage 2: BM25 search
-    bm25_results = bm25_retriever.search(query, top_k=body.top_k)
-
-    # Stage 3: RRF fusion (before threshold)
-    scores_raw: dict[str, tuple[dict, float]] = {}
-    scores_dense: dict[str, float] = {}
-    scores_bm25: dict[str, float] = {}
-    for rank, doc in enumerate(dense_results):
-        cid = doc.get("chunk_id", "")
-        scores_raw[cid] = (doc, scores_raw.get(cid, (doc, 0.0))[1] + dense_weight / (k + rank + 1))
-        scores_dense[cid] = doc.get("score", 0)
-    for rank, doc in enumerate(bm25_results):
-        cid = doc.get("chunk_id", "")
-        scores_raw[cid] = (doc, scores_raw.get(cid, (doc, 0.0))[1] + bm25_weight / (k + rank + 1))
-        scores_bm25[cid] = doc.get("score", 0)
-
-    ranked_rrf = sorted(scores_raw.items(), key=lambda x: x[1][1], reverse=True)
-    max_rrf = ranked_rrf[0][1][1] if ranked_rrf else 1.0
-
-    # RRF results with pass/fail for threshold
+    max_rrf = debug["rrf_max_raw"]
     rrf_debug = []
-    for cid, (doc, raw_score) in ranked_rrf:
+    for cid, (doc, raw_score) in debug["rrf_ranked"]:
         normalized = raw_score / max_rrf if max_rrf > 0 else 0
         rrf_debug.append({
             "chunk_id": cid,
@@ -520,18 +523,13 @@ async def search_debug(body: SearchDebugRequest):
             "rrf_raw": round(raw_score, 8),
             "rrf_normalized": round(normalized, 4),
             "rrf_pass_threshold": current_threshold == 0 or normalized >= current_threshold,
-            "dense_score": round(scores_dense.get(cid, 0), 6),
-            "bm25_score": round(scores_bm25.get(cid, 0), 6),
+            "dense_score": round(debug["dense_scores"].get(cid, 0), 6),
+            "bm25_score": round(debug["bm25_scores"].get(cid, 0), 6),
         })
 
-    # Stage 4: Reranker
-    rrf_passed = [doc for cid, (doc, _) in ranked_rrf
-                  if current_threshold == 0 or (max_rrf > 0 and (_ / max_rrf) >= current_threshold)]
-    all_for_rerank = rrf_passed[:body.top_k] if rrf_passed else [doc for _, (doc, _) in ranked_rrf[:body.top_k]]
-    reranked = reranker.rerank(query, all_for_rerank, top_k=min(10, len(all_for_rerank)))
-
+    # Build rerank debug entries
     rerank_debug = []
-    for r in reranked:
+    for r in debug["reranked"]:
         rs = r.get("rerank_score", r.get("score", 0))
         rerank_debug.append({
             "chunk_id": r.get("chunk_id", ""),
@@ -552,15 +550,14 @@ async def search_debug(body: SearchDebugRequest):
     for item in rrf_debug + rerank_debug:
         item["filename"] = doc_name_cache.get(item.get("doc_id", ""), "")
 
-    # Final filtered view
     final = [r for r in rerank_debug if r["rerank_pass_threshold"]]
-    filter_drop = len(rerank_debug) - len(final)
 
     return {
         "query": query,
         "threshold": current_threshold,
         "dense_threshold": dense_threshold,
         "rerank_threshold": rerank_threshold,
+        "rewrite": rewrite_info,
         "stages": {
             "dense_top5": [{
                 "chunk_id": d.get("chunk_id", ""),
@@ -568,19 +565,19 @@ async def search_debug(body: SearchDebugRequest):
                 "filename": doc_name_cache.get(d.get("doc_id", ""), ""),
                 "text_preview": d.get("text", "")[:150],
                 "score": round(d.get("score", 0), 4),
-            } for d in dense_results[:5]],
+            } for d in debug["dense_results"][:5]],
             "bm25_top5": [{
                 "chunk_id": d.get("chunk_id", ""),
                 "doc_id": d.get("doc_id", ""),
                 "filename": doc_name_cache.get(d.get("doc_id", ""), ""),
                 "text_preview": d.get("text", "")[:150],
                 "score": round(d.get("score", 0), 4),
-            } for d in bm25_results[:5]],
+            } for d in debug["bm25_results"][:5]],
             "rrf": rrf_debug[:20],
             "rerank": rerank_debug,
         },
         "final_count": len(final),
-        "filtered_out_by_rerank_threshold": filter_drop,
+        "filtered_out_by_rerank_threshold": len(rerank_debug) - len(final),
     }
 
 

@@ -9,8 +9,37 @@ from src.agents.graph_agent import GraphAgent
 from src.agents.answer_validator import AnswerValidator
 from src.retrieval.lightrag_retriever import LightRAGRetriever
 from src.llm.deepseek import get_chat_llm
-from config.prompts import ANSWER_GENERATION_SYSTEM
+from config.prompts import ANSWER_GENERATION_SYSTEM, QUERY_REWRITE_SYSTEM
 from config.settings import settings
+
+
+def _serialize_debug(debug: dict, dense_query: str) -> dict:
+    """Strip large text fields from debug info to keep state lightweight."""
+    result = {
+        "dense_count": len(debug.get("dense_results", [])),
+        "bm25_count": len(debug.get("bm25_results", [])),
+        "rrf_total": len(debug.get("rrf_ranked", [])),
+        "rrf_top5_scores": [
+            {
+                "chunk_id": cid,
+                "rrf_normalized": round(s / debug["rrf_max_raw"], 4) if debug["rrf_max_raw"] else 0,
+                "dense_score": round(debug["dense_scores"].get(cid, 0), 4),
+                "bm25_score": round(debug["bm25_scores"].get(cid, 0), 4),
+            }
+            for cid, (_, s) in debug.get("rrf_ranked", [])[:5]
+        ],
+        "reranked_count": len(debug.get("reranked_filtered", [])),
+        "rerank_top3_scores": [
+            {
+                "chunk_id": r.get("chunk_id", ""),
+                "rerank_score": round(r.get("rerank_score", r.get("score", 0)), 4),
+                "text_preview": r.get("text", "")[:100],
+            }
+            for r in debug.get("reranked_filtered", [])[:3]
+        ],
+        "dense_query_used": dense_query,
+    }
+    return result
 
 
 class AgentState(TypedDict):
@@ -24,6 +53,7 @@ class AgentState(TypedDict):
     sub_queries: list[str]
     graphrag_context: str
     retrieval_path: str
+    retrieval_debug: dict  # debug info from hybrid retriever
     draft_answer: str
     final_answer: str
     citations: list[str]
@@ -107,6 +137,22 @@ class AgenticRAGWorkflow:
             self._llm = get_chat_llm()
         return self._llm
 
+    def _rewrite_query(self, query: str) -> tuple[str, str]:
+        """Use LLM to rewrite query for dense (semantic) and BM25 (keyword) search."""
+        import json
+        try:
+            prompt = f"{QUERY_REWRITE_SYSTEM}\n\nUser question: {query}"
+            resp = self._get_llm().invoke(prompt)
+            text = resp.content.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("\n```", 1)[0]
+            result = json.loads(text)
+            dense = result.get("dense_query", query)
+            bm25 = result.get("bm25_query", query)
+            return dense, bm25
+        except Exception:
+            return query, query
+
     # [DISABLED] GraphRAG query instance — retained for graph compilation
     def _get_graphrag(self):
         if self._graphrag_query is None:
@@ -152,6 +198,7 @@ class AgenticRAGWorkflow:
             "sub_queries": [],
             "graphrag_context": "",
             "retrieval_path": "",
+            "retrieval_debug": {},
             "draft_answer": "",
             "final_answer": "",
             "citations": [],
@@ -177,6 +224,7 @@ class AgenticRAGWorkflow:
             "sub_queries": [],
             "graphrag_context": "",
             "retrieval_path": "",
+            "retrieval_debug": {},
             "draft_answer": "",
             "final_answer": "",
             "citations": [],
@@ -230,9 +278,10 @@ class AgenticRAGWorkflow:
                 for sq in sub_queries[:3]:
                     dense_q = sq
                     bm25_q = sq
+                    if settings.query_rewrite_enabled:
+                        dense_q, bm25_q = self._rewrite_query(sq)
                     if graph_entities:
-                        entity_suffix = " ".join(graph_entities[:10])
-                        bm25_q = f"{sq} {entity_suffix}"
+                        bm25_q = f"{bm25_q} {' '.join(graph_entities[:10])}"
                     results = self.retrieval_agent.search(
                         sq, doc_ids=doc_filter,
                         dense_query=dense_q, bm25_query=bm25_q,
@@ -244,22 +293,25 @@ class AgenticRAGWorkflow:
                             all_results.append(r)
                 return {"documents": all_results[:20], "retrieval_path": f"[Multi-query] {len(sub_queries)} sub-queries → {len(all_results)} chunks"}
 
-            # Single query: dense stays natural language, BM25 gets entity enrichment
+            # Single query: rewrite for dense (semantic) and BM25 (keyword)
+            original_query = state["query"]
             dense_query = original_query
             bm25_query = original_query
+            if settings.query_rewrite_enabled:
+                dense_query, bm25_query = self._rewrite_query(original_query)
             if graph_entities:
-                entity_suffix = " ".join(graph_entities[:10])
-                bm25_query = f"{original_query} {entity_suffix}"
+                bm25_query = f"{bm25_query} {' '.join(graph_entities[:10])}"
 
-            results = self.retrieval_agent.search(
+            results, debug = self.retrieval_agent._retriever.retrieve(
                 original_query,
-                doc_ids=doc_filter,
-                dense_query=dense_query,
-                bm25_query=bm25_query,
+                top_k=20, doc_filter=doc_filter,
+                dense_query=dense_query, bm25_query=bm25_query,
             )
+            results = self.retrieval_agent._dedup_by_chunk_id(results)
             return {
                 "documents": results,
                 "retrieval_path": "[Retrieval] hybrid (dense + BM25)",
+                "retrieval_debug": _serialize_debug(debug, dense_query),
             }
         except Exception as e:
             return {"error": f"Retrieval failed: {e}"}

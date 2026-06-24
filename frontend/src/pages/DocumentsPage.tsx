@@ -18,7 +18,7 @@ export function DocumentsPage() {
   const handleUploadComplete = useCallback(() => setRefreshKey(k => k + 1), [])
 
   return (
-    <div className="container mx-auto pt-4 px-4 flex flex-col min-h-0 h-full">
+    <div className="container mx-auto pt-4 px-4 flex flex-col min-h-0 flex-1">
       <div className="flex items-end gap-3 flex-none pb-3 border-b">
             <button
               onClick={() => setActiveTab('docs')}
@@ -77,7 +77,7 @@ export function DocumentsPage() {
               <TagFilter selectedTags={selectedTags} onToggle={toggleTag} />
             </div>
 
-            <div className="lg:col-span-10 overflow-y-auto">
+            <div className="lg:col-span-10 min-h-0 overflow-y-auto">
               {activeTab === 'docs' ? (
                 <>
                   <div className="flex justify-end mb-2">

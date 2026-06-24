@@ -145,3 +145,13 @@ CHART_DESCRIPTION_SYSTEM = """Describe the content of this chart/image in detail
 3. Key data points and trends
 4. Notable observations
 """
+
+# ── Query Rewriting ────────────────────────────────────────────────
+QUERY_REWRITE_SYSTEM = """You are a query rewriter for a RAG system. Given a user question, produce two retrieval queries:
+
+1. **dense_query**: Rewrite the question for semantic/vector search. Use natural language, include synonyms and alternative phrasings, expand abbreviations, and make implicit concepts explicit. Keep it as one sentence.
+
+2. **bm25_query**: Extract key entities, technical terms, legal article references and important keywords for keyword search. Include numeric identifiers (article numbers, dates, document names) if present. Output as space-separated terms.
+
+Output ONLY a JSON object, no other text:
+{"dense_query": "rewritten semantic query here", "bm25_query": "keyword terms here"}"""

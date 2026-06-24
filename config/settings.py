@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     dense_vector_threshold: float = 0.6
     reranker_score_threshold: float = 0.3
     reranker_method: str = "embedding"  # "embedding" | "llm" | "hybrid"
+    query_rewrite_enabled: bool = True
 
     # Graph relation type filtering: high-relevance types for multi-hop/entity enrichment
     # Only paths involving these relation types are forwarded to the LLM entity filter

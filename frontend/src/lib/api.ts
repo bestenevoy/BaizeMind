@@ -401,6 +401,15 @@ export interface SearchDebugResponse {
   threshold: number
   dense_threshold: number
   rerank_threshold: number
+  rewrite: {
+    original: string
+    dense_query: string
+    bm25_query: string
+    dense_tokens: string[]
+    bm25_tokens: string[]
+    query_tokens: string[]
+    enabled: boolean
+  }
   stages: {
     dense_top5: SearchDebugChunk[]
     bm25_top5: SearchDebugChunk[]

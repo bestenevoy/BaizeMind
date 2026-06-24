@@ -14,7 +14,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<SearchDebugResponse | null>(null)
   const [expandedPreviews, setExpandedPreviews] = useState<Record<string, boolean>>({})
-  const [resultTab, setResultTab] = useState<string>('rrf')
+  const [resultTab, setResultTab] = useState<string>('rewrite')
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [saving, setSaving] = useState(false)
@@ -28,7 +28,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
     setLoading(true)
     setResult(null)
     setExpandedPreviews({})
-    setResultTab('rrf')
+    setResultTab('rewrite')
     try {
       const res = await searchDebug(query.trim(), folder, tags, docId)
       setResult(res)
@@ -160,6 +160,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
               <div className="flex-1 min-h-0 flex flex-col">
                 <div className="flex gap-0 border-b flex-none">
                   {[
+                    { key: 'rewrite', label: '查询改写' },
                     { key: 'rrf', label: `RRF融合 (${result.stages.rrf.length})` },
                     { key: 'rerank', label: `Reranker (${result.stages.rerank.length})` },
                     { key: 'dense', label: `Dense向量 Top ${result.stages.dense_top5.length}` },
@@ -180,6 +181,47 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                 </div>
 
                 <div className="flex-1 min-h-0 overflow-y-auto pt-2">
+                  {resultTab === 'rewrite' && (
+                    <div className="space-y-4">
+                      {result.rewrite.enabled ? (
+                        <>
+                          <div className="bg-muted/30 rounded p-3 space-y-1">
+                            <div className="text-xs font-medium text-muted-foreground mb-2">原始查询</div>
+                            <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.original}</pre>
+                            {result.rewrite.query_tokens.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {result.rewrite.query_tokens.map((t, i) => (
+                                  <Badge key={i} variant="outline" className="text-xs font-mono">{t}</Badge>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="bg-blue-50 dark:bg-blue-950/20 rounded p-3 space-y-1">
+                            <div className="text-xs font-medium text-blue-600 dark:text-blue-400 mb-2">Dense 查询（语义检索用）</div>
+                            <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.dense_query}</pre>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {result.rewrite.dense_tokens.map((t, i) => (
+                                <Badge key={i} variant="outline" className="text-xs font-mono bg-blue-50 dark:bg-blue-950/30">{t}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="bg-emerald-50 dark:bg-emerald-950/20 rounded p-3 space-y-1">
+                            <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400 mb-2">BM25 查询（关键词检索用）</div>
+                            <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.bm25_query}</pre>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {result.rewrite.bm25_tokens.map((t, i) => (
+                                <Badge key={i} variant="outline" className="text-xs font-mono bg-emerald-50 dark:bg-emerald-950/30">{t}</Badge>
+                              ))}
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-sm text-muted-foreground text-center py-8">
+                          查询改写已禁用（query_rewrite_enabled = false）
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {resultTab === 'rrf' && (
                     <div className="space-y-1">
                       {result.stages.rrf.map((c, i) => (
