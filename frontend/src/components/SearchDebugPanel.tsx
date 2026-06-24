@@ -228,17 +228,21 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                         <div key={i} className={`rounded p-2 border ${c.rrf_pass_threshold ? 'bg-muted/20 border-border' : 'bg-red-50 dark:bg-red-950/10 border-red-200 dark:border-red-800'}`}>
                           <div className="flex items-center gap-1.5">
                             <span className="text-primary font-semibold text-xs">[{i + 1}]</span>
-                            <span className="text-xs truncate max-w-[200px]" title={c.filename || c.doc_id}>{c.filename || c.doc_id}</span>
-                            <span className="ml-auto font-mono text-xs">RRF: {c.rrf_normalized}</span>
+                            <span className="text-xs break-all" title={`${c.filename || c.doc_id} / ${c.chunk_id}`}>
+                              <span className="font-medium">{c.filename || c.doc_id}</span>
+                              <span className="text-muted-foreground ml-1 font-mono">/ {c.chunk_id}</span>
+                            </span>
+                            <span className="ml-auto font-mono text-xs shrink-0">RRF: {c.rrf_normalized}</span>
                             {c.rrf_pass_threshold ? (
-                              <Check className="h-3 w-3 text-green-500" />
+                              <Check className="h-3 w-3 text-green-500 shrink-0" />
                             ) : (
-                              <X className="h-3 w-3 text-red-400" />
+                              <X className="h-3 w-3 text-red-400 shrink-0" />
                             )}
                           </div>
                           <div className="flex gap-3 mt-0.5 text-xs text-muted-foreground/50 font-mono">
                             <span>Dense: {c.dense_score?.toFixed(4) || '-'}</span>
                             <span>BM25: {c.bm25_score?.toFixed(4) || '-'}</span>
+                            <span className="text-muted-foreground/30 truncate" title={c.doc_id}>doc: {c.doc_id}</span>
                           </div>
                           <button onClick={() => togglePreview(`rrf-${i}`)} className="text-xs text-primary/70 hover:text-primary mt-0.5">
                             {expandedPreviews[`rrf-${i}`] ? '收起' : '展开'}文本
@@ -256,12 +260,15 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                         <div key={i} className={`rounded p-2 border ${c.rerank_pass_threshold ? 'bg-muted/20 border-border' : 'bg-red-50 dark:bg-red-950/10 border-red-200 dark:border-red-800'}`}>
                           <div className="flex items-center gap-1.5">
                             <span className="text-primary font-semibold text-xs">[{i + 1}]</span>
-                            <span className="text-xs truncate max-w-[200px]" title={c.filename || c.doc_id}>{c.filename || c.doc_id}</span>
-                            <span className="ml-auto font-mono text-xs">score: {c.rerank_score}</span>
+                            <span className="text-xs break-all" title={`${c.filename || c.doc_id} / ${c.chunk_id}`}>
+                              <span className="font-medium">{c.filename || c.doc_id}</span>
+                              <span className="text-muted-foreground ml-1 font-mono">/ {c.chunk_id}</span>
+                            </span>
+                            <span className="ml-auto font-mono text-xs shrink-0">score: {c.rerank_score}</span>
                             {c.rerank_pass_threshold ? (
-                              <Check className="h-3 w-3 text-green-500" />
+                              <Check className="h-3 w-3 text-green-500 shrink-0" />
                             ) : (
-                              <X className="h-3 w-3 text-red-400" />
+                              <X className="h-3 w-3 text-red-400 shrink-0" />
                             )}
                           </div>
                           <button onClick={() => togglePreview(`rerank-${i}`)} className="text-xs text-primary/70 hover:text-primary mt-0.5">
@@ -296,7 +303,7 @@ function StageMini({
   label, items, scoreField, expandedPreviews, onTogglePreview, prefix, scoreThreshold
 }: {
   label: string
-  items: Array<{ doc_id: string; filename: string; text_preview: string; score?: number }>
+  items: Array<{ doc_id: string; chunk_id: string; filename: string; text_preview: string; score?: number }>
   scoreField: string
   expandedPreviews: Record<string, boolean>
   onTogglePreview: (key: string) => void
@@ -324,10 +331,13 @@ function StageMini({
             <div key={i} className={`rounded p-1.5 ${scoreThreshold != null ? (pass ? 'bg-green-50 dark:bg-green-950/10 border border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-950/10 border border-red-200 dark:border-red-800') : 'bg-muted/20'}`}>
               <div className="flex items-center gap-1">
                 <span className="text-primary font-semibold text-xs">[{i + 1}]</span>
-                <span className="text-xs truncate max-w-[150px]" title={c.filename || c.doc_id}>{c.filename || c.doc_id}</span>
-                <span className="ml-auto font-mono text-xs">{s}</span>
+                <span className="text-xs break-all" title={`${c.filename || c.doc_id} / ${c.chunk_id}`}>
+                  <span className="font-medium">{c.filename || c.doc_id}</span>
+                  <span className="text-muted-foreground ml-1 font-mono">/ {c.chunk_id}</span>
+                </span>
+                <span className="ml-auto font-mono text-xs shrink-0">{s}</span>
                 {pass !== null && (
-                  pass ? <Check className="h-3 w-3 text-green-500" /> : <X className="h-3 w-3 text-red-400" />
+                  pass ? <Check className="h-3 w-3 text-green-500 shrink-0" /> : <X className="h-3 w-3 text-red-400 shrink-0" />
                 )}
               </div>
               <button onClick={() => onTogglePreview(`${prefix}-${i}`)} className="text-xs text-primary/70 hover:text-primary">
