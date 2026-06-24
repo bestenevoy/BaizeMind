@@ -21,9 +21,19 @@ def _load_jieba():
         return
     try:
         import os
-        os.environ.setdefault("JIEBA_CACHE_FILE", "")
-        import jieba
-        jieba.setLogLevel(20)
+        import tempfile
+
+        cache_dir = settings.data_dir / "jieba_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+
+        _orig = tempfile.tempdir
+        tempfile.tempdir = str(cache_dir)
+        try:
+            import jieba
+            jieba.setLogLevel(20)
+        finally:
+            tempfile.tempdir = _orig
+
         _JIEBA_LOADED = True
     except ImportError:
         pass

@@ -8,6 +8,8 @@ OVERRIDES_PATH = Path(settings.data_dir) / "config_overrides.json"
 
 _EDITABLE_KEYS = {
     "retrieval_similarity_threshold",
+    "dense_vector_threshold",
+    "reranker_score_threshold",
     "reranker_method",
     "chunk_size",
     "chunk_overlap",

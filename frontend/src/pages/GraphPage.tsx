@@ -25,7 +25,7 @@ export function GraphPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)]">
+    <div className="flex h-full">
       {/* Left: Graph */}
       <div className="flex-1 p-4 min-w-0">
         <Card className="h-full flex flex-col">

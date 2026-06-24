@@ -398,6 +398,8 @@ export interface SearchDebugChunk {
 export interface SearchDebugResponse {
   query: string
   threshold: number
+  dense_threshold: number
+  rerank_threshold: number
   stages: {
     dense_top5: SearchDebugChunk[]
     bm25_top5: SearchDebugChunk[]
@@ -409,11 +411,11 @@ export interface SearchDebugResponse {
   message?: string
 }
 
-export async function searchDebug(query: string, folder?: string | null, tags?: string[], topK?: number): Promise<SearchDebugResponse> {
+export async function searchDebug(query: string, folder?: string | null, tags?: string[], docId?: string | null, topK?: number): Promise<SearchDebugResponse> {
   const res = await fetch(`${API_BASE}/system/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, folder: folder || undefined, tags: tags?.length ? tags : undefined, top_k: topK || 20 }),
+    body: JSON.stringify({ query, folder: folder || undefined, tags: tags?.length ? tags : undefined, doc_id: docId || undefined, top_k: topK || 20 }),
   })
   if (!res.ok) throw new Error(`Search debug failed: ${res.statusText}`)
   return res.json()

@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     hybrid_bm25_weight: float = 0.4
     hybrid_rrf_k: int = 60
     retrieval_similarity_threshold: float = 0.6
+    dense_vector_threshold: float = 0.6
     reranker_score_threshold: float = 0.3
     reranker_method: str = "embedding"  # "embedding" | "llm" | "hybrid"
 

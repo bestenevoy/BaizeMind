@@ -452,6 +452,7 @@ class SearchDebugRequest(BaseModel):
     query: str
     folder: str | None = None
     tags: list[str] | None = None
+    doc_id: str | None = None
     top_k: int = 20
 
 
@@ -459,9 +460,13 @@ class SearchDebugRequest(BaseModel):
 async def search_debug(body: SearchDebugRequest):
     query = body.query
     current_threshold = settings.retrieval_similarity_threshold
+    dense_threshold = settings.dense_vector_threshold
+    rerank_threshold = settings.reranker_score_threshold
 
     doc_filter = None
-    if body.folder or body.tags:
+    if body.doc_id:
+        doc_filter = f'doc_id == "{body.doc_id}"'
+    elif body.folder or body.tags:
         ids = doc_store.get_doc_ids_by_filter(folder=body.folder or None, tags=body.tags or None)
         if not ids:
             return {"query": query, "threshold": current_threshold, "stages": {}, "filtered_count": 0, "message": "No documents match the folder/tag filter"}
@@ -533,7 +538,7 @@ async def search_debug(body: SearchDebugRequest):
             "doc_id": r.get("doc_id", ""),
             "text_preview": r.get("text", "")[:200],
             "rerank_score": round(rs, 4) if isinstance(rs, (int, float)) else 0,
-            "rerank_pass_threshold": current_threshold == 0 or (isinstance(rs, (int, float)) and rs >= current_threshold),
+            "rerank_pass_threshold": rerank_threshold == 0 or (isinstance(rs, (int, float)) and rs >= rerank_threshold),
         })
 
     # Build filename cache
@@ -554,6 +559,8 @@ async def search_debug(body: SearchDebugRequest):
     return {
         "query": query,
         "threshold": current_threshold,
+        "dense_threshold": dense_threshold,
+        "rerank_threshold": rerank_threshold,
         "stages": {
             "dense_top5": [{
                 "chunk_id": d.get("chunk_id", ""),
