@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, Wifi, Save, RotateCcw, Pencil, Trash2, GitGraph } from 'lucide-react'
+import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, Wifi, Save, RotateCcw, Pencil, Trash2, GitGraph, Settings, Activity } from 'lucide-react'
 
 function StatusIcon({ status }: { status: string }) {
   if (status === 'ok')
@@ -31,6 +31,7 @@ export function ConfigPage() {
   const [saving, setSaving] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
   const [rebuildPhase, setRebuildPhase] = useState('')
+  const [activeTab, setActiveTab] = useState<'status' | 'config'>('status')
 
   const loadConfig = useCallback(async () => {
     setLoading(true)
@@ -111,8 +112,34 @@ export function ConfigPage() {
   }, [loadConfig])
 
   return (
-    <div className="container mx-auto py-6 px-4 max-w-4xl">
-      <div className="space-y-6">
+    <div className="container mx-auto pt-4 px-4 flex flex-col min-h-0 flex-1 max-w-4xl">
+      <div className="flex items-end gap-3 flex-none pb-3 border-b mb-4">
+        <button
+          onClick={() => setActiveTab('status')}
+          className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-md border border-b-0 transition-colors ${
+            activeTab === 'status'
+              ? 'bg-background text-foreground border-border font-medium'
+              : 'text-muted-foreground hover:text-foreground border-transparent'
+          }`}
+        >
+          <Activity className="h-4 w-4" />
+          系统状态
+        </button>
+        <button
+          onClick={() => setActiveTab('config')}
+          className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-md border border-b-0 transition-colors ${
+            activeTab === 'config'
+              ? 'bg-background text-foreground border-border font-medium'
+              : 'text-muted-foreground hover:text-foreground border-transparent'
+          }`}
+        >
+          <Settings className="h-4 w-4" />
+          配置管理
+        </button>
+        <div className="flex-1 border-b" />
+      </div>
+      {activeTab === 'status' ? (
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
 
         {/* Connectivity Check */}
         <Card>
@@ -330,6 +357,10 @@ export function ConfigPage() {
           </CardContent>
         </Card>
 
+      </div>
+      ) : (
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
+
         {/* Configuration */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-3">
@@ -504,6 +535,7 @@ export function ConfigPage() {
           </CardContent>
         </Card>
       </div>
+      )}
     </div>
   )
 }
