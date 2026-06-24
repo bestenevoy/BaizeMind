@@ -258,7 +258,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                             {expandedPreviews[`rrf-${i}`] ? '收起' : '展开'}文本
                           </button>
                           {expandedPreviews[`rrf-${i}`] && (
-                            <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{c.text_preview}</p>
+                            <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap break-all overflow-y-auto">{c.text_preview}</p>
                           )}
                         </div>
                       )})}
@@ -287,7 +287,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                             {expandedPreviews[`rerank-${i}`] ? '收起' : '展开'}文本
                           </button>
                           {expandedPreviews[`rerank-${i}`] && (
-                            <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{c.text_preview}</p>
+                            <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap break-all overflow-y-auto">{c.text_preview}</p>
                           )}
                         </div>
                       )})}
@@ -360,7 +360,7 @@ function StageMini({
                 {expandedPreviews[`${prefix}-${i}`] ? '收起' : '展开'}文本
               </button>
               {expandedPreviews[`${prefix}-${i}`] && (
-                <p className="mt-0.5 text-xs text-muted-foreground whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{c.text_preview}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground whitespace-pre-wrap break-all overflow-y-auto">{c.text_preview}</p>
               )}
             </div>
           )})}
