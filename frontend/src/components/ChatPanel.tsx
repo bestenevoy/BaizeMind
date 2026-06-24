@@ -85,12 +85,15 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
           if (step.node === 'query_router' && step.result?.query_type) {
             queryType = step.result.query_type as string
           }
-          if (step.node === 'retrieval_agent' && step.result?.documents) {
+          if ((step.node === 'retrieval_agent' || step.node === 'lightrag_agent') && step.result?.documents) {
             retrievedDocs = (step.result.documents as Array<Record<string, unknown>>).map(d => ({
               doc_id: d.doc_id as string,
               chunk_id: d.chunk_id as string,
               text: d.text as string,
               score: d.score as number,
+              rerank_score: d.rerank_score as number | null | undefined,
+              dense_score: d.dense_score as number | null | undefined,
+              bm25_score: d.bm25_score as number | null | undefined,
               filename: d.filename as string | undefined,
             }))
             if (step.result.search_debug_data) {

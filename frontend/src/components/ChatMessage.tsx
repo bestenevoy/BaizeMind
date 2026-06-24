@@ -23,6 +23,7 @@ export interface Message {
 const NODE_ICONS: Record<string, React.ReactNode> = {
   query_router: <Brain className="h-3 w-3" />,
   retrieval_agent: <Search className="h-3 w-3" />,
+  lightrag_agent: <Search className="h-3 w-3" />,
   graph_agent: <GitGraph className="h-3 w-3" />,
   graphrag_search: <GitGraph className="h-3 w-3" />,
   answer_generator: <MessageSquare className="h-3 w-3" />,
@@ -54,7 +55,7 @@ function StepResult({ step, userQuery, searchDebugData }: { step: StreamStep; us
       </span>
     )
   }
-  if (step.node === 'retrieval_agent') {
+  if (step.node === 'retrieval_agent' || step.node === 'lightrag_agent') {
     const count = result.count as number
     return (
       <span className="text-xs text-foreground/70 ml-1">
@@ -74,7 +75,7 @@ function StepResult({ step, userQuery, searchDebugData }: { step: StreamStep; us
           <div className="mt-1 space-y-1">
             {(result.documents as Array<Record<string, unknown>>)?.map((doc, i) => (
               <div key={i} className="bg-muted/30 rounded p-1.5 text-xs">
-                <div className="text-muted-foreground">[{i + 1}] {String(doc.doc_id)}/{String(doc.chunk_id)} ({(Number(doc.score)).toFixed(3)})</div>
+                <div className="text-muted-foreground">[{i + 1}] {String(doc.doc_id)}/{String(doc.chunk_id)}{doc.rerank_score != null ? ` rerank:${Number(doc.rerank_score).toFixed(3)}` : ''}{doc.dense_score != null ? ` dense:${Number(doc.dense_score).toFixed(3)}` : ''}{doc.bm25_score != null ? ` bm25:${Number(doc.bm25_score).toFixed(2)}` : ''}</div>
                 <p className="whitespace-pre-wrap break-all">{doc.text as string}</p>
               </div>
             ))}
@@ -107,8 +108,27 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
     setTimeout(() => setCopied(false), 2000)
   }
 
+  // Fallback: extract retrieved_docs from steps if message.retrieved_docs is missing
+  const effectiveDocs = useMemo(() => {
+    if (message.retrieved_docs && message.retrieved_docs.length > 0) return message.retrieved_docs
+    const retrievalStep = message.steps?.find(
+      s => (s.node === 'retrieval_agent' || s.node === 'lightrag_agent') && s.result?.documents
+    )
+    if (!retrievalStep?.result?.documents) return message.retrieved_docs || []
+    return (retrievalStep.result.documents as Array<Record<string, unknown>>).map(d => ({
+      doc_id: d.doc_id as string || '',
+      chunk_id: d.chunk_id as string || '',
+      text: d.text as string || '',
+      score: (typeof d.score === 'number' ? d.score : 0) as number,
+      rerank_score: (typeof d.rerank_score === 'number' ? d.rerank_score : null) as number | null,
+      dense_score: (typeof d.dense_score === 'number' ? d.dense_score : null) as number | null,
+      bm25_score: (typeof d.bm25_score === 'number' ? d.bm25_score : null) as number | null,
+      filename: d.filename as string | undefined,
+    }))
+  }, [message.retrieved_docs, message.steps])
+
   const handleCitationClick = useCallback((seq: number) => {
-    if (!message.retrieved_docs || seq > message.retrieved_docs.length) return
+    if (!effectiveDocs || seq > effectiveDocs.length) return
     setActiveCitation(seq)
     setShowContext(true)
     setTimeout(() => {
@@ -117,7 +137,7 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })
       }
     }, 120)
-  }, [message.retrieved_docs])
+  }, [effectiveDocs])
 
   const scrollToChunk = useCallback((seq: number) => {
     handleCitationClick(seq)
@@ -138,7 +158,7 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
     a: ({ href, className, children, ...props }: React.HTMLProps<HTMLAnchorElement> & { 'data-seq'?: string }) => {
       if (className === 'citation-ref') {
         const seq = parseInt(props['data-seq'] || '0', 10)
-        if (!seq || !message.retrieved_docs || seq > message.retrieved_docs.length) {
+        if (!seq || !effectiveDocs || seq > effectiveDocs.length) {
           return <span className="font-semibold text-primary/70">[{seq}]</span>
         }
         return (
@@ -182,7 +202,7 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
     ),
     th: ({ children, ...props }: React.HTMLProps<HTMLTableHeaderCellElement>) => <th className="border border-border px-2 py-1 bg-muted font-semibold" {...props}>{children}</th>,
     td: ({ children, ...props }: React.HTMLProps<HTMLTableDataCellElement>) => <td className="border border-border px-2 py-1" {...props}>{children}</td>,
-  }), [message.retrieved_docs, handleCitationClick])
+  }), [effectiveDocs, handleCitationClick])
 
   return (
     <div className={`flex gap-3 animate-msg-in ${isUser ? 'flex-row-reverse' : ''}`}>
@@ -256,31 +276,41 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
         )}
         {!isUser && message.citations && message.citations.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1">
-            {message.citations.slice(0, 5).map((cit, i) => (
-              <Badge
-                key={i}
-                variant="outline"
-                className="text-xs cursor-pointer hover:bg-muted transition-colors"
-                onClick={() => scrollToChunk(i + 1)}
-                title="点击查看来源"
-              >
-                {cit}
-              </Badge>
-            ))}
+            {message.citations.slice(0, 5).map((cit, i) => {
+              const doc = effectiveDocs?.[i]
+              return (
+                <Badge
+                  key={i}
+                  variant="outline"
+                  className="text-xs cursor-pointer hover:bg-muted transition-colors"
+                  onClick={() => scrollToChunk(i + 1)}
+                  title="点击查看来源"
+                >
+                  {cit}
+                  {doc && (
+                    <span className="ml-1 text-muted-foreground">
+                      {doc.rerank_score != null && <span className="text-primary/80">rerank:{doc.rerank_score.toFixed(3)}</span>}
+                      {doc.dense_score != null && <span> dense:{doc.dense_score.toFixed(3)}</span>}
+                      {doc.bm25_score != null && <span> bm25:{doc.bm25_score.toFixed(2)}</span>}
+                    </span>
+                  )}
+                </Badge>
+              )
+            })}
           </div>
         )}
-        {!isUser && message.retrieved_docs && message.retrieved_docs.length > 0 && (
+        {!isUser && effectiveDocs.length > 0 && (
           <div className="mt-2">
             <button
               onClick={() => setShowContext(!showContext)}
               className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               {showContext ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              检索上下文 ({message.retrieved_docs.length} 条)
+              检索上下文 ({effectiveDocs.length} 条)
             </button>
             {showContext && (
               <div className="mt-2 space-y-2">
-                {message.retrieved_docs.map((doc, i) => (
+                {effectiveDocs.map((doc, i) => (
                   <div
                     key={i}
                     id={`chunk-${i + 1}`}
@@ -292,7 +322,11 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
                     <div className="flex items-center gap-1 text-muted-foreground mb-1">
                       <FileText className="h-3 w-3" />
                       <span className="truncate">{doc.filename || doc.doc_id}</span>
-                      <span className="ml-auto font-mono tabular-nums shrink-0">score: {doc.score.toFixed(3)}</span>
+                      <span className="ml-auto shrink-0 flex items-center gap-1.5 text-xs font-mono tabular-nums">
+                        {doc.rerank_score != null && <span className="text-primary/80">rerank:{doc.rerank_score.toFixed(3)}</span>}
+                        {doc.dense_score != null && <span>dense:{doc.dense_score.toFixed(3)}</span>}
+                        {doc.bm25_score != null && <span>bm25:{doc.bm25_score.toFixed(2)}</span>}
+                      </span>
                     </div>
                     <p className="whitespace-pre-wrap break-all leading-relaxed scrollbar-thin max-h-32 overflow-y-auto">{doc.text}</p>
                   </div>

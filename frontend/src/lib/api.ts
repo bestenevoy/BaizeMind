@@ -5,6 +5,9 @@ export interface RetrievedDoc {
   chunk_id: string
   text: string
   score: number
+  rerank_score?: number | null
+  dense_score?: number | null
+  bm25_score?: number | null
   filename?: string
 }
 

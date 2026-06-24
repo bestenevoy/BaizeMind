@@ -452,14 +452,15 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
                     if r["success"] + r["failed"] == 0:
                         break
 
-            doc_store.update_document(doc_id, processing_stage="自动标签")
-            from src.storage.auto_tagger import generate_tags
-            tags = generate_tags(markdown)
-            if tags:
-                doc_store.update_document(doc_id, tags=tags)
         else:
             logger = __import__("logging").getLogger(__name__)
             logger.info(f"Skip evidence: skipping evidence extraction + KG sync for {doc_id}")
+
+        doc_store.update_document(doc_id, processing_stage="自动标签")
+        from src.storage.auto_tagger import generate_tags
+        tags = generate_tags(markdown)
+        if tags:
+            doc_store.update_document(doc_id, tags=tags)
 
         elapsed = (time.time() - start) * 1000
         doc_store.update_document(doc_id, status="completed", processing_stage="完成",

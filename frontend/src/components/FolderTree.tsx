@@ -51,7 +51,13 @@ export function FolderTree({ selectedFolder, selectedDocId, onSelectFolder, onSe
     if (loadingDocs.has(folderPath)) return
     setLoadingDocs(prev => new Set(prev).add(folderPath))
     try {
-      const docs = folderPath ? await listDocuments(folderPath) : await listDocuments()
+      let docs: DocumentInfo[]
+      if (folderPath === '') {
+        docs = await listDocuments('/')
+      } else {
+        const all = await listDocuments(folderPath)
+        docs = all.filter(d => d.folder === folderPath)
+      }
       setFolderDocs(prev => ({ ...prev, [folderPath]: docs }))
     } catch {}
     setLoadingDocs(prev => {
@@ -70,6 +76,13 @@ export function FolderTree({ selectedFolder, selectedDocId, onSelectFolder, onSe
       const next = new Set(prev)
       if (next.has(path)) {
         next.delete(path)
+        setFolderDocs(prev => {
+          const next_2 = { ...prev }
+          for (const k of Object.keys(next_2)) {
+            if (k === path || k.startsWith(path + '/')) delete next_2[k]
+          }
+          return next_2
+        })
       } else {
         next.add(path)
         fetchFolders()
@@ -342,7 +355,7 @@ function renderFolderRow(node: TreeNode, depth: number, pad: number, isExpanded:
       }`}
       style={{ paddingLeft: `${pad}px` }}
       onClick={() => ctx.onSelectFolder(node.path || null)}>
-      {(hasChildren || isRoot) ? (
+      {(hasChildren || !isRoot) ? (
         <span
           className="shrink-0 py-1.5 hover:text-foreground transition-colors"
           onClick={(e) => { e.stopPropagation(); ctx.onToggle(node.path) }}

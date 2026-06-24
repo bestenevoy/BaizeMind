@@ -38,11 +38,17 @@ async def ask(request: QARequest):
             if did not in doc_name_cache:
                 doc = get_document(did)
                 doc_name_cache[did] = doc["filename"] if doc else did
+            rs = d.get("rerank_score")
+            ds = d.get("dense_score")
+            bs = d.get("bm25_score")
             retrieved_docs.append({
                 "doc_id": did,
                 "chunk_id": d.get("chunk_id", "?"),
                 "text": d.get("text", "")[:500],
                 "score": d.get("score", 0.0) if isinstance(d.get("score"), (int, float)) else 0.0,
+                "rerank_score": rs if isinstance(rs, (int, float)) else None,
+                "dense_score": ds if isinstance(ds, (int, float)) else None,
+                "bm25_score": bs if isinstance(bs, (int, float)) else None,
                 "filename": doc_name_cache[did],
             })
 
@@ -66,6 +72,7 @@ NODE_LABELS = {
     "query_router": ("分析问题类型", "问题分类"),
     "chitchat": ("直接对话", "闲聊"),
     "retrieval_agent": ("RAG 向量/BM25检索", "检索结果"),
+    "lightrag_agent": ("LightRAG 图谱导航检索", "检索结果"),
     "graph_agent": ("知识图谱查询", "图谱上下文"),
     "graphrag_search": ("Microsoft GraphRAG 检索", "GraphRAG 结果"),
     "answer_generator": ("LLM 生成回答", "生成回答"),
@@ -113,17 +120,50 @@ async def ask_stream(request: QARequest):
                         if did not in doc_name_cache:
                             doc = get_document(did)
                             doc_name_cache[did] = doc["filename"] if doc else did
+                        rs = d.get("rerank_score")
+                        ds = d.get("dense_score")
+                        bs = d.get("bm25_score")
                         doc_items.append({
                             "doc_id": did,
                             "chunk_id": d.get("chunk_id", "?"),
                             "text": d.get("text", "")[:300],
                             "score": d.get("score", 0.0) if isinstance(d.get("score"), (int, float)) else 0.0,
+                            "rerank_score": rs if isinstance(rs, (int, float)) else None,
+                            "dense_score": ds if isinstance(ds, (int, float)) else None,
+                            "bm25_score": bs if isinstance(bs, (int, float)) else None,
                             "filename": doc_name_cache[did],
                         })
                     payload["result"] = {
                         "count": len(docs),
                         "documents": doc_items,
                         "search_debug_data": node_output.get("search_debug_data"),
+                    }
+                elif node_name == "lightrag_agent":
+                    docs = node_output.get("documents", [])
+                    doc_name_cache: dict[str, str] = {}
+                    doc_items = []
+                    for d in docs[:5]:
+                        did = d.get("doc_id", "?")
+                        if did not in doc_name_cache:
+                            doc = get_document(did)
+                            doc_name_cache[did] = doc["filename"] if doc else did
+                        rs = d.get("rerank_score")
+                        ds = d.get("dense_score")
+                        bs = d.get("bm25_score")
+                        doc_items.append({
+                            "doc_id": did,
+                            "chunk_id": d.get("chunk_id", "?"),
+                            "text": d.get("text", "")[:300],
+                            "score": d.get("score", 0.0) if isinstance(d.get("score"), (int, float)) else 0.0,
+                            "rerank_score": rs if isinstance(rs, (int, float)) else None,
+                            "dense_score": ds if isinstance(ds, (int, float)) else None,
+                            "bm25_score": bs if isinstance(bs, (int, float)) else None,
+                            "filename": doc_name_cache[did],
+                        })
+                    payload["result"] = {
+                        "count": len(docs),
+                        "documents": doc_items,
+                        "retrieval_path": node_output.get("retrieval_path", ""),
                     }
                 elif node_name == "graph_agent":
                     graph_context = node_output.get("graph_context", "")

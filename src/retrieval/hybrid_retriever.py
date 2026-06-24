@@ -107,6 +107,11 @@ class HybridRetriever:
                 else:
                     bm25_scores[cid] = doc.get("score", 0)
 
+        # Annotate each doc with its dense/bm25 scores so they survive through reranker
+        for cid, (doc, _) in scores.items():
+            doc["dense_score"] = dense_scores.get(cid, 0)
+            doc["bm25_score"] = bm25_scores.get(cid, 0)
+
         ranked = sorted(scores.items(), key=lambda x: x[1][1], reverse=True)
         max_raw = ranked[0][1][1] if ranked else 0.0
         return {"ranked": ranked, "max_raw": max_raw, "dense_scores": dense_scores, "bm25_scores": bm25_scores}
