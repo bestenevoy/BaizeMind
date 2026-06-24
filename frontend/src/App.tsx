@@ -9,7 +9,7 @@ import { GraphPage } from '@/pages/GraphPage'
 
 function App() {
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-screen flex flex-col">
       <Header />
       <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
         <Routes>

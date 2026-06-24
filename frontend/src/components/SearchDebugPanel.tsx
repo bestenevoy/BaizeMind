@@ -129,7 +129,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
           </div>
 
           {result && (
-            <div className="mt-3 flex-1 min-h-0 overflow-y-auto space-y-3">
+            <div className="mt-3 flex-1 min-h-0 flex flex-col space-y-3">
               <div className="flex items-center gap-3 text-sm bg-muted/30 rounded p-2 flex-wrap flex-none">
                 <ThresholdValue label="Dense 阈值" configKey="dense_vector_threshold" value={result.dense_threshold || result.threshold} />
                 <span className="text-muted-foreground">|</span>
@@ -338,7 +338,7 @@ function StageMini({
         </button>
       ) : null}
       {(open || !label) && (
-        <div className="space-y-0.5 max-h-48 overflow-y-auto">
+        <div className="space-y-0.5">
           {items.map((c, i) => {
             const s = (c as Record<string, unknown>)[scoreField] as number
             const pass = scoreThreshold != null ? s >= scoreThreshold : null
