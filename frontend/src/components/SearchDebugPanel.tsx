@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Search, Loader2, ChevronDown, ChevronRight, Check, X } from 'lucide-react'
+import { Search, Loader2, ChevronDown, ChevronRight, Check, X, Eye, EyeOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -18,6 +18,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [saving, setSaving] = useState(false)
+  const [showAll, setShowAll] = useState(true)
 
   const togglePreview = (key: string) => {
     setExpandedPreviews(prev => ({ ...prev, [key]: !prev[key] }))
@@ -155,6 +156,13 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                     Rerank 阶段过滤 {result.filtered_out_by_rerank_threshold} 条
                   </span>
                 )}
+                <button
+                  onClick={() => setShowAll(!showAll)}
+                  className="ml-auto flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                >
+                  {showAll ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                  {showAll ? '仅通过阈值' : '显示全部'}
+                </button>
               </div>
 
               <div className="flex-1 min-h-0 flex flex-col">
@@ -163,8 +171,8 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                     { key: 'rewrite', label: '查询改写' },
                     { key: 'rrf', label: `RRF融合 (${result.stages.rrf.length})` },
                     { key: 'rerank', label: `Reranker (${result.stages.rerank.length})` },
-                    { key: 'dense', label: `Dense向量 Top ${result.stages.dense_top5.length}` },
-                    { key: 'bm25', label: `BM25 Top ${result.stages.bm25_top5.length}` },
+                    { key: 'dense', label: `Dense向量 (${result.stages.dense_top5.length})` },
+                    { key: 'bm25', label: `BM25 (${result.stages.bm25_top5.length})` },
                   ].map(t => (
                     <button
                       key={t.key}
@@ -224,7 +232,9 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                   )}
                   {resultTab === 'rrf' && (
                     <div className="space-y-1">
-                      {result.stages.rrf.map((c, i) => (
+                      {result.stages.rrf.map((c, i) => {
+                        if (!showAll && !c.rrf_pass_threshold) return null
+                        return (
                         <div key={i} className={`rounded p-2 border ${c.rrf_pass_threshold ? 'bg-muted/20 border-border' : 'bg-red-50 dark:bg-red-950/10 border-red-200 dark:border-red-800'}`}>
                           <div className="flex items-center gap-1.5">
                             <span className="text-primary font-semibold text-xs">[{i + 1}]</span>
@@ -251,12 +261,14 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                             <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap break-all max-h-24 overflow-y-auto">{c.text_preview}</p>
                           )}
                         </div>
-                      ))}
+                      )})}
                     </div>
                   )}
                   {resultTab === 'rerank' && (
                     <div className="space-y-1">
-                      {result.stages.rerank.map((c, i) => (
+                      {result.stages.rerank.map((c, i) => {
+                        if (!showAll && !c.rerank_pass_threshold) return null
+                        return (
                         <div key={i} className={`rounded p-2 border ${c.rerank_pass_threshold ? 'bg-muted/20 border-border' : 'bg-red-50 dark:bg-red-950/10 border-red-200 dark:border-red-800'}`}>
                           <div className="flex items-center gap-1.5">
                             <span className="text-primary font-semibold text-xs">[{i + 1}]</span>
@@ -278,12 +290,17 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                             <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap break-all max-h-24 overflow-y-auto">{c.text_preview}</p>
                           )}
                         </div>
-                      ))}
+                      )})}
                     </div>
                   )}
                   {resultTab === 'dense' && (
                     <div>
-                      <StageMini label="" items={result.stages.dense_top5.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="dense" scoreThreshold={result.dense_threshold || result.threshold} />
+                      <StageMini label="" items={result.stages.dense_top5.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="dense" scoreThreshold={result.dense_threshold || result.threshold} showAll={showAll} />
+                    </div>
+                  )}
+                  {resultTab === 'bm25' && (
+                    <div>
+                      <StageMini label="" items={result.stages.bm25_top5} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="bm25" />
                     </div>
                   )}
                   {resultTab === 'bm25' && (
@@ -300,7 +317,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
 }
 
 function StageMini({
-  label, items, scoreField, expandedPreviews, onTogglePreview, prefix, scoreThreshold
+  label, items, scoreField, expandedPreviews, onTogglePreview, prefix, scoreThreshold, showAll
 }: {
   label: string
   items: Array<{ doc_id: string; chunk_id: string; filename: string; text_preview: string; score?: number }>
@@ -309,6 +326,7 @@ function StageMini({
   onTogglePreview: (key: string) => void
   prefix: string
   scoreThreshold?: number
+  showAll?: boolean
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -327,6 +345,7 @@ function StageMini({
           {items.map((c, i) => {
             const s = (c as Record<string, unknown>)[scoreField] as number
             const pass = scoreThreshold != null ? s >= scoreThreshold : null
+            if (!showAll && pass === false) return null
             return (
             <div key={i} className={`rounded p-1.5 ${scoreThreshold != null ? (pass ? 'bg-green-50 dark:bg-green-950/10 border border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-950/10 border border-red-200 dark:border-red-800') : 'bg-muted/20'}`}>
               <div className="flex items-center gap-1">
