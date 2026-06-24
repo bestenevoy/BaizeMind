@@ -546,7 +546,7 @@ async def search_debug(body: SearchDebugRequest):
         rerank_debug.append({
             "chunk_id": r.get("chunk_id", ""),
             "doc_id": r.get("doc_id", ""),
-            "text_preview": r.get("text", "")[:200],
+            "text_preview": r.get("text", ""),
             "rerank_score": round(rs, 4) if isinstance(rs, (int, float)) else 0,
             "rerank_pass_threshold": rerank_threshold == 0 or (isinstance(rs, (int, float)) and rs >= rerank_threshold),
         })
