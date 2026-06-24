@@ -100,8 +100,7 @@ export function ConfigPage() {
 
   useEffect(() => {
     loadConfig()
-    runConnectivityCheck()
-  }, [loadConfig, runConnectivityCheck])
+  }, [loadConfig])
 
   return (
     <div className="container mx-auto py-6 px-4 max-w-4xl">
@@ -121,9 +120,7 @@ export function ConfigPage() {
           </CardHeader>
           <CardContent>
             {connResults === null ? (
-              <div className="space-y-2">
-                {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-8 w-full" />)}
-              </div>
+              <p className="text-xs text-muted-foreground py-4 text-center">点击右上角"重新检测"开始连通性测试</p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {connResults.map((r) => (
