@@ -303,9 +303,6 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                       <StageMini label="" items={result.stages.bm25_top5} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="bm25" />
                     </div>
                   )}
-                  {resultTab === 'bm25' && (
-                    <StageMini label="" items={result.stages.bm25_top5} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="bm25" />
-                  )}
                 </div>
               </div>
             </div>

@@ -58,11 +58,10 @@ class HybridRetriever:
         rrf_passed = [doc for cid, (doc, s) in rrf_data["ranked"]
                       if rrf_data["max_raw"] == 0 or (s / rrf_data["max_raw"]) >= rrf_threshold]
         all_for_rerank = rrf_passed[:top_k] if rrf_passed else [doc for _, (doc, _) in rrf_data["ranked"][:top_k]]
-        reranked = self.reranker.rerank(query, all_for_rerank, top_k=min(10, len(all_for_rerank)))
+        reranked_full = self.reranker.rerank(query, all_for_rerank, top_k=min(10, len(all_for_rerank)))
 
         threshold = settings.reranker_score_threshold
-        if threshold > 0:
-            reranked = [r for r in reranked if r.get("rerank_score", r.get("score", 0)) >= threshold]
+        reranked = [r for r in reranked_full if r.get("rerank_score", r.get("score", 0)) >= threshold] if threshold > 0 else list(reranked_full)
 
         debug = {
             "dense_results": dense_results,
@@ -71,7 +70,7 @@ class HybridRetriever:
             "rrf_max_raw": rrf_data["max_raw"],
             "dense_scores": rrf_data["dense_scores"],
             "bm25_scores": rrf_data["bm25_scores"],
-            "reranked": reranked,
+            "reranked": reranked_full,
         }
         return reranked, debug
 
