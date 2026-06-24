@@ -7,14 +7,14 @@ import { User, Bot, Copy, Check, ChevronDown, ChevronRight, FileText, Search, Br
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useState, useRef, useMemo, useCallback } from 'react'
-import type { RetreivedDoc, StreamStep } from '@/lib/api'
+import type { RetrievedDoc, StreamStep } from '@/lib/api'
 
 export interface Message {
   role: 'user' | 'assistant'
   content: string
   query_type?: string
   citations?: string[]
-  retrieved_docs?: RetreivedDoc[]
+  retrieved_docs?: RetrievedDoc[]
   steps?: StreamStep[]
   processing_time_ms?: number
 }

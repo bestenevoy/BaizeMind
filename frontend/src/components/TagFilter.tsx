@@ -7,23 +7,14 @@ import { listTags, type TagInfo } from '@/lib/api'
 interface TagFilterProps {
   selectedTags: string[]
   onToggle: (tag: string) => void
-  onRefresh?: () => void
 }
 
-export function TagFilter({ selectedTags, onToggle, onRefresh }: TagFilterProps) {
+export function TagFilter({ selectedTags, onToggle }: TagFilterProps) {
   const [tags, setTags] = useState<TagInfo[]>([])
 
-  const fetchTags = () => {
+  useEffect(() => {
     listTags().then(setTags).catch(() => {})
-  }
-
-  useEffect(() => {
-    fetchTags()
   }, [])
-
-  useEffect(() => {
-    if (onRefresh) onRefresh = fetchTags
-  }, [onRefresh])
 
   if (tags.length === 0) return null
 

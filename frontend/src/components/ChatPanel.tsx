@@ -6,7 +6,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { ChatMessage, type Message } from '@/components/ChatMessage'
-import { askQuestionStream, type StreamStep, type RetreivedDoc } from '@/lib/api'
+import { askQuestionStream, type StreamStep, type RetrievedDoc } from '@/lib/api'
 
 const STORAGE_KEY = 'agentic_rag_chat_history'
 
@@ -26,10 +26,11 @@ function saveHistory(messages: Message[]) {
 
 interface ChatPanelProps {
   folder: string | null
+  docId?: string | null
   tags: string[]
 }
 
-export function ChatPanel({ folder, tags }: ChatPanelProps) {
+export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>(loadHistory)
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -46,7 +47,8 @@ export function ChatPanel({ folder, tags }: ChatPanelProps) {
   }, [messages])
 
   const activeFilters = []
-  if (folder) activeFilters.push(`文件夹: ${folder}`)
+  if (docId) activeFilters.push(`文档: ${docId}`)
+  else if (folder) activeFilters.push(`文件夹: ${folder}`)
   if (tags.length) activeFilters.push(`标签: ${tags.join(', ')}`)
 
   const handleSend = async () => {
@@ -62,7 +64,7 @@ export function ChatPanel({ folder, tags }: ChatPanelProps) {
     let answer = ''
     let queryType = ''
     let citations: string[] = []
-    let retrievedDocs: RetreivedDoc[] = []
+    let retrievedDocs: RetrievedDoc[] = []
     let processingTime = 0
 
     setMessages((prev) => [...prev, { role: 'assistant', content: '', steps: [] }])
@@ -142,6 +144,7 @@ export function ChatPanel({ folder, tags }: ChatPanelProps) {
         },
         folder || undefined,
         tags.length ? tags : undefined,
+        docId || undefined,
       )
     } catch (err) {
       setMessages((prev) => {

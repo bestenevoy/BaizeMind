@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, type ReactNode } from 'react'
 import {
   FolderOpen, Folder, ChevronRight, ChevronDown, RefreshCw,
   Plus, Trash2, Pencil, FileText, Check,
@@ -20,9 +20,10 @@ interface FolderTreeProps {
   onChanged?: () => void
   showRefresh?: boolean
   readonly?: boolean
+  showDocs?: boolean
 }
 
-export function FolderTree({ selectedFolder, selectedDocId, onSelectFolder, onSelectDoc, onChanged, showRefresh = true, readonly = false }: FolderTreeProps) {
+export function FolderTree({ selectedFolder, selectedDocId, onSelectFolder, onSelectDoc, onChanged, showRefresh = true, readonly = false, showDocs = true }: FolderTreeProps) {
   const [folders, setFolders] = useState<FolderInfo[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [folderDocs, setFolderDocs] = useState<Record<string, DocumentInfo[]>>({})
@@ -72,11 +73,11 @@ export function FolderTree({ selectedFolder, selectedDocId, onSelectFolder, onSe
       } else {
         next.add(path)
         fetchFolders()
-        loadDocs(path)
+        if (showDocs) loadDocs(path)
       }
       return next
     })
-  }, [fetchFolders, loadDocs])
+  }, [fetchFolders, loadDocs, showDocs])
 
   const handleDelete = async () => {
     if (!deleteTarget) return
@@ -167,6 +168,7 @@ export function FolderTree({ selectedFolder, selectedDocId, onSelectFolder, onSe
           onDeleteFolder={(f) => setDeleteTarget(f)}
           onRenameFolder={(f) => setRenameTarget(f)}
           readonly={readonly}
+          showDocs={showDocs}
         />
       </CardContent>
 
@@ -309,80 +311,124 @@ function buildTree(folders: FolderInfo[]): TreeNode {
 
 function FolderNode({
   node, depth, selectedFolder, selectedDocId, expanded, folderDocs, loadingDocs,
-  onSelectFolder, onSelectDoc, onToggle, onNewFolder, onDeleteFolder, onRenameFolder, readonly,
+  onSelectFolder, onSelectDoc, onToggle, onNewFolder, onDeleteFolder, onRenameFolder, readonly, showDocs = true,
 }: {
   node: TreeNode; depth: number; selectedFolder: string | null; selectedDocId: string | null
   expanded: Set<string>; folderDocs: Record<string, DocumentInfo[]>; loadingDocs: Set<string>
   onSelectFolder: (folder: string | null) => void; onSelectDoc: (docId: string | null) => void
   onToggle: (path: string) => void; onNewFolder: (parent: string) => void
-  onDeleteFolder: (f: FolderInfo) => void; onRenameFolder: (f: FolderInfo) => void; readonly?: boolean
+  onDeleteFolder: (f: FolderInfo) => void; onRenameFolder: (f: FolderInfo) => void; readonly?: boolean; showDocs?: boolean
 }) {
-  const hasChildren = node.children.length > 0
-  const isRoot = node.path === ''
-  const isExpanded = expanded.has(node.path) || (isRoot && expanded.has(''))
-  const isSelected = selectedFolder === (node.path || null)
-  const depthColors = ['text-blue-400', 'text-emerald-400', 'text-amber-400', 'text-purple-400', 'text-rose-400']
-  const docs = folderDocs[node.path] || []
-  const isLoadingDocs = loadingDocs.has(node.path)
+  const ctx: RenderCtx = { selectedFolder, selectedDocId, expanded, folderDocs, loadingDocs,
+    onToggle, onNewFolder, onDeleteFolder, onRenameFolder, readonly, showDocs, onSelectFolder, onSelectDoc }
+  return <>{buildRows(node, depth, ctx)}</>
+}
 
+interface RenderCtx {
+  selectedFolder: string | null; selectedDocId: string | null
+  expanded: Set<string>; folderDocs: Record<string, DocumentInfo[]>; loadingDocs: Set<string>
+  onToggle: (path: string) => void; onNewFolder: (parent: string) => void
+  onDeleteFolder: (f: FolderInfo) => void; onRenameFolder: (f: FolderInfo) => void
+  readonly: boolean | undefined; showDocs: boolean
+  onSelectFolder: (folder: string | null) => void; onSelectDoc: (docId: string | null) => void
+}
+
+function renderFolderRow(node: TreeNode, depth: number, pad: number, isExpanded: boolean, isSelected: boolean, hasChildren: boolean, isRoot: boolean, ctx: RenderCtx): ReactNode {
+  const depthColors = ['text-blue-400', 'text-emerald-400', 'text-amber-400', 'text-purple-400', 'text-rose-400']
   return (
-    <div>
-      <div className={`group flex items-center gap-0.5 w-full rounded text-sm relative ${isSelected ? 'bg-accent text-accent-foreground font-medium shadow-sm' : 'hover:bg-accent/60'}`}
-        style={{ paddingLeft: `${depth * 14 + (isRoot ? 4 : 6)}px` }}>
-        {(hasChildren || isRoot) ? (
-          <button className="shrink-0 py-1.5 hover:text-foreground transition-colors" onClick={(e) => { e.stopPropagation(); onToggle(node.path) }}>
-            {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          </button>
-        ) : (
-          <span className="w-3 shrink-0" />
-        )}
-        <button className="flex items-center gap-1.5 flex-1 min-w-0 py-1.5 pr-1 text-left" onClick={() => { onSelectFolder(node.path || null); onSelectDoc(null); }}>
-          {isRoot ? <FolderOpen className={`h-3.5 w-3.5 shrink-0 ${isSelected ? 'text-primary' : 'text-primary/70'}`} />
-            : <Folder className={`h-3.5 w-3.5 shrink-0 ${isSelected ? depthColors[depth % depthColors.length] : 'text-muted-foreground/60'}`} />}
-          <span className="truncate">{node.name}</span>
-          {node.count > 0 && <span className="ml-auto text-[11px] text-muted-foreground shrink-0 tabular-nums bg-muted/50 px-1.5 py-0.5 rounded-full">{node.count}</span>}
-        </button>
-        {!isRoot && !readonly && (
-          <div className="hidden group-hover:flex items-center gap-0.5 pr-1">
-            <button className="p-0.5 rounded hover:bg-accent-foreground/10 transition-colors" title="新建子目录" onClick={(e) => { e.stopPropagation(); onNewFolder(node.path) }}><Plus className="h-3 w-3" /></button>
-            <button className="p-0.5 rounded hover:bg-accent-foreground/10 transition-colors" title="移动/重命名" onClick={(e) => { e.stopPropagation(); onRenameFolder({ folder: node.path, doc_count: node.count }) }}><Pencil className="h-3 w-3" /></button>
-            <button className="p-0.5 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive" title="删除文件夹" onClick={(e) => { e.stopPropagation(); onDeleteFolder({ folder: node.path, doc_count: node.count }) }}><Trash2 className="h-3 w-3" /></button>
-          </div>
-        )}
-      </div>
-      {hasChildren && isExpanded && (
-        <div>
-          {node.children.map((child) => (
-            <FolderNode key={child.path} node={child} depth={depth + 1} selectedFolder={selectedFolder} selectedDocId={selectedDocId}
-              expanded={expanded} folderDocs={folderDocs} loadingDocs={loadingDocs}
-              onSelectFolder={onSelectFolder} onSelectDoc={onSelectDoc} onToggle={onToggle}
-              onNewFolder={onNewFolder} onDeleteFolder={onDeleteFolder} onRenameFolder={onRenameFolder} readonly={readonly} />
-          ))}
-        </div>
+    <div key={node.path || '__root__'}
+      className={`group flex items-center w-full rounded text-sm relative cursor-pointer transition-colors ${
+        isSelected ? 'bg-primary/10 text-primary font-medium' : 'hover:bg-muted/50'
+      }`}
+      style={{ paddingLeft: `${pad}px` }}
+      onClick={() => ctx.onSelectFolder(node.path || null)}>
+      {(hasChildren || isRoot) ? (
+        <span
+          className="shrink-0 py-1.5 hover:text-foreground transition-colors"
+          onClick={(e) => { e.stopPropagation(); ctx.onToggle(node.path) }}
+          role="button"
+        >
+          {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </span>
+      ) : (
+        <span className="w-3 shrink-0" />
       )}
-      {isExpanded && (
-        <div>
-          {isLoadingDocs && <div className="flex items-center gap-1 py-1" style={{ paddingLeft: `${(depth + 1) * 14 + 6}px` }}><span className="text-xs text-muted-foreground animate-pulse">加载中...</span></div>}
-          {docs.map((doc) => (
-            <div key={doc.doc_id}
-              className={`flex items-center gap-1.5 w-full rounded text-xs py-1 cursor-pointer transition-colors ${
-                selectedDocId === doc.doc_id
-                  ? 'bg-primary/10 text-primary font-medium'
-                  : 'hover:bg-muted/50'
-              }`}
-              style={{ paddingLeft: `${(depth + 1) * 14 + 6}px`, paddingRight: 4 }}
-              onClick={() => { onSelectDoc(doc.doc_id); onSelectFolder(null); }}>
-              {selectedDocId === doc.doc_id ? (
-                <Check className="h-3 w-3 shrink-0 text-primary" />
-              ) : (
-                <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
-              )}
-              <span className="truncate">{doc.filename}</span>
-              {doc.status !== 'completed' && <span className="ml-auto text-[10px] text-amber-500 shrink-0">{doc.status}</span>}
-            </div>
-          ))}
+      <span className="flex items-center flex-1 min-w-0 py-1.5 pr-1" style={{ marginLeft: 2 }}>
+        {isRoot ? <FolderOpen className={`h-3.5 w-3.5 shrink-0 ${isSelected ? 'text-primary' : 'text-primary/70'}`} />
+          : <Folder className={`h-3.5 w-3.5 shrink-0 ${isSelected ? depthColors[depth % depthColors.length] : 'text-muted-foreground/60'}`} />}
+        <span className="truncate" style={{ marginLeft: 6 }}>{node.name}</span>
+        {node.count > 0 && <span className="ml-auto text-[11px] text-muted-foreground shrink-0 tabular-nums bg-muted/50 px-1.5 py-0.5 rounded-full">{node.count}</span>}
+      </span>
+      {!isRoot && !ctx.readonly && (
+        <div className="hidden group-hover:flex items-center gap-0.5 pr-1">
+          <button className="p-0.5 rounded hover:bg-accent-foreground/10 transition-colors" title="新建子目录" onClick={(e) => { e.stopPropagation(); ctx.onNewFolder(node.path) }}><Plus className="h-3 w-3" /></button>
+          <button className="p-0.5 rounded hover:bg-accent-foreground/10 transition-colors" title="移动/重命名" onClick={(e) => { e.stopPropagation(); ctx.onRenameFolder({ folder: node.path, doc_count: node.count }) }}><Pencil className="h-3 w-3" /></button>
+          <button className="p-0.5 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive" title="删除文件夹" onClick={(e) => { e.stopPropagation(); ctx.onDeleteFolder({ folder: node.path, doc_count: node.count }) }}><Trash2 className="h-3 w-3" /></button>
         </div>
       )}
     </div>
   )
+}
+
+function renderDocRows(node: TreeNode, depth: number, docPad: number, ctx: RenderCtx): ReactNode[] {
+  const rows: ReactNode[] = []
+  const docs = ctx.folderDocs[node.path] || []
+  const isLoadingDocs = ctx.loadingDocs.has(node.path)
+
+  if (isLoadingDocs) {
+    rows.push(
+      <div key={`${node.path}__loading`} className="flex items-center py-1" style={{ paddingLeft: `${docPad}px` }}>
+        <span className="w-3 shrink-0" />
+        <span className="text-xs text-muted-foreground animate-pulse" style={{ marginLeft: 2 }}>加载中...</span>
+      </div>
+    )
+  }
+  for (const doc of docs) {
+    rows.push(
+      <div key={doc.doc_id}
+        className={`group flex items-center w-full rounded text-xs py-1 cursor-pointer transition-colors ${
+          ctx.selectedDocId === doc.doc_id
+            ? 'bg-primary/10 text-primary font-medium'
+            : 'hover:bg-muted/50'
+        }`}
+        style={{ paddingLeft: `${docPad}px`, paddingRight: 4 }}
+        onClick={() => ctx.onSelectDoc(doc.doc_id)}>
+        <span className="w-3 shrink-0" />
+        <span className="flex items-center flex-1 min-w-0" style={{ marginLeft: 2 }}>
+          {ctx.selectedDocId === doc.doc_id ? (
+            <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
+          ) : (
+            <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <span className="truncate" style={{ marginLeft: 6 }}>{doc.filename}</span>
+        </span>
+        {doc.status !== 'completed' && <span className="text-[10px] text-amber-500 shrink-0">{doc.status}</span>}
+      </div>
+    )
+  }
+  return rows
+}
+
+function buildRows(node: TreeNode, depth: number, ctx: RenderCtx): ReactNode[] {
+  const rows: ReactNode[] = []
+  const hasChildren = node.children.length > 0
+  const isRoot = node.path === ''
+  const isExpanded = ctx.expanded.has(node.path) || (isRoot && ctx.expanded.has(''))
+  const isSelected = isRoot
+    ? (ctx.selectedFolder === null && ctx.selectedDocId === null)
+    : ctx.selectedFolder === node.path
+  const pad = depth * 14 + (isRoot ? 4 : 6)
+  const docPad = (depth + 1) * 14 + 6
+
+  rows.push(renderFolderRow(node, depth, pad, isExpanded, isSelected, hasChildren, isRoot, ctx))
+
+  if (hasChildren && isExpanded) {
+    for (const child of node.children) {
+      rows.push(...buildRows(child, depth + 1, ctx))
+    }
+  }
+  if (isExpanded && ctx.showDocs) {
+    rows.push(...renderDocRows(node, depth, docPad, ctx))
+  }
+  return rows
 }

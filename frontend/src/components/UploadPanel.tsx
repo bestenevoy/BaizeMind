@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { Upload, File, X, CheckCircle2, Loader2, FolderPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -35,6 +35,11 @@ export function UploadPanel({ folder, open, onOpenChange, onUploadComplete }: Up
   const [showFolderInput, setShowFolderInput] = useState(false)
   const [skipEvidence, setSkipEvidence] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const intervalsRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map())
+
+  useEffect(() => {
+    return () => intervalsRef.current.forEach(clearInterval)
+  }, [])
 
   const targetFolder = (customFolder || folder || '/').replace(/^\/?(.*)/, '/$1').replace(/\/$/, '') || '/'
 
@@ -64,6 +69,11 @@ export function UploadPanel({ folder, open, onOpenChange, onUploadComplete }: Up
     }
   }
 
+  const stopPolling = useCallback((docId: string) => {
+    const id = intervalsRef.current.get(docId)
+    if (id) { clearInterval(id); intervalsRef.current.delete(docId) }
+  }, [])
+
   const pollStatus = (docId: string) => {
     const interval = setInterval(async () => {
       try {
@@ -72,24 +82,26 @@ export function UploadPanel({ folder, open, onOpenChange, onUploadComplete }: Up
           prev.map((d) => {
             if (d.doc_id !== docId) return d
             if (status.status === 'completed') {
-              clearInterval(interval)
+              stopPolling(docId)
               onUploadComplete?.()
               return { ...d, status: 'completed', progress: 100 }
             }
             if (status.status === 'failed') {
-              clearInterval(interval)
+              stopPolling(docId)
               return { ...d, status: 'failed', progress: 0, error: status.error }
             }
             return { ...d, progress: Math.min(d.progress + 15, 90), stage: status.processing_stage || undefined }
           })
         )
       } catch {
-        clearInterval(interval)
+        stopPolling(docId)
       }
     }, 3000)
+    intervalsRef.current.set(docId, interval)
   }
 
   const removeDoc = (docId: string) => {
+    stopPolling(docId)
     setDocs((prev) => prev.filter((d) => d.doc_id !== docId))
   }
 

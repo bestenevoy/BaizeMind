@@ -1,6 +1,6 @@
 const API_BASE = '/api/v1'
 
-export interface RetreivedDoc {
+export interface RetrievedDoc {
   doc_id: string
   chunk_id: string
   text: string
@@ -15,7 +15,7 @@ export interface QAResponse {
   confidence: number
   citations: string[]
   graph_context: string
-  retrieved_docs: RetreivedDoc[]
+  retrieved_docs: RetrievedDoc[]
   validation: Record<string, unknown>
   processing_time_ms: number
 }
@@ -255,11 +255,12 @@ export async function askQuestionStream(
   onError: (err: string) => void,
   folder?: string,
   tags?: string[],
+  docFilter?: string,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/qa/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, stream: true, folder, tags }),
+    body: JSON.stringify({ query, stream: true, folder, tags, doc_filter: docFilter }),
   })
   if (!res.ok) {
     onError(`Stream failed: ${res.statusText}`)
