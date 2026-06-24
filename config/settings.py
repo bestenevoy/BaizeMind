@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     chunk_size: int = 512
     chunk_overlap: int = 64
 
+    # BM25 / Stopwords
+    bm25_stopwords_file: str = "data/stopwords.txt"
+
     # Retrieval
     hybrid_top_k: int = 20
     hybrid_dense_weight: float = 0.6

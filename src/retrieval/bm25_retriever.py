@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 _JIEBA_LOADED = False
+_STOPWORDS: set[str] | None = None
 
 
 def _load_jieba():
@@ -39,11 +40,31 @@ def _load_jieba():
         pass
 
 
+def _load_stopwords() -> set[str]:
+    global _STOPWORDS
+    if _STOPWORDS is not None:
+        return _STOPWORDS
+    _STOPWORDS = set()
+    stopwords_path = settings.project_root / settings.bm25_stopwords_file
+    try:
+        if stopwords_path.exists():
+            with open(stopwords_path, encoding="utf-8") as f:
+                for line in f:
+                    word = line.strip()
+                    if word:
+                        _STOPWORDS.add(word)
+            logger.info(f"Loaded {len(_STOPWORDS)} BM25 stopwords from {stopwords_path}")
+    except Exception as e:
+        logger.warning(f"Failed to load BM25 stopwords: {e}")
+    return _STOPWORDS
+
+
 def tokenize(text: str) -> list[str]:
     try:
         import jieba
         _load_jieba()
-        return [t for t in jieba.cut(text) if t.strip()]
+        stopwords = _load_stopwords()
+        return [t for t in jieba.cut(text) if t.strip() and t not in stopwords]
     except ImportError:
         return _char_bigram_fallback(text)
 

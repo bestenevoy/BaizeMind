@@ -92,7 +92,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   else if (folder) filterInfo.push(`文件夹: ${folder}`)
   if (tags.length) filterInfo.push(`标签: ${tags.join(', ')}`)
   if (!docId && !folder && !tags.length) filterInfo.push('全部文档')
-  const denseUpToThreshold = result ? result.stages.dense_top5.filter(c => (c.score ?? 0) >= (result.dense_threshold || result.threshold)).length : 0
+  const denseUpToThreshold = result?.stages?.dense_top5 ? result.stages.dense_top5.filter(c => (c.score ?? 0) >= (result.dense_threshold || result.threshold)).length : 0
 
   return (
     <Card className="p-4 text-sm h-full flex flex-col min-h-0">

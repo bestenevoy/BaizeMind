@@ -488,7 +488,17 @@ async def search_debug(body: SearchDebugRequest):
     elif body.folder or body.tags:
         ids = doc_store.get_doc_ids_by_filter(folder=body.folder or None, tags=body.tags or None)
         if not ids:
-            return {"query": query, "threshold": current_threshold, "stages": {}, "filtered_count": 0, "message": "No documents match the folder/tag filter"}
+            return {
+                "query": query,
+                "threshold": current_threshold,
+                "dense_threshold": dense_threshold,
+                "rerank_threshold": rerank_threshold,
+                "rewrite": {"enabled": settings.query_rewrite_enabled, "original": query, "dense_query": query, "bm25_query": query, "query_tokens": [], "dense_tokens": [], "bm25_tokens": []},
+                "stages": {"dense_top5": [], "bm25_top5": [], "rrf": [], "rerank": []},
+                "final_count": 0,
+                "filtered_out_by_rerank_threshold": 0,
+                "message": "No documents match the folder/tag filter",
+            }
         id_list = " ".join(f'"{d}"' for d in ids)
         doc_filter = f"doc_id in [{id_list}]"
 
