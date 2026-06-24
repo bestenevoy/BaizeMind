@@ -10,7 +10,7 @@ export function Home() {
   return (
     <div className="container mx-auto py-6 px-4 flex flex-col min-h-0 flex-1">
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0">
-        <div className="lg:col-span-2 space-y-4 overflow-y-auto">
+        <div className="lg:col-span-3 space-y-4 overflow-y-auto">
           <FolderTree
             selectedFolder={selectedFolder}
             selectedDocId={selectedDocId}
@@ -23,7 +23,7 @@ export function Home() {
           <StatsPanel />
         </div>
 
-        <div className="lg:col-span-10 min-h-0">
+        <div className="lg:col-span-7 lg:col-start-5 min-h-0 overflow-hidden">
           <ChatPanel folder={selectedFolder} docId={selectedDocId} tags={selectedTags} />
         </div>
       </div>

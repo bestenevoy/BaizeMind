@@ -201,7 +201,7 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
       <CardContent className="flex-1 flex flex-col min-h-0 p-0">
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin px-4 py-4">
-          <div className="space-y-4 max-w-4xl mx-auto">
+          <div className="space-y-4">
             {messages.length === 0 ? (
               <div className="text-center py-16">
                 <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center" style={{ background: 'var(--gradient-brand)' }}>
@@ -241,7 +241,7 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
 
         {/* Input */}
         <div className="border-t px-4 py-3 shrink-0">
-          <div className="flex gap-2 max-w-4xl mx-auto">
+          <div className="flex gap-2">
             <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
