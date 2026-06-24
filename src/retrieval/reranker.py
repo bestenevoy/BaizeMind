@@ -93,8 +93,11 @@ class Reranker:
                         for item in reranked:
                             idx = item.get("index", 0)
                             if 0 <= idx < len(results):
-                                results[idx]["rerank_score"] = item.get("relevance_score", 0)
-                                out.append(results[idx])
+                                # Copy to avoid mutating the original results list
+                                # (same list is referenced in debug info)
+                                doc = dict(results[idx])
+                                doc["rerank_score"] = item.get("relevance_score", 0)
+                                out.append(doc)
                         logger.info(f"reranker: cross-encoder returned {len(out)} results (top score={out[0].get('rerank_score', 0):.4f})")
                         return out[:top_k]
                     else:
@@ -116,6 +119,7 @@ class Reranker:
             ).flatten()
 
             for i, sim in enumerate(sims):
+                results[i] = dict(results[i])
                 results[i]["rerank_score"] = float(max(0.0, sim))
 
             ranked = sorted(results, key=lambda r: r.get("rerank_score", 0), reverse=True)

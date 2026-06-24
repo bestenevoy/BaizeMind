@@ -1,10 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Loader2, Trash2, MessageSquare, Filter } from 'lucide-react'
+import { Send, Loader2, Trash2, MessageSquare, Filter, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Card, CardContent } from '@/components/ui/card'
 import { ChatMessage, type Message } from '@/components/ChatMessage'
 import { askQuestionStream, type StreamStep, type RetrievedDoc } from '@/lib/api'
 
@@ -144,7 +143,6 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
         },
         folder || undefined,
         tags.length ? tags : undefined,
-        docId || undefined,
       )
     } catch (err) {
       setMessages((prev) => {
@@ -172,67 +170,91 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
   }
 
   return (
-    <Card className="flex flex-col h-full">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-lg flex items-center gap-2">
-            <MessageSquare className="h-5 w-5" />
-            智能问答
-          </CardTitle>
-          {messages.length > 0 && (
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={clearHistory}>
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
-        {activeFilters.length > 0 && (
-          <div className="flex items-center gap-1.5 mt-1">
-            <Filter className="h-3 w-3 text-muted-foreground" />
-            {activeFilters.map((f, i) => (
-              <Badge key={i} variant="secondary" className="text-xs">
-                {f}
-              </Badge>
-            ))}
+    <Card className="flex flex-col h-full overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'var(--gradient-brand)' }}>
+            <MessageSquare className="h-3.5 w-3.5 text-white" />
           </div>
+          <span className="font-semibold text-base">智能问答</span>
+        </div>
+        {messages.length > 0 && (
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={clearHistory} title="清空对话">
+            <Trash2 className="h-4 w-4" />
+          </Button>
         )}
-      </CardHeader>
-      <CardContent className="flex-1 flex flex-col min-h-0">
-        <ScrollArea className="flex-1 mb-4" ref={scrollRef}>
-          <div className="space-y-4 pr-4">
+      </div>
+
+      {/* Filter badges */}
+      {activeFilters.length > 0 && (
+        <div className="flex items-center gap-1.5 px-4 py-2 border-b bg-muted/20 shrink-0">
+          <Filter className="h-3 w-3 text-muted-foreground" />
+          {activeFilters.map((f, i) => (
+            <Badge key={i} variant="secondary" className="text-xs">
+              {f}
+            </Badge>
+          ))}
+        </div>
+      )}
+
+      <CardContent className="flex-1 flex flex-col min-h-0 p-0">
+        {/* Messages */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin px-4 py-4">
+          <div className="space-y-4 max-w-4xl mx-auto">
             {messages.length === 0 ? (
-              <div className="text-center py-12 text-muted-foreground">
-                <BotIcon className="mx-auto h-12 w-12 mb-4 opacity-50" />
-                <p className="text-sm">输入问题开始对话</p>
-                <p className="text-xs mt-1">支持事实查询、多跳推理、对比分析、全局摘要</p>
+              <div className="text-center py-16">
+                <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center" style={{ background: 'var(--gradient-brand)' }}>
+                  <Sparkles className="h-8 w-8 text-white" />
+                </div>
+                <p className="text-sm font-medium text-foreground">输入问题开始对话</p>
+                <p className="text-xs mt-1.5 text-muted-foreground">支持事实查询、多跳推理、对比分析、全局摘要</p>
+                <div className="flex flex-wrap gap-2 justify-center mt-6">
+                  {['什么是 RAG？', '对比向量检索与关键词检索', '系统支持哪些文档格式？'].map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setInput(s)}
+                      className="text-xs px-3 py-1.5 rounded-lg bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : (
               messages.map((msg, i) => <ChatMessage key={i} message={msg} />)
             )}
             {isLoading && (
-              <div className="flex gap-3">
+              <div className="flex gap-3 animate-msg-in">
                 <div className="shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-muted">
                   <BotIcon className="h-4 w-4" />
                 </div>
-                <div className="bg-muted rounded-lg px-4 py-3">
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                <div className="bg-muted rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-typing-dot" style={{ animationDelay: '0s' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-typing-dot" style={{ animationDelay: '0.2s' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-typing-dot" style={{ animationDelay: '0.4s' }} />
                 </div>
               </div>
             )}
           </div>
-        </ScrollArea>
-        <div className="flex gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="输入你的问题..."
-            className="min-h-[44px] max-h-[120px] resize-none"
-            rows={1}
-            disabled={isLoading}
-          />
-          <Button onClick={handleSend} disabled={isLoading || !input.trim()} className="shrink-0">
-            {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </Button>
+        </div>
+
+        {/* Input */}
+        <div className="border-t px-4 py-3 shrink-0">
+          <div className="flex gap-2 max-w-4xl mx-auto">
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="输入你的问题..."
+              className="min-h-[44px] max-h-[120px] resize-none scrollbar-thin"
+              rows={1}
+              disabled={isLoading}
+            />
+            <Button onClick={handleSend} disabled={isLoading || !input.trim()} className="shrink-0 h-[44px] w-[44px] p-0" style={{ background: 'var(--gradient-brand)' }}>
+              {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>

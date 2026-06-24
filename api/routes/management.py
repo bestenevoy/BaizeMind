@@ -62,9 +62,10 @@ SETTING_CATEGORIES = [
     ("检索参数", [
         ("hybrid_top_k", "检索数量"),
         ("hybrid_dense_weight", "稠密向量权重"),
-        ("hybrid_sparse_weight", "稀疏向量权重"),
         ("hybrid_bm25_weight", "BM25 权重"),
         ("hybrid_rrf_k", "RRF 参数 k"),
+        ("rrf_score_threshold", "RRF 分数阈值"),
+        ("retrieval_over_fetch_multiplier", "检索过采样倍数"),
         ("retrieval_similarity_threshold", "相似度阈值"),
         ("reranker_method", "重排序方式"),
     ]),
@@ -479,18 +480,20 @@ def _build_rewrite_info(query: str, dense_query: str, bm25_query: str) -> dict:
 async def search_debug(body: SearchDebugRequest):
     query = body.query
     current_threshold = settings.retrieval_similarity_threshold
+    rrf_threshold = settings.rrf_score_threshold
     dense_threshold = settings.dense_vector_threshold
     rerank_threshold = settings.reranker_score_threshold
 
-    doc_filter = None
+    doc_ids = None
     if body.doc_id:
-        doc_filter = f'doc_id == "{body.doc_id}"'
+        doc_ids = [body.doc_id]
     elif body.folder or body.tags:
         ids = doc_store.get_doc_ids_by_filter(folder=body.folder or None, tags=body.tags or None)
         if not ids:
             return {
                 "query": query,
                 "threshold": current_threshold,
+                "rrf_threshold": rrf_threshold,
                 "dense_threshold": dense_threshold,
                 "rerank_threshold": rerank_threshold,
                 "rewrite": {"enabled": settings.query_rewrite_enabled, "original": query, "dense_query": query, "bm25_query": query, "query_tokens": [], "dense_tokens": [], "bm25_tokens": []},
@@ -499,8 +502,7 @@ async def search_debug(body: SearchDebugRequest):
                 "filtered_out_by_rerank_threshold": 0,
                 "message": "No documents match the folder/tag filter",
             }
-        id_list = " ".join(f'"{d}"' for d in ids)
-        doc_filter = f"doc_id in [{id_list}]"
+        doc_ids = ids
 
     # Query rewriting (same as main chat)
     dense_query = query
@@ -519,7 +521,7 @@ async def search_debug(body: SearchDebugRequest):
     _, debug = hybrid.retrieve(
         query, top_k=body.top_k,
         dense_query=dense_query, bm25_query=bm25_query,
-        doc_filter=doc_filter,
+        doc_ids=doc_ids,
     )
 
     max_rrf = debug["rrf_max_raw"]
@@ -532,7 +534,7 @@ async def search_debug(body: SearchDebugRequest):
             "text_preview": doc.get("text", "")[:200],
             "rrf_raw": round(raw_score, 8),
             "rrf_normalized": round(normalized, 4),
-            "rrf_pass_threshold": current_threshold == 0 or normalized >= current_threshold,
+            "rrf_pass_threshold": settings.rrf_score_threshold == 0 or normalized >= settings.rrf_score_threshold,
             "dense_score": round(debug["dense_scores"].get(cid, 0), 6),
             "bm25_score": round(debug["bm25_scores"].get(cid, 0), 6),
         })
@@ -565,6 +567,7 @@ async def search_debug(body: SearchDebugRequest):
     return {
         "query": query,
         "threshold": current_threshold,
+        "rrf_threshold": rrf_threshold,
         "dense_threshold": dense_threshold,
         "rerank_threshold": rerank_threshold,
         "rewrite": rewrite_info,

@@ -255,12 +255,11 @@ export async function askQuestionStream(
   onError: (err: string) => void,
   folder?: string,
   tags?: string[],
-  docFilter?: string,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/qa/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, stream: true, folder, tags, doc_filter: docFilter }),
+    body: JSON.stringify({ query, stream: true, folder, tags }),
   })
   if (!res.ok) {
     onError(`Stream failed: ${res.statusText}`)
@@ -399,6 +398,7 @@ export interface SearchDebugChunk {
 export interface SearchDebugResponse {
   query: string
   threshold: number
+  rrf_threshold: number
   dense_threshold: number
   rerank_threshold: number
   rewrite: {
@@ -448,7 +448,8 @@ export interface ConfigSchema {
 }
 
 export const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
-  retrieval_similarity_threshold: { type: 'float', label: 'RRF 阈值', min: 0, max: 1 },
+  retrieval_similarity_threshold: { type: 'float', label: '相似度阈值', min: 0, max: 1 },
+  rrf_score_threshold: { type: 'float', label: 'RRF 分数阈值', min: 0, max: 1 },
   dense_vector_threshold: { type: 'float', label: 'Dense 向量阈值', min: 0, max: 1 },
   reranker_score_threshold: { type: 'float', label: 'Rerank 阈值', min: 0, max: 1 },
   reranker_method: { type: 'enum', label: 'Rerank 方法', options: ['embedding', 'llm', 'hybrid'] },
