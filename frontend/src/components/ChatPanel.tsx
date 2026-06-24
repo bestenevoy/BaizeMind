@@ -222,7 +222,13 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
                 </div>
               </div>
             ) : (
-              messages.map((msg, i) => <ChatMessage key={i} message={msg} />)
+              (() => {
+                let lastUserQuery = ''
+                return messages.map((msg, i) => {
+                  if (msg.role === 'user') lastUserQuery = msg.content
+                  return <ChatMessage key={i} message={msg} userQuery={msg.role === 'assistant' ? lastUserQuery : undefined} />
+                })
+              })()
             )}
             {isLoading && (
               <div className="flex gap-3 animate-msg-in">

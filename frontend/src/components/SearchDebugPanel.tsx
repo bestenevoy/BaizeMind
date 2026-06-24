@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Search, Loader2, ChevronDown, ChevronRight, Check, X, Eye, EyeOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,19 +20,35 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   const [editValue, setEditValue] = useState('')
   const [saving, setSaving] = useState(false)
   const [showAll, setShowAll] = useState(true)
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Auto-search when coming from chat with a query param
+  const qParam = searchParams.get('q')
+  useEffect(() => {
+    if (qParam && qParam.trim()) {
+      const trimmed = qParam.trim()
+      setQuery(trimmed)
+      // Clear param from URL so it doesn't re-trigger
+      const newParams = new URLSearchParams(searchParams)
+      newParams.delete('q')
+      setSearchParams(newParams, { replace: true })
+      handleSearch(trimmed)
+    }
+  }, [qParam])
 
   const togglePreview = (key: string) => {
     setExpandedPreviews(prev => ({ ...prev, [key]: !prev[key] }))
   }
 
-  const handleSearch = async () => {
-    if (!query.trim() || loading) return
+  const handleSearch = async (q?: string) => {
+    const searchQuery = (q || query).trim()
+    if (!searchQuery || loading) return
     setLoading(true)
     setResult(null)
     setExpandedPreviews({})
     setResultTab('rewrite')
     try {
-      const res = await searchDebug(query.trim(), folder, tags, docId)
+      const res = await searchDebug(searchQuery, folder, tags, docId)
       setResult(res)
     } catch (err) {
       console.error('Search debug failed:', err)
@@ -122,7 +139,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
               placeholder="输入查询文本，测试检索召回效果..."
               className="flex-1"
             />
-            <Button onClick={handleSearch} disabled={loading || !query.trim()}>
+            <Button onClick={() => handleSearch()} disabled={loading || !query.trim()}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Search className="h-4 w-4 mr-1" />}
               检索
             </Button>

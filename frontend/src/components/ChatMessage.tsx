@@ -3,7 +3,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import rehypeKatex from 'rehype-katex'
 import remarkMath from 'remark-math'
-import { User, Bot, Copy, Check, ChevronDown, ChevronRight, FileText, Search, Brain, GitGraph, MessageSquare, ShieldCheck, Loader2 } from 'lucide-react'
+import { User, Bot, Copy, Check, ChevronDown, ChevronRight, FileText, Search, Brain, GitGraph, MessageSquare, ShieldCheck, Loader2, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useState, useRef, useMemo, useCallback } from 'react'
@@ -33,10 +33,11 @@ function StepIcon({ node }: { node: string }) {
   return <>{NODE_ICONS[node] || <Loader2 className="h-3 w-3" />}</>
 }
 
-function StepResult({ step }: { step: StreamStep }) {
+function StepResult({ step, userQuery }: { step: StreamStep; userQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const result = step.result
   if (!result) return null
+  const encodedQuery = userQuery ? encodeURIComponent(userQuery) : ''
 
   if (step.node === 'query_router') {
     return (
@@ -54,6 +55,12 @@ function StepResult({ step }: { step: StreamStep }) {
           <button onClick={() => setExpanded(!expanded)} className="ml-1 text-primary hover:underline">
             {expanded ? '收起' : '详情'}
           </button>
+        )}
+        {count > 0 && encodedQuery && (
+          <a href={`/documents?tab=search&q=${encodedQuery}`} className="ml-1.5 text-primary/70 hover:text-primary inline-flex items-center gap-0.5" title="在检索测试页面分析">
+            <ExternalLink className="h-3 w-3" />
+            分析
+          </a>
         )}
         {expanded && (
           <div className="mt-1 space-y-1">
@@ -78,7 +85,7 @@ function StepResult({ step }: { step: StreamStep }) {
   return null
 }
 
-export function ChatMessage({ message }: { message: Message }) {
+export function ChatMessage({ message, userQuery }: { message: Message; userQuery?: string }) {
   const [copied, setCopied] = useState(false)
   const [showContext, setShowContext] = useState(false)
   const [showSteps, setShowSteps] = useState(false)
@@ -190,7 +197,7 @@ export function ChatMessage({ message }: { message: Message }) {
                   <div key={i} className="flex items-start gap-1.5 text-xs">
                     <span className="shrink-0 mt-0.5"><StepIcon node={step.node} /></span>
                     <span className="text-muted-foreground">{step.label}</span>
-                    <StepResult step={step} />
+                    <StepResult step={step} userQuery={userQuery} />
                     {step.status === 'error' && (
                       <span className="text-destructive ml-1">失败: {step.error}</span>
                     )}
