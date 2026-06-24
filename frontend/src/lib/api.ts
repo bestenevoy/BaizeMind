@@ -439,6 +439,61 @@ export interface EditableConfigItem {
   overridden: boolean
 }
 
+export interface ConfigSchema {
+  type: 'string' | 'int' | 'float' | 'bool' | 'enum'
+  label: string
+  min?: number
+  max?: number
+  options?: string[]
+}
+
+export const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
+  retrieval_similarity_threshold: { type: 'float', label: 'RRF 阈值', min: 0, max: 1 },
+  dense_vector_threshold: { type: 'float', label: 'Dense 向量阈值', min: 0, max: 1 },
+  reranker_score_threshold: { type: 'float', label: 'Rerank 阈值', min: 0, max: 1 },
+  reranker_method: { type: 'enum', label: 'Rerank 方法', options: ['embedding', 'llm', 'hybrid'] },
+  chunk_size: { type: 'int', label: '分块大小', min: 64, max: 4096 },
+  chunk_overlap: { type: 'int', label: '分块重叠', min: 0, max: 2048 },
+  hybrid_top_k: { type: 'int', label: '混合检索 Top-K', min: 1, max: 100 },
+  hybrid_dense_weight: { type: 'float', label: 'Dense 权重', min: 0, max: 1 },
+  hybrid_bm25_weight: { type: 'float', label: 'BM25 权重', min: 0, max: 1 },
+  hybrid_rrf_k: { type: 'int', label: 'RRF k 值', min: 1, max: 200 },
+  agent_max_iterations: { type: 'int', label: '验证最大轮次', min: 1, max: 10 },
+  agent_temperature: { type: 'float', label: 'LLM 温度', min: 0, max: 2 },
+  query_rewrite_enabled: { type: 'bool', label: '查询改写开关' },
+  query_rewrite_language: { type: 'string', label: '改写语言' },
+}
+
+export function validateConfigValue(key: string, value: string): string | null {
+  const schema = CONFIG_SCHEMA[key]
+  if (!schema) return null
+
+  if (schema.type === 'bool') {
+    const v = value.toLowerCase()
+    if (v !== 'true' && v !== 'false' && v !== '0' && v !== '1') return '请输入 true 或 false'
+    return null
+  }
+  if (schema.type === 'int') {
+    const v = parseInt(value)
+    if (isNaN(v)) return '请输入整数'
+    if (schema.min !== undefined && v < schema.min) return `最小值为 ${schema.min}`
+    if (schema.max !== undefined && v > schema.max) return `最大值为 ${schema.max}`
+    return null
+  }
+  if (schema.type === 'float') {
+    const v = parseFloat(value)
+    if (isNaN(v)) return '请输入数字'
+    if (schema.min !== undefined && v < schema.min) return `最小值为 ${schema.min}`
+    if (schema.max !== undefined && v > schema.max) return `最大值为 ${schema.max}`
+    return null
+  }
+  if (schema.type === 'enum' && schema.options) {
+    if (!schema.options.includes(value)) return `可选值: ${schema.options.join(', ')}`
+    return null
+  }
+  return null
+}
+
 export async function listEditableConfig(): Promise<EditableConfigItem[]> {
   const res = await fetch(`${API_BASE}/system/config/editable`)
   if (!res.ok) throw new Error(`List editable config failed: ${res.statusText}`)

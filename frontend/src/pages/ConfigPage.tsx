@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { getConfig, checkConnectivity, getSystemStats, listEditableConfig, updateConfigOverride, resetConfigOverride, cleanupOrphans, buildGraph, buildGraphStatus, deleteAllVectors, deleteAllGraph, deleteInactiveGraph, rebuildBM25 } from '@/lib/api'
 import type { ConfigResponse, ConnectivityResult, SystemStats, EditableConfigItem } from '@/lib/api'
+import { CONFIG_SCHEMA, validateConfigValue } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,7 @@ export function ConfigPage() {
   const [editableItems, setEditableItems] = useState<EditableConfigItem[]>([])
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
+  const [editError, setEditError] = useState('')
   const [saving, setSaving] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
   const [rebuildPhase, setRebuildPhase] = useState('')
@@ -56,7 +58,10 @@ export function ConfigPage() {
 
   const handleSaveOverride = async () => {
     if (!editingKey) return
+    const err = validateConfigValue(editingKey, editValue)
+    if (err) { setEditError(err); return }
     setSaving(true)
+    setEditError('')
     try {
       await updateConfigOverride(editingKey, editValue)
       setEditableItems((prev) =>
@@ -77,6 +82,7 @@ export function ConfigPage() {
   const startEdit = (item: EditableConfigItem) => {
     setEditingKey(item.key)
     setEditValue(item.value)
+    setEditError('')
   }
 
   const loadEditableConfig = async () => {
@@ -87,6 +93,8 @@ export function ConfigPage() {
   }
 
   const friendlyValue = (item: EditableConfigItem) => {
+    const schema = CONFIG_SCHEMA[item.key]
+    if (schema?.type === 'bool') return item.value.toLowerCase() === 'true' ? '开启' : '关闭'
     if (item.key === 'reranker_method') {
       const m: Record<string, string> = {
         embedding: 'Cross-Encoder (bge-reranker-v2-m3)',
@@ -391,56 +399,90 @@ export function ConfigPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {editableItems.map((item) => (
+              {editableItems.map((item) => {
+                const schema = CONFIG_SCHEMA[item.key]
+                const label = schema?.label || item.key
+                const isEditing = editingKey === item.key
+
+                return (
                 <div
                   key={item.key}
                   className="flex items-center gap-3 p-2 rounded border hover:bg-muted/30 text-sm"
                 >
                   <span className="w-48 shrink-0 text-muted-foreground font-mono text-xs">
-                    {item.key}
+                    {label}
                   </span>
-                  {editingKey === item.key ? (
-                    item.key === 'reranker_method' ? (
-                      <div className="flex items-center gap-2 flex-1">
-                        <select
-                          className="flex-1 h-8 text-xs rounded-md border bg-background px-2"
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          autoFocus
-                        >
-                          <option value="embedding">硅基流动 Cross-Encoder (BAAI/bge-reranker-v2-m3)</option>
-                          <option value="llm">LLM 排序</option>
-                          <option value="hybrid">混合 (Cross-Encoder + LLM)</option>
-                        </select>
-                        <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
-                          {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>
-                          取消
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2 flex-1">
-                        <Input
-                          className="flex-1 h-8 text-xs"
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') handleSaveOverride() }}
-                          autoFocus
-                        />
-                        <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
-                          {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>
-                          取消
-                        </Button>
-                      </div>
-                    )
+                  {isEditing ? (
+                    <>
+                      {schema?.type === 'bool' ? (
+                        <div className="flex items-center gap-2 flex-1">
+                          <Button
+                            size="sm"
+                            variant={editValue.toLowerCase() === 'true' ? 'default' : 'outline'}
+                            onClick={() => setEditValue('true')}
+                          >开启</Button>
+                          <Button
+                            size="sm"
+                            variant={editValue.toLowerCase() === 'false' ? 'default' : 'outline'}
+                            onClick={() => setEditValue('false')}
+                          >关闭</Button>
+                          <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
+                            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>取消</Button>
+                        </div>
+                      ) : schema?.type === 'enum' && schema.options ? (
+                        <div className="flex items-center gap-2 flex-1">
+                          <select
+                            className="flex-1 h-8 text-xs rounded-md border bg-background px-2"
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            autoFocus
+                          >
+                            {schema.options.map(o => (
+                              <option key={o} value={o}>{o}</option>
+                            ))}
+                          </select>
+                          <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
+                            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>取消</Button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-1 flex-1">
+                          <div className="flex items-center gap-2">
+                            <Input
+                              className="flex-1 h-8 text-xs"
+                              type={schema?.type === 'int' || schema?.type === 'float' ? 'number' : 'text'}
+                              min={schema?.min}
+                              max={schema?.max}
+                              step={schema?.type === 'float' ? '0.01' : '1'}
+                              value={editValue}
+                              onChange={(e) => { setEditValue(e.target.value); setEditError('') }}
+                              onKeyDown={(e) => { if (e.key === 'Enter') handleSaveOverride() }}
+                              autoFocus
+                            />
+                            <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
+                              {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>取消</Button>
+                          </div>
+                          {editError && <p className="text-xs text-red-500">{editError}</p>}
+                        </div>
+                      )}
+                    </>
                   ) : (
                     <div className="flex items-center gap-2 flex-1">
                       <code className="text-xs bg-muted px-1.5 py-0.5 rounded min-w-[80px] text-center">
                         {friendlyValue(item) || '-'}
                       </code>
+                      {schema?.type === 'int' || schema?.type === 'float' ? (
+                        <span className="text-[10px] text-muted-foreground">
+                          {schema.min !== undefined && schema.max !== undefined
+                            ? `${schema.min}–${schema.max}`
+                            : ''}
+                        </span>
+                      ) : null}
                       {item.overridden && (
                         <Badge variant="secondary" className="text-[10px]">已修改</Badge>
                       )}
@@ -457,7 +499,7 @@ export function ConfigPage() {
                     </div>
                   )}
                 </div>
-              ))}
+              )})}
             </div>
           </CardContent>
         </Card>
