@@ -26,32 +26,42 @@ export function Header() {
   ]
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
-    `flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-colors ${
+    `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-all ${
       isActive
         ? 'bg-primary/10 text-primary font-medium'
         : 'text-muted-foreground hover:text-foreground hover:bg-accent'
     }`
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="container flex h-14 items-center">
-        <nav className="flex items-center space-x-1">
+    <header className="sticky top-0 z-50 w-full border-b bg-background/80 backdrop-blur-md">
+      <div className="container flex h-14 items-center gap-4">
+        {/* Brand */}
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'var(--gradient-brand)' }}>
+            <Brain className="h-4 w-4 text-white" />
+          </div>
+          <span className="text-gradient-brand font-bold text-base hidden sm:inline">Agentic RAG</span>
+        </div>
+
+        {/* Nav */}
+        <nav className="flex items-center space-x-0.5">
           {navItems.map(({ to, label, icon: Icon }) => (
             <NavLink key={to} to={to} end={to === '/'} className={linkClass}>
               <Icon className="h-4 w-4" />
-              {label}
+              <span className="hidden md:inline">{label}</span>
             </NavLink>
           ))}
         </nav>
 
+        {/* Status */}
         <div className="ml-auto flex items-center gap-1.5 text-xs">
           <span
-            className={`h-2 w-2 rounded-full ${
+            className={`h-2 w-2 rounded-full transition-colors ${
               online === null ? 'bg-gray-400 animate-pulse' : online ? 'bg-green-500' : 'bg-red-500'
             }`}
           />
-          <span className="text-muted-foreground">
-            {online === null ? '...' : online ? '在线' : '离线'}
+          <span className="text-muted-foreground hidden sm:inline">
+            {online === null ? '连接中...' : online ? '在线' : '离线'}
           </span>
         </div>
       </div>

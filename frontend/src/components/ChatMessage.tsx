@@ -170,9 +170,9 @@ export function ChatMessage({ message }: { message: Message }) {
   }), [message.retrieved_docs, handleCitationClick])
 
   return (
-    <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
-      <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${isUser ? 'bg-primary' : 'bg-muted'}`}>
-        {isUser ? <User className="h-4 w-4 text-primary-foreground" /> : <Bot className="h-4 w-4" />}
+    <div className={`flex gap-3 animate-msg-in ${isUser ? 'flex-row-reverse' : ''}`}>
+      <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${isUser ? '' : 'bg-muted'}`} style={isUser ? { background: 'var(--gradient-brand)' } : {}}>
+        {isUser ? <User className="h-4 w-4 text-white" /> : <Bot className="h-4 w-4" />}
       </div>
       <div className={`flex-1 max-w-[80%] ${isUser ? 'text-right' : ''}`}>
         {message.steps && message.steps.length > 0 && (
@@ -185,7 +185,7 @@ export function ChatMessage({ message }: { message: Message }) {
               处理过程 ({message.steps.length} 步)
             </button>
             {showSteps && (
-              <div className="space-y-0.5 bg-muted/30 rounded p-2">
+              <div className="space-y-0.5 bg-muted/30 rounded-lg p-2 text-left">
                 {message.steps.map((step, i) => (
                   <div key={i} className="flex items-start gap-1.5 text-xs">
                     <span className="shrink-0 mt-0.5"><StepIcon node={step.node} /></span>
@@ -202,9 +202,10 @@ export function ChatMessage({ message }: { message: Message }) {
         )}
         {hasContent && (
           <div
-            className={`inline-block rounded-lg px-4 py-2 ${
-              isUser ? 'bg-primary text-primary-foreground' : 'bg-muted'
+            className={`inline-block rounded-2xl px-4 py-2.5 text-left ${
+              isUser ? 'text-white rounded-tr-sm' : 'bg-muted rounded-tl-sm'
             }`}
+            style={isUser ? { background: 'var(--gradient-brand)' } : {}}
           >
             {isUser ? (
               <p className="text-sm whitespace-pre-wrap">{message.content}</p>
@@ -257,7 +258,7 @@ export function ChatMessage({ message }: { message: Message }) {
           <div className="mt-2">
             <button
               onClick={() => setShowContext(!showContext)}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               {showContext ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
               检索上下文 ({message.retrieved_docs.length} 条)
@@ -269,16 +270,16 @@ export function ChatMessage({ message }: { message: Message }) {
                     key={i}
                     id={`chunk-${i + 1}`}
                     ref={(el) => { if (el) chunkRefs.current.set(i + 1, el) }}
-                    className={`bg-muted/50 rounded p-2 text-xs transition-all duration-300 ${
-                      activeCitation === i + 1 ? 'ring-2 ring-primary bg-muted/70' : ''
+                    className={`bg-muted/40 rounded-lg p-2.5 text-xs transition-all duration-300 border border-transparent ${
+                      activeCitation === i + 1 ? 'ring-2 ring-primary bg-muted/60 border-primary/20' : ''
                     }`}
                   >
                     <div className="flex items-center gap-1 text-muted-foreground mb-1">
                       <FileText className="h-3 w-3" />
-                      {doc.filename || doc.doc_id}
-                      <span className="ml-auto">score: {doc.score.toFixed(3)}</span>
+                      <span className="truncate">{doc.filename || doc.doc_id}</span>
+                      <span className="ml-auto font-mono tabular-nums shrink-0">score: {doc.score.toFixed(3)}</span>
                     </div>
-                    <p className="whitespace-pre-wrap break-all leading-relaxed">{doc.text}</p>
+                    <p className="whitespace-pre-wrap break-all leading-relaxed scrollbar-thin max-h-32 overflow-y-auto">{doc.text}</p>
                   </div>
                 ))}
               </div>
