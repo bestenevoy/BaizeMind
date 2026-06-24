@@ -65,6 +65,7 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
     let citations: string[] = []
     let retrievedDocs: RetrievedDoc[] = []
     let processingTime = 0
+    let searchDebugData: Record<string, unknown> | null = null
 
     setMessages((prev) => [...prev, { role: 'assistant', content: '', steps: [] }])
 
@@ -92,6 +93,9 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
               score: d.score as number,
               filename: d.filename as string | undefined,
             }))
+            if (step.result.search_debug_data) {
+              searchDebugData = step.result.search_debug_data as Record<string, unknown>
+            }
           }
 
           setMessages((prev) => {
@@ -105,6 +109,7 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
                 citations,
                 retrieved_docs: retrievedDocs,
                 steps: [...steps],
+                search_debug_data: searchDebugData,
               }
             }
             return updated
@@ -124,6 +129,7 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
                 retrieved_docs: retrievedDocs,
                 steps,
                 processing_time_ms: processingTime,
+                search_debug_data: searchDebugData,
               }
             }
             return updated

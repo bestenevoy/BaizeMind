@@ -54,6 +54,7 @@ class AgentState(TypedDict):
     graphrag_context: str
     retrieval_path: str
     retrieval_debug: dict  # debug info from hybrid retriever
+    search_debug_data: dict  # full SearchDebugResponse for frontend "分析" button
     draft_answer: str
     final_answer: str
     citations: list[str]
@@ -308,10 +309,17 @@ class AgenticRAGWorkflow:
                 dense_query=dense_query, bm25_query=bm25_query,
             )
             results = self.retrieval_agent._dedup_by_chunk_id(results)
+
+            from src.retrieval.debug_formatter import build_search_debug_response
+            search_debug_data = build_search_debug_response(
+                original_query, debug, dense_query, bm25_query, top_k=20,
+            )
+
             return {
                 "documents": results,
                 "retrieval_path": "[Retrieval] hybrid (dense + BM25)",
                 "retrieval_debug": _serialize_debug(debug, dense_query),
+                "search_debug_data": search_debug_data,
             }
         except Exception as e:
             return {"error": f"Retrieval failed: {e}"}

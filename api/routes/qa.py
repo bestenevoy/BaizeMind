@@ -123,6 +123,7 @@ async def ask_stream(request: QARequest):
                     payload["result"] = {
                         "count": len(docs),
                         "documents": doc_items,
+                        "search_debug_data": node_output.get("search_debug_data"),
                     }
                 elif node_name == "graph_agent":
                     graph_context = node_output.get("graph_context", "")

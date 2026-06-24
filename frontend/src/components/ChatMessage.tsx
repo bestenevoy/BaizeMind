@@ -17,6 +17,7 @@ export interface Message {
   retrieved_docs?: RetrievedDoc[]
   steps?: StreamStep[]
   processing_time_ms?: number
+  search_debug_data?: Record<string, unknown> | null
 }
 
 const NODE_ICONS: Record<string, React.ReactNode> = {
@@ -33,11 +34,18 @@ function StepIcon({ node }: { node: string }) {
   return <>{NODE_ICONS[node] || <Loader2 className="h-3 w-3" />}</>
 }
 
-function StepResult({ step, userQuery }: { step: StreamStep; userQuery?: string }) {
+function StepResult({ step, userQuery, searchDebugData }: { step: StreamStep; userQuery?: string; searchDebugData?: Record<string, unknown> | null }) {
   const [expanded, setExpanded] = useState(false)
   const result = step.result
   if (!result) return null
   const encodedQuery = userQuery ? encodeURIComponent(userQuery) : ''
+
+  const handleAnalyze = () => {
+    if (searchDebugData) {
+      sessionStorage.setItem('chat_retrieval_debug', JSON.stringify(searchDebugData))
+    }
+    window.open(`/documents?tab=search&q=${encodedQuery}`, '_blank')
+  }
 
   if (step.node === 'query_router') {
     return (
@@ -56,11 +64,11 @@ function StepResult({ step, userQuery }: { step: StreamStep; userQuery?: string 
             {expanded ? '收起' : '详情'}
           </button>
         )}
-        {count > 0 && encodedQuery && (
-          <a href={`/documents?tab=search&q=${encodedQuery}`} className="ml-1.5 text-primary/70 hover:text-primary inline-flex items-center gap-0.5" title="在检索测试页面分析">
+        {count > 0 && userQuery && (
+          <button onClick={handleAnalyze} className="ml-1.5 text-primary/70 hover:text-primary inline-flex items-center gap-0.5 text-xs" title="在检索测试页面分析（含完整检索数据）">
             <ExternalLink className="h-3 w-3" />
             分析
-          </a>
+          </button>
         )}
         {expanded && (
           <div className="mt-1 space-y-1">
@@ -197,7 +205,7 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
                   <div key={i} className="flex items-start gap-1.5 text-xs">
                     <span className="shrink-0 mt-0.5"><StepIcon node={step.node} /></span>
                     <span className="text-muted-foreground">{step.label}</span>
-                    <StepResult step={step} userQuery={userQuery} />
+                    <StepResult step={step} userQuery={userQuery} searchDebugData={message.search_debug_data} />
                     {step.status === 'error' && (
                       <span className="text-destructive ml-1">失败: {step.error}</span>
                     )}

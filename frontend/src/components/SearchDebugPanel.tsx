@@ -22,13 +22,27 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   const [showAll, setShowAll] = useState(true)
   const [searchParams, setSearchParams] = useSearchParams()
 
-  // Auto-search when coming from chat with a query param
+  // Check for pre-fetched data from chat (sessionStorage)
+  useEffect(() => {
+    const stored = sessionStorage.getItem('chat_retrieval_debug')
+    if (stored) {
+      try {
+        const data = JSON.parse(stored) as SearchDebugResponse
+        if (data.query) {
+          setQuery(data.query)
+          setResult(data)
+        }
+      } catch {}
+      sessionStorage.removeItem('chat_retrieval_debug')
+    }
+  }, [])
+
+  // Auto-search when coming from chat with a query param (without pre-fetched data)
   const qParam = searchParams.get('q')
   useEffect(() => {
-    if (qParam && qParam.trim()) {
+    if (qParam && qParam.trim() && !result) {
       const trimmed = qParam.trim()
       setQuery(trimmed)
-      // Clear param from URL so it doesn't re-trigger
       const newParams = new URLSearchParams(searchParams)
       newParams.delete('q')
       setSearchParams(newParams, { replace: true })
