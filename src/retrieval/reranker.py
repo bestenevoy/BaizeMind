@@ -1,3 +1,6 @@
+import json
+import logging
+import re
 from typing import Any, Optional
 
 import numpy as np
@@ -7,6 +10,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from src.llm.deepseek import get_chat_llm
 from src.embeddings.bge_m3 import BGEM3Embedding
 from config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 RERANK_PROMPT = """You are a search result reranker. Given a query and a list of search results,
 select the most relevant results and rank them by relevance to the query.
@@ -41,17 +46,20 @@ class Reranker:
         results: list[dict[str, Any]],
         top_k: int = 10,
     ) -> list[dict[str, Any]]:
-        if len(results) <= top_k:
+        if not results:
             return results
 
         method = settings.reranker_method
 
         if method == "embedding":
+            logger.info("reranker: using cross-encoder (SiliconFlow/fallback)")
             return self._cross_encoder_rerank(query, results, top_k)
         elif method == "hybrid":
-            emb_ranked = self._cross_encoder_rerank(query, results, top_k * 2)
+            logger.info("reranker: using hybrid (cross-encoder + LLM)")
+            emb_ranked = self._cross_encoder_rerank(query, results, max(top_k, len(results)))
             return self._llm_rerank(query, emb_ranked, top_k)
-        else:  # llm
+        else:
+            logger.info("reranker: using LLM (DeepSeek)")
             return self._llm_rerank(query, results, top_k)
 
     def _cross_encoder_rerank(
@@ -87,11 +95,16 @@ class Reranker:
                             if 0 <= idx < len(results):
                                 results[idx]["rerank_score"] = item.get("relevance_score", 0)
                                 out.append(results[idx])
+                        logger.info(f"reranker: cross-encoder returned {len(out)} results (top score={out[0].get('rerank_score', 0):.4f})")
                         return out[:top_k]
-            except Exception:
-                pass  # Fall through to local embedding
+                    else:
+                        logger.warning("reranker: cross-encoder API returned empty results, falling back")
+                else:
+                    logger.warning(f"reranker: cross-encoder API returned status {resp.status_code}, falling back")
+            except Exception as e:
+                logger.warning(f"reranker: cross-encoder API call failed ({e}), falling back")
 
-        # Fallback: local BGE-M3 cosine similarity
+        logger.info("reranker: using local BGE-M3 embedding fallback")
         try:
             embedding = self._get_embedding()
             query_vec = embedding.encode_query_dense(query)
@@ -106,8 +119,10 @@ class Reranker:
                 results[i]["rerank_score"] = float(max(0.0, sim))
 
             ranked = sorted(results, key=lambda r: r.get("rerank_score", 0), reverse=True)
+            logger.info(f"reranker: local embedding returned {min(top_k, len(ranked))} results")
             return ranked[:top_k]
-        except Exception:
+        except Exception as e:
+            logger.warning(f"reranker: local embedding failed ({e}), using TF-IDF fallback")
             return self._tfidf_fallback(query, results, top_k)
 
     def _llm_rerank(
@@ -127,10 +142,14 @@ class Reranker:
         llm = self._get_llm()
         resp = llm.invoke(prompt)
         try:
-            import json, re
             indices = json.loads(re.search(r"\[[^\]]*\]", resp.content).group())
-            return [results[i] for i in indices if 0 <= i < len(results)]
-        except Exception:
+            out = [results[i] for i in indices if 0 <= i < len(results)]
+            for rank, r in enumerate(out):
+                r["rerank_score"] = 1.0 - rank / max(len(out), 1)
+            logger.info(f"reranker: LLM rerank returned {len(out)} results")
+            return out[:top_k]
+        except Exception as e:
+            logger.warning(f"reranker: LLM rerank failed ({e}), using TF-IDF fallback")
             return self._tfidf_fallback(query, results, top_k)
 
     @staticmethod
@@ -144,9 +163,10 @@ class Reranker:
             t_vec = vec.transform(texts)
             sims = cosine_similarity(q_vec, t_vec).flatten()
 
-            ranked = sorted(
-                zip(results, sims), key=lambda x: x[1], reverse=True
-            )
-            return [r for r, _ in ranked[:top_k]]
+            for i, s in enumerate(sims):
+                results[i]["rerank_score"] = float(max(0.0, s))
+            ranked = sorted(results, key=lambda r: r.get("rerank_score", 0), reverse=True)
+            logger.info(f"reranker: TF-IDF fallback returned {min(top_k, len(ranked))} results")
+            return [r for r in ranked[:top_k]]
         except Exception:
             return results[:top_k]

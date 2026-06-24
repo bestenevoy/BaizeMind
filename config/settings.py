@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     hybrid_bm25_weight: float = 0.4
     hybrid_rrf_k: int = 60
     retrieval_similarity_threshold: float = 0.6
+    reranker_score_threshold: float = 0.3
     reranker_method: str = "embedding"  # "embedding" | "llm" | "hybrid"
 
     # Graph relation type filtering: high-relevance types for multi-hop/entity enrichment
@@ -85,6 +86,9 @@ class Settings(BaseSettings):
     # Agent
     agent_max_iterations: int = 5
     agent_temperature: float = 0.1
+
+    # Ingest control
+    ingest_skip_evidence: bool = False  # Skip evidence extraction + KG sync for fast chunk/index testing
 
     # Server
     server_host: str = "0.0.0.0"

@@ -28,6 +28,7 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     folder: str = Form("/"),
+    skip_evidence: bool = Form(False),
 ):
     folder = ("/" + folder.strip("/")) if folder != "/" else "/"
 
@@ -48,7 +49,7 @@ async def upload_document(
 
     doc_store.create_document(doc_id, filename, folder, str(save_path))
 
-    background_tasks.add_task(_process_document, doc_id, str(save_path), folder)
+    background_tasks.add_task(_process_document, doc_id, str(save_path), folder, skip_evidence)
 
     return DocumentUploadResponse(
         doc_id=doc_id,
@@ -265,7 +266,11 @@ async def get_document_raw(doc_id: str):
 
 
 @router.post("/{doc_id}/retry", response_model=DocumentUploadResponse)
-async def retry_document(doc_id: str, background_tasks: BackgroundTasks):
+async def retry_document(
+    doc_id: str,
+    background_tasks: BackgroundTasks,
+    skip_evidence: bool = Form(False),
+):
     doc = doc_store.get_document(doc_id)
     if not doc:
         raise HTTPException(404, f"Document {doc_id} not found")
@@ -278,7 +283,7 @@ async def retry_document(doc_id: str, background_tasks: BackgroundTasks):
         raise HTTPException(400, f"Original file for {doc_id} no longer exists")
 
     doc_store.update_document(doc_id, status="pending", error=None)
-    background_tasks.add_task(_process_document, doc_id, file_path, folder)
+    background_tasks.add_task(_process_document, doc_id, file_path, folder, skip_evidence)
 
     return DocumentUploadResponse(
         doc_id=doc_id,
@@ -297,14 +302,16 @@ async def remove_tag(doc_id: str, tag: str):
     return DocumentInfo(**doc)
 
 
-def _process_document(doc_id: str, file_path: str, folder: str):
-    _process_document_evidence(doc_id, file_path, folder)
+def _process_document(doc_id: str, file_path: str, folder: str, skip_evidence: bool = False):
+    _process_document_evidence(doc_id, file_path, folder, skip_evidence)
 
 
-def _process_document_evidence(doc_id: str, file_path: str, folder: str):
+def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_evidence: bool = False):
     import time
     import hashlib
     start = time.time()
+
+    skip_evidence = skip_evidence or settings.ingest_skip_evidence
 
     try:
         doc_store.update_document(doc_id, processing_stage="解析文档")
@@ -401,50 +408,53 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str):
             bm25.merge_chunks(new_chunk_texts)
             bm25.save()
 
-        doc_store.update_document(doc_id, processing_stage="Evidence抽取")
-        from src.knowledge_graph.entity_extractor import EntityExtractor
-        from src.knowledge_graph.evidence_writer import write_evidence
+        if not skip_evidence:
+            doc_store.update_document(doc_id, processing_stage="Evidence抽取")
+            from src.knowledge_graph.entity_extractor import EntityExtractor
+            from src.knowledge_graph.evidence_writer import write_evidence
 
-        extractor = EntityExtractor()
+            extractor = EntityExtractor()
 
-        # Process all chunks for evidence (not just new ones), to support re-extraction
-        total_evidence = len(chunks)
+            total_evidence = len(chunks)
 
-        for i, chunk in enumerate(chunks):
-            ch = chunk["chunk_hash"]
-            doc_store.update_document(doc_id, processing_stage=f"Evidence抽取 {i + 1}/{total_evidence}")
+            for i, chunk in enumerate(chunks):
+                ch = chunk["chunk_hash"]
+                doc_store.update_document(doc_id, processing_stage=f"Evidence抽取 {i + 1}/{total_evidence}")
 
-            try:
-                evidence_items = extractor.extract_evidence(chunk["text"], chunk_hash=ch)
-                if evidence_items:
-                    result = write_evidence(ch, evidence_items)
-                    merge_affected_keys(all_affected_keys, result["affected_keys"])
-            except Exception as chunk_err:
-                import traceback as _tb
-                tb_str = _tb.format_exc()
-                chunk_text_preview = chunk["text"][:500]
-                raise RuntimeError(
-                    f"Evidence extraction failed for chunk_hash={ch[:16]}...: {chunk_err}\n"
-                    f"Chunk text preview: {chunk_text_preview}\n"
-                    f"Full traceback:\n{tb_str}"
-                ) from chunk_err
+                try:
+                    evidence_items = extractor.extract_evidence(chunk["text"], chunk_hash=ch)
+                    if evidence_items:
+                        result = write_evidence(ch, evidence_items)
+                        merge_affected_keys(all_affected_keys, result["affected_keys"])
+                except Exception as chunk_err:
+                    import traceback as _tb
+                    tb_str = _tb.format_exc()
+                    chunk_text_preview = chunk["text"][:500]
+                    raise RuntimeError(
+                        f"Evidence extraction failed for chunk_hash={ch[:16]}...: {chunk_err}\n"
+                        f"Chunk text preview: {chunk_text_preview}\n"
+                        f"Full traceback:\n{tb_str}"
+                    ) from chunk_err
 
-        doc_store.update_document(doc_id, processing_stage="同步知识图谱")
-        if all_affected_keys:
-            tasks = build_sync_tasks(all_affected_keys, doc_id=doc_id, doc_version=doc_version)
-            doc_store.create_sync_tasks_batch(tasks)
+            doc_store.update_document(doc_id, processing_stage="同步知识图谱")
+            if all_affected_keys:
+                tasks = build_sync_tasks(all_affected_keys, doc_id=doc_id, doc_version=doc_version)
+                doc_store.create_sync_tasks_batch(tasks)
 
-            from src.knowledge_graph.graph_sync_worker import process_pending_tasks
-            for _ in range(20):
-                r = process_pending_tasks()
-                if r["success"] + r["failed"] == 0:
-                    break
+                from src.knowledge_graph.graph_sync_worker import process_pending_tasks
+                for _ in range(20):
+                    r = process_pending_tasks()
+                    if r["success"] + r["failed"] == 0:
+                        break
 
-        doc_store.update_document(doc_id, processing_stage="自动标签")
-        from src.storage.auto_tagger import generate_tags
-        tags = generate_tags(markdown)
-        if tags:
-            doc_store.update_document(doc_id, tags=tags)
+            doc_store.update_document(doc_id, processing_stage="自动标签")
+            from src.storage.auto_tagger import generate_tags
+            tags = generate_tags(markdown)
+            if tags:
+                doc_store.update_document(doc_id, tags=tags)
+        else:
+            logger = __import__("logging").getLogger(__name__)
+            logger.info(f"Skip evidence: skipping evidence extraction + KG sync for {doc_id}")
 
         elapsed = (time.time() - start) * 1000
         doc_store.update_document(doc_id, status="completed", processing_stage="完成",

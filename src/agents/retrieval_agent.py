@@ -35,12 +35,10 @@ class RetrievalAgent:
             query, top_k=top_k, doc_filter=doc_filter,
             dense_query=dense_query, bm25_query=bm25_query,
         )
-        # Rerank with the original natural language query (not entity-enriched)
         rerank_query = dense_query if dense_query else query
         ranked = self._reranker.rerank(rerank_query, results, top_k=min(10, len(results)))
 
-        # Apply relevance threshold AFTER reranking
-        threshold = settings.retrieval_similarity_threshold
+        threshold = settings.reranker_score_threshold
         if threshold > 0:
             ranked = [r for r in ranked if r.get("rerank_score", r.get("score", 0)) >= threshold]
             if not ranked:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """批量文档导入脚本 — evidence-driven flow"""
+import argparse
 import sys
 from pathlib import Path
 import hashlib
@@ -23,22 +24,24 @@ from config.settings import settings
 import numpy as np
 
 
-def ingest(file_path: str):
+def ingest(file_path: str, skip_evidence: bool = False):
     path = Path(file_path)
     doc_id = path.stem
     doc_version = 1
+    skip_evidence = skip_evidence or settings.ingest_skip_evidence
 
+    total_steps = 4 if skip_evidence else 6
     print(f"[Ingest] Processing: {path} (doc_id={doc_id})")
 
     # 1. Parse
-    print("  [1/6] Parsing with MinerU...")
+    print(f"  [1/{total_steps}] Parsing with MinerU...")
     parser = MinerUParser()
     result = parser.parse(path, doc_id)
     markdown = result.get("markdown", "")
     print(f"  -> Parsed {len(markdown)} chars of markdown")
 
     # 2. Chunk
-    print("  [2/6] Chunking...")
+    print(f"  [2/{total_steps}] Chunking...")
     h_chunker = HierarchicalChunker(chunk_size=settings.chunk_size, chunk_overlap=settings.chunk_overlap)
     chunks = h_chunker.chunk(doc_id, markdown)
 
@@ -52,7 +55,7 @@ def ingest(file_path: str):
     print(f"  -> Created {len(chunks)} chunks ({len(table_chunks)} table chunks)")
 
     # 3. Chunk dedup & ref management
-    print("  [3/6] Chunk dedup & ref management...")
+    print(f"  [3/{total_steps}] Chunk dedup & ref management...")
     new_chunks = []
 
     for i, chunk in enumerate(chunks):
@@ -67,7 +70,7 @@ def ingest(file_path: str):
 
     # 4. Embed & Index in Milvus + BM25
     if new_chunks:
-        print("  [4/6] Embedding & indexing...")
+        print(f"  [4/{total_steps}] Embedding & indexing...")
         embedding = BGEM3Embedding()
         texts = [c["text"] for c in new_chunks]
         embeddings = embedding.encode_dense_all(texts, batch_size=settings.bge_m3_batch_size, concurrency=8)
@@ -83,10 +86,15 @@ def ingest(file_path: str):
         bm25.save()
         print("  -> BM25 index saved")
     else:
-        print("  [4/6] No new chunks — skipped embedding")
+        print(f"  [4/{total_steps}] No new chunks — skipped embedding")
+
+    if skip_evidence:
+        print("  [SKIP] Evidence extraction + KG sync disabled (--skip-evidence)")
+        print(f"[Done] Document {doc_id} ingested (chunk + index only)!")
+        return
 
     # 5. Evidence Extraction
-    print("  [5/6] Extracting evidence...")
+    print(f"  [5/{total_steps}] Extracting evidence...")
     extractor = EntityExtractor()
     all_affected_keys: dict[str, set[str]] = {}
 
@@ -103,7 +111,7 @@ def ingest(file_path: str):
     print(f"  -> Evidence written, affected keys: {sum(len(v) for v in all_affected_keys.values())}")
 
     # 6. Sync Neo4j
-    print("  [6/6] Syncing knowledge graph...")
+    print(f"  [6/{total_steps}] Syncing knowledge graph...")
     if all_affected_keys:
         tasks = build_sync_tasks(all_affected_keys, doc_id=doc_id, doc_version=doc_version)
         doc_store.create_sync_tasks_batch(tasks)
@@ -116,7 +124,9 @@ def ingest(file_path: str):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python ingest_documents.py <file_path>")
-        sys.exit(1)
-    ingest(sys.argv[1])
+    parser = argparse.ArgumentParser(description="Ingest a document into the RAG system")
+    parser.add_argument("file_path", help="Path to the document file")
+    parser.add_argument("--skip-evidence", action="store_true",
+                        help="Skip evidence extraction and knowledge graph sync (chunk + index only)")
+    args = parser.parse_args()
+    ingest(args.file_path, skip_evidence=args.skip_evidence)

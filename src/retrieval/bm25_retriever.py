@@ -1,6 +1,7 @@
 import json
 import pickle
 import logging
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -11,12 +12,39 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 
+_JIEBA_LOADED = False
+
+
+def _load_jieba():
+    global _JIEBA_LOADED
+    if _JIEBA_LOADED:
+        return
+    try:
+        import os
+        os.environ.setdefault("JIEBA_CACHE_FILE", "")
+        import jieba
+        jieba.setLogLevel(20)
+        _JIEBA_LOADED = True
+    except ImportError:
+        pass
+
+
 def tokenize(text: str) -> list[str]:
     try:
         import jieba
-        return list(jieba.cut(text))
+        _load_jieba()
+        return [t for t in jieba.cut(text) if t.strip()]
     except ImportError:
-        return text.lower().split()
+        return _char_bigram_fallback(text)
+
+
+def _char_bigram_fallback(text: str) -> list[str]:
+    """Character bigram fallback for Chinese text when jieba is unavailable."""
+    result = []
+    for i in range(len(text)):
+        if i + 1 < len(text):
+            result.append(text[i:i + 2])
+    return result if result else [text.lower()]
 
 
 class BM25Retriever:
@@ -97,12 +125,38 @@ class BM25Retriever:
                     self._chunks = []
                     self._corpus = []
                     self._chunk_ids = set()
+                    return
+                if not self._validate():
+                    logger.warning("BM25 index validation failed, deleting stale files and will rebuild")
+                    self._model = None
+                    self._chunks = []
+                    self._corpus = []
+                    self._chunk_ids = set()
+                    try:
+                        model_file.unlink(missing_ok=True)
+                        data_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.warning(f"Failed to load BM25 index: {e}, treating as empty")
                 self._model = None
                 self._chunks = []
                 self._corpus = []
                 self._chunk_ids = set()
+
+    def _validate(self) -> bool:
+        if not self._model or not self._chunks or not self._corpus:
+            return False
+        if len(self._chunks) != len(self._corpus):
+            return False
+        sample_size = min(5, len(self._corpus))
+        for i in range(sample_size):
+            clen = len(self._corpus[i])
+            if clen == 0:
+                return False
+            if clen == 1 and len(self._corpus[i][0]) > 200:
+                return False
+        return True
 
     def remove_by_doc_id(self, doc_id: str):
         if not self._model:
@@ -124,6 +178,8 @@ class BM25Retriever:
     def search(self, query: str, top_k: int = 20) -> list[dict[str, Any]]:
         if self._model is None:
             self.load()
+        if self._model is None:
+            self.rebuild_from_milvus()
         if self._model is None:
             return []
         tokenized = tokenize(query)

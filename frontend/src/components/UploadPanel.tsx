@@ -33,6 +33,7 @@ export function UploadPanel({ folder, open, onOpenChange, onUploadComplete }: Up
   const [isDragging, setIsDragging] = useState(false)
   const [customFolder, setCustomFolder] = useState('')
   const [showFolderInput, setShowFolderInput] = useState(false)
+  const [skipEvidence, setSkipEvidence] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const targetFolder = (customFolder || folder || '/').replace(/^\/?(.*)/, '/$1').replace(/\/$/, '') || '/'
@@ -46,7 +47,7 @@ export function UploadPanel({ folder, open, onOpenChange, onUploadComplete }: Up
       setDocs((prev) => [...prev, { doc_id: tempId, filename: file.name, status: 'uploading', progress: 0 }])
 
       try {
-        const result = await uploadDocument(file, targetFolder)
+        const result = await uploadDocument(file, targetFolder, skipEvidence)
         setDocs((prev) =>
           prev.map((d) =>
             d.doc_id === tempId ? { ...d, doc_id: result.doc_id, status: 'processing', progress: 25 } : d
@@ -126,6 +127,18 @@ export function UploadPanel({ folder, open, onOpenChange, onUploadComplete }: Up
               )}
             </div>
           )}
+
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={skipEvidence}
+              onChange={(e) => setSkipEvidence(e.target.checked)}
+              className="h-4 w-4 rounded border-muted-foreground/30 text-primary focus:ring-primary"
+            />
+            <span className="text-sm text-muted-foreground">
+              跳过 Evidence 提取 & 知识图谱构建（仅分块 + 向量索引，用于快速排查检索问题）
+            </span>
+          </label>
 
           <div
             className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${

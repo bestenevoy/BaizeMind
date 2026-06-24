@@ -97,10 +97,11 @@ export interface GraphOverview {
 
 // ── Documents ──
 
-export async function uploadDocument(file: File, folder: string = '/'): Promise<{ doc_id: string; filename: string; folder: string; status: string }> {
+export async function uploadDocument(file: File, folder: string = '/', skipEvidence: boolean = false): Promise<{ doc_id: string; filename: string; folder: string; status: string }> {
   const formData = new FormData()
   formData.append('file', file)
   formData.append('folder', folder)
+  if (skipEvidence) formData.append('skip_evidence', 'true')
   const res = await fetch(`${API_BASE}/documents/upload`, { method: 'POST', body: formData })
   if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`)
   return res.json()
