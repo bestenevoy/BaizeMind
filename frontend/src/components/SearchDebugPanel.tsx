@@ -276,9 +276,6 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                   )}
                   {resultTab === 'dense' && (
                     <div>
-                      <span className="text-xs font-medium text-muted-foreground">
-                        阈值 {result.dense_threshold || result.threshold} 通过 {denseUpToThreshold}/{result.stages.dense_top5.length}
-                      </span>
                       <StageMini label="" items={result.stages.dense_top5.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="dense" scoreThreshold={result.dense_threshold || result.threshold} />
                     </div>
                   )}

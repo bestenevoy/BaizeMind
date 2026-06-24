@@ -1,6 +1,6 @@
 # Agentic-GraphRAG
 
-企业级多模态文档智能问答系统。融合 MinerU 文档解析、Neo4j 知识图谱、Milvus 向量检索、LangGraph Agent 与 Microsoft GraphRAG 的全链路知识管理平台。
+企业级多模态文档智能问答系统。融合 MinerU 文档解析、Neo4j 知识图谱、Milvus 向量检索、LangGraph Agent 的 GraphRAG 的全链路知识管理平台。
 
 **技术栈**: Python · FastAPI · LangGraph · PaddleOCR-VL · MinerU · BGE-M3 · Neo4j · Milvus · DeepSeek
 
