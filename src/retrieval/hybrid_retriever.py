@@ -101,7 +101,7 @@ class HybridRetriever:
                 cid = doc.get("chunk_id", "")
                 if cid not in scores:
                     scores[cid] = (doc, 0.0)
-                scores[cid] = (scores[cid][0], scores[cid][1] + weight / (k + rank + 1))
+                scores[cid] = (doc, scores[cid][1] + weight / (k + rank + 1))
                 if source == "dense":
                     dense_scores[cid] = doc.get("score", 0)
                 else:
