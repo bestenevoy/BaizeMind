@@ -16,8 +16,11 @@ _EDITABLE_KEYS = {
     "hybrid_top_k",
     "hybrid_dense_weight",
     "hybrid_bm25_weight",
+    "hybrid_rrf_k",
     "agent_max_iterations",
     "agent_temperature",
+    "query_rewrite_enabled",
+    "query_rewrite_language",
 }
 
 
@@ -43,10 +46,21 @@ def get_override(key: str) -> Optional[Any]:
 def set_override(key: str, value: Any) -> bool:
     if key not in _EDITABLE_KEYS:
         return False
+    # Coerce value to match the type of the default setting
+    default = getattr(settings, key, None)
+    if default is not None and not isinstance(value, type(default)):
+        try:
+            if isinstance(default, bool) and isinstance(value, str):
+                value = value.lower() in ("true", "1", "yes")
+            elif isinstance(default, int):
+                value = int(float(value))
+            elif isinstance(default, float):
+                value = float(value)
+        except (ValueError, TypeError):
+            pass
     overrides = load_overrides()
     overrides[key] = value
     save_overrides(overrides)
-    # Patch the live settings object
     setattr(settings, key, value)
     return True
 
