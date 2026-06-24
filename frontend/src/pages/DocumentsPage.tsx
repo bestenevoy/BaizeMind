@@ -47,27 +47,25 @@ export function DocumentsPage() {
             </button>
             <div className="flex-1 border-b" />
           </div>
-          {(activeTab === 'docs' || activeTab === 'search') && (
-            activeTab === 'search' ? (
-              <div className="flex-1 min-h-0 pt-3">
-                <SearchDebugPanel
-                  folder={selectedFolder}
-                  docId={selectedDocId}
-                  tags={selectedTags}
-                  folderTree={
-                    <FolderTree
-                      selectedFolder={selectedFolder}
-                      selectedDocId={selectedDocId}
-                      onSelectFolder={selectFolder}
-                      onSelectDoc={selectDoc}
-                      onChanged={handleFolderChanged}
-                    />
-                  }
-                  tagFilter={<TagFilter selectedTags={selectedTags} onToggle={toggleTag} />}
+          <div className={activeTab === 'search' ? 'flex-1 min-h-0 pt-3' : 'hidden'}>
+            <SearchDebugPanel
+              folder={selectedFolder}
+              docId={selectedDocId}
+              tags={selectedTags}
+              folderTree={
+                <FolderTree
+                  selectedFolder={selectedFolder}
+                  selectedDocId={selectedDocId}
+                  onSelectFolder={selectFolder}
+                  onSelectDoc={selectDoc}
+                  onChanged={handleFolderChanged}
                 />
-              </div>
-            ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0 pt-3">
+              }
+              tagFilter={<TagFilter selectedTags={selectedTags} onToggle={toggleTag} />}
+            />
+          </div>
+
+          <div className={activeTab === 'docs' ? 'grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0 pt-3' : 'hidden'}>
             <div className="lg:col-span-2 space-y-4 overflow-y-auto">
               <FolderTree
                 selectedFolder={selectedFolder}
@@ -81,20 +79,15 @@ export function DocumentsPage() {
             </div>
 
             <div className="lg:col-span-10 min-h-0 overflow-y-auto">
-              {activeTab === 'docs' ? (
-                <>
-                  <div className="flex justify-end mb-2">
-                    <Button size="sm" onClick={() => setShowUpload(true)}>
-                      <Upload className="h-4 w-4 mr-1" />
-                      上传
-                    </Button>
-                  </div>
-                  <DocumentList folder={selectedFolder} tags={selectedTags} key={refreshKey} />
-                </>
-              ) : null}
+              <div className="flex justify-end mb-2">
+                <Button size="sm" onClick={() => setShowUpload(true)}>
+                  <Upload className="h-4 w-4 mr-1" />
+                  上传
+                </Button>
+              </div>
+              <DocumentList folder={selectedFolder} tags={selectedTags} key={refreshKey} />
             </div>
           </div>
-          ))}
 
           <UploadPanel
             folder={selectedFolder}
