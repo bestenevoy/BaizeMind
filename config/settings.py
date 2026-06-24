@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     reranker_score_threshold: float = 0.3
     reranker_method: str = "embedding"  # "embedding" | "llm" | "hybrid"
     query_rewrite_enabled: bool = True
+    query_rewrite_language: str = "简体中文"
 
     # Graph relation type filtering: high-relevance types for multi-hop/entity enrichment
     # Only paths involving these relation types are forwarded to the LLM entity filter

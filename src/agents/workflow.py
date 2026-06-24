@@ -141,7 +141,8 @@ class AgenticRAGWorkflow:
         """Use LLM to rewrite query for dense (semantic) and BM25 (keyword) search."""
         import json
         try:
-            prompt = f"{QUERY_REWRITE_SYSTEM}\n\nUser question: {query}"
+            prompt = QUERY_REWRITE_SYSTEM.format(language=settings.query_rewrite_language)
+            prompt += f"\n\nUser question: {query}"
             resp = self._get_llm().invoke(prompt)
             text = resp.content.strip()
             if text.startswith("```"):
