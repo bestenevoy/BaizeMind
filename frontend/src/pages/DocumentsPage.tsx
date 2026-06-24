@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Upload, FileText, BeakerIcon } from 'lucide-react'
 import { UploadPanel } from '@/components/UploadPanel'
 import { FolderTree } from '@/components/FolderTree'
@@ -12,7 +13,9 @@ export function DocumentsPage() {
   const { selectedFolder, selectedDocId, selectedTags, toggleTag, selectFolder, selectDoc } = useFolderFilter()
   const [refreshKey, setRefreshKey] = useState(0)
   const [showUpload, setShowUpload] = useState(false)
-  const [activeTab, setActiveTab] = useState<'docs' | 'search'>('docs')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab = searchParams.get('tab') || 'docs'
+  const setActiveTab = (tab: string) => setSearchParams({ tab })
 
   const handleFolderChanged = useCallback(() => setRefreshKey(k => k + 1), [])
   const handleUploadComplete = useCallback(() => setRefreshKey(k => k + 1), [])

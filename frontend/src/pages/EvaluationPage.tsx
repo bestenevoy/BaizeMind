@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   listDataset, addSample, updateSample, deleteSample, importDataset, exportDataset,
   runEvaluation, listResults, getResult, deleteResult, generateDataset, listFolders,
@@ -855,7 +856,9 @@ function ResultsTab() {
 // ── Main Page ──
 
 export function EvaluationPage() {
-  const [tab, setTab] = useState<Tab>('dataset')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = (searchParams.get('tab') as Tab) || 'dataset'
+  const setTab = (t: Tab) => setSearchParams({ tab: t })
 
   const tabs: { id: Tab; label: string; icon: typeof Database }[] = [
     { id: 'dataset', label: '数据集管理', icon: Database },

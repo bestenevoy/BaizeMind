@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { getConfig, checkConnectivity, getSystemStats, listEditableConfig, updateConfigOverride, resetConfigOverride, cleanupOrphans, buildGraph, buildGraphStatus, deleteAllVectors, deleteAllGraph, deleteInactiveGraph, rebuildBM25 } from '@/lib/api'
 import type { ConfigResponse, ConnectivityResult, SystemStats, EditableConfigItem } from '@/lib/api'
 import { CONFIG_SCHEMA, validateConfigValue } from '@/lib/api'
@@ -31,7 +32,9 @@ export function ConfigPage() {
   const [saving, setSaving] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
   const [rebuildPhase, setRebuildPhase] = useState('')
-  const [activeTab, setActiveTab] = useState<'status' | 'config'>('status')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab = searchParams.get('tab') || 'status'
+  const setActiveTab = (tab: string) => setSearchParams({ tab })
 
   const loadConfig = useCallback(async () => {
     setLoading(true)
@@ -126,15 +129,26 @@ export function ConfigPage() {
           系统状态
         </button>
         <button
-          onClick={() => setActiveTab('config')}
+          onClick={() => setActiveTab('info')}
           className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-md border border-b-0 transition-colors ${
-            activeTab === 'config'
+            activeTab === 'info'
               ? 'bg-background text-foreground border-border font-medium'
               : 'text-muted-foreground hover:text-foreground border-transparent'
           }`}
         >
           <Settings className="h-4 w-4" />
-          配置管理
+          配置信息
+        </button>
+        <button
+          onClick={() => setActiveTab('runtime')}
+          className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-md border border-b-0 transition-colors ${
+            activeTab === 'runtime'
+              ? 'bg-background text-foreground border-border font-medium'
+              : 'text-muted-foreground hover:text-foreground border-transparent'
+          }`}
+        >
+          <Pencil className="h-4 w-4" />
+          运行时配置
         </button>
         <div className="flex-1 border-b" />
       </div>
@@ -358,7 +372,7 @@ export function ConfigPage() {
         </Card>
 
       </div>
-      ) : (
+      ) : activeTab === 'info' ? (
       <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
 
         {/* Configuration */}
@@ -419,6 +433,9 @@ export function ConfigPage() {
             )}
           </CardContent>
         </Card>
+      </div>
+      ) : (
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
 
         {/* Editable Runtime Config */}
         <Card>

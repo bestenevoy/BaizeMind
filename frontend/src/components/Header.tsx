@@ -1,13 +1,9 @@
 import { Brain, Home, FileText, Settings, FlaskConical, BarChart3, Network } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { NavLink } from 'react-router-dom'
 import { healthCheck } from '@/lib/api'
 
-interface HeaderProps {
-  page: string
-  onNavigate: (page: string) => void
-}
-
-export function Header({ page, onNavigate }: HeaderProps) {
+export function Header() {
   const [online, setOnline] = useState<boolean | null>(null)
 
   useEffect(() => {
@@ -21,31 +17,30 @@ export function Header({ page, onNavigate }: HeaderProps) {
   }, [])
 
   const navItems = [
-    { id: 'home', label: '主页', icon: Home },
-    { id: 'documents', label: '文档', icon: FileText },
-    { id: 'graph', label: '图谱', icon: Network },
-    { id: 'evaluation', label: '评估', icon: BarChart3 },
-    { id: 'config', label: '配置', icon: Settings },
-    { id: 'tests', label: '测试', icon: FlaskConical },
+    { to: '/', label: '主页', icon: Home },
+    { to: '/documents', label: '文档', icon: FileText },
+    { to: '/graph', label: '图谱', icon: Network },
+    { to: '/evaluation', label: '评估', icon: BarChart3 },
+    { to: '/config', label: '配置', icon: Settings },
+    { to: '/tests', label: '测试', icon: FlaskConical },
   ]
+
+  const linkClass = ({ isActive }: { isActive: boolean }) =>
+    `flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-colors ${
+      isActive
+        ? 'bg-primary/10 text-primary font-medium'
+        : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+    }`
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-14 items-center">
         <nav className="flex items-center space-x-1">
-          {navItems.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => onNavigate(id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-colors ${
-                page === id
-                  ? 'bg-primary/10 text-primary font-medium'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-accent'
-              }`}
-            >
+          {navItems.map(({ to, label, icon: Icon }) => (
+            <NavLink key={to} to={to} end={to === '/'} className={linkClass}>
               <Icon className="h-4 w-4" />
               {label}
-            </button>
+            </NavLink>
           ))}
         </nav>
 
