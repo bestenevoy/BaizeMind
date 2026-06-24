@@ -25,6 +25,9 @@ class Neo4jManager:
     def get_neighbors(self, entity_name: str, max_hops: int = 2) -> list[dict]:
         """Query entity neighbors supporting both legacy (:RELATES_TO) and new (:SUBJECT_OF/:OBJECT_OF) models."""
         self.connect()
+        # Neo4j < 5.3 does not support parameterized path bounds, so we use
+        # explicit int() conversion to safely interpolate the value.
+        max_hops_int = int(max_hops)
         with self._driver.session() as session:
             result = session.run(
                 """
@@ -37,7 +40,7 @@ class Neo4jManager:
                        [r in relationships(path) | coalesce(r.type, r.predicate, type(r))] as relation_types,
                        length(path) as distance
                 LIMIT 50
-                """ % max_hops,
+                """ % max_hops_int,
                 name=entity_name,
             )
             return [
@@ -55,6 +58,7 @@ class Neo4jManager:
 
     def find_paths(self, subject: str, object_: str, max_depth: int = 3) -> list[dict]:
         self.connect()
+        max_depth_int = int(max_depth)
         with self._driver.session() as session:
             result = session.run(
                 """
@@ -65,7 +69,7 @@ class Neo4jManager:
                        [r in relationships(path) | r.type] as relations,
                        length(path) as distance
                 LIMIT 10
-                """ % max_depth,
+                """ % max_depth_int,
                 subject=subject, object=object_,
             )
             return [

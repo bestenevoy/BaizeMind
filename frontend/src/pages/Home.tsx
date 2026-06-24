@@ -23,7 +23,7 @@ export function Home() {
           <StatsPanel />
         </div>
 
-        <div className="lg:col-span-10">
+        <div className="lg:col-span-10 min-h-0">
           <ChatPanel folder={selectedFolder} docId={selectedDocId} tags={selectedTags} />
         </div>
       </div>

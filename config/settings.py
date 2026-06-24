@@ -69,9 +69,14 @@ class Settings(BaseSettings):
     # Retrieval
     hybrid_top_k: int = 20
     hybrid_dense_weight: float = 0.6
-    hybrid_sparse_weight: float = 0.3
     hybrid_bm25_weight: float = 0.4
     hybrid_rrf_k: int = 60
+    # RRF normalized score threshold — much lower than similarity threshold since
+    # RRF scores naturally drop off for items appearing in only one source.
+    rrf_score_threshold: float = 0.15
+    # Over-fetch multiplier: dense/BM25 each fetch top_k * multiplier, then RRF
+    # merges and reranker narrows to top_k. Improves recall.
+    retrieval_over_fetch_multiplier: int = 3
     retrieval_similarity_threshold: float = 0.6
     dense_vector_threshold: float = 0.6
     reranker_score_threshold: float = 0.3

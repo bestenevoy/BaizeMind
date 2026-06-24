@@ -206,7 +206,12 @@ class BM25Retriever:
             self._corpus = []
         self.save()
 
-    def search(self, query: str, top_k: int = 20) -> list[dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 20,
+        doc_ids: Optional[list[str]] = None,
+    ) -> list[dict[str, Any]]:
         if self._model is None:
             self.load()
         if self._model is None:
@@ -215,8 +220,28 @@ class BM25Retriever:
             return []
         tokenized = tokenize(query)
         scores = self._model.get_scores(tokenized)
-        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:top_k]
-        max_score = max(scores) if len(scores) > 0 and max(scores) > 0 else 1.0
+
+        # Build doc_id filter set for fast lookup
+        doc_id_set = set(doc_ids) if doc_ids else None
+
+        # Filter: skip zero-score and non-matching doc_id entries
+        candidates = []
+        for idx, score in enumerate(scores):
+            if score <= 0:
+                continue
+            if doc_id_set is not None:
+                chunk_doc_id = self._chunks[idx].get("doc_id", "")
+                if chunk_doc_id not in doc_id_set:
+                    continue
+            candidates.append((idx, score))
+
+        if not candidates:
+            return []
+
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        ranked = candidates[:top_k]
+
+        max_score = ranked[0][1]
         return [
             {
                 "id": self._chunks[idx].get("chunk_id", ""),

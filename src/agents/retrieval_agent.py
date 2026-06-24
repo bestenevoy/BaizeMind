@@ -25,13 +25,8 @@ class RetrievalAgent:
         dense_query: str | None = None,
         bm25_query: str | None = None,
     ) -> list[dict[str, Any]]:
-        doc_filter = None
-        if doc_ids:
-            id_list = " ".join(f'"{d}"' for d in doc_ids)
-            doc_filter = f"doc_id in [{id_list}]"
-
         results, _ = self._retriever.retrieve(
-            query, top_k=top_k, doc_filter=doc_filter,
+            query, top_k=top_k, doc_ids=doc_ids,
             dense_query=dense_query, bm25_query=bm25_query,
         )
         return self._dedup_by_chunk_id(results)

@@ -29,7 +29,7 @@ def _get_graphrag():
 @tool
 def hybrid_search(query: str, top_k: int = 10) -> str:
     """Perform hybrid (vector + BM25) search across the document base. Best for factual questions about document content."""
-    results = _hybrid_retriever.retrieve(query, top_k=top_k)
+    results, _ = _hybrid_retriever.retrieve(query, top_k=top_k)
     return _format_search_results(results)
 
 

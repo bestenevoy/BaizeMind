@@ -54,7 +54,7 @@ class LightRAGRetriever:
         query: str,
         mode: Optional[str] = None,
         top_k: int = 20,
-        doc_filter: Optional[str] = None,
+        doc_ids: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """Main entry point: LightRAG retrieval with entity/relation navigation.
 
@@ -110,21 +110,20 @@ class LightRAGRetriever:
             entity_suffix = " ".join(sorted(all_related_entities)[:15])
             bm25_query = f"{query} {entity_suffix}"
 
-        results = self.chunk_retriever.retrieve(
+        # HybridRetriever.retrieve() already includes RRF fusion + reranking,
+        # so no need for a second rerank pass here.
+        results, _ = self.chunk_retriever.retrieve(
             query,
             top_k=top_k,
             dense_query=dense_query,
             bm25_query=bm25_query,
-            doc_filter=doc_filter,
+            doc_ids=doc_ids,
         )
-
-        # Rerank with original query
-        ranked = self.reranker.rerank(query, results, top_k=min(10, len(results)))
 
         # Dedup
         seen_ids = set()
         documents = []
-        for r in ranked:
+        for r in results:
             cid = r.get("chunk_id", "")
             if cid and cid not in seen_ids:
                 seen_ids.add(cid)
@@ -147,16 +146,16 @@ class LightRAGRetriever:
         }
 
     def retrieve_local(
-        self, query: str, top_k: int = 20, doc_filter: Optional[str] = None
+        self, query: str, top_k: int = 20, doc_ids: Optional[list[str]] = None
     ) -> dict[str, Any]:
         """Local retrieval: entity index → neighbors → local chunks."""
-        return self.retrieve(query, mode="local", top_k=top_k, doc_filter=doc_filter)
+        return self.retrieve(query, mode="local", top_k=top_k, doc_ids=doc_ids)
 
     def retrieve_global(
-        self, query: str, top_k: int = 20, doc_filter: Optional[str] = None
+        self, query: str, top_k: int = 20, doc_ids: Optional[list[str]] = None
     ) -> dict[str, Any]:
         """Global retrieval: relation index → theme relations → global context."""
-        return self.retrieve(query, mode="global", top_k=top_k, doc_filter=doc_filter)
+        return self.retrieve(query, mode="global", top_k=top_k, doc_ids=doc_ids)
 
     def _format_graph_context(self, paths: list[dict]) -> str:
         if not paths:

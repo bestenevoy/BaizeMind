@@ -260,13 +260,12 @@ class AgenticRAGWorkflow:
         try:
             folder = state.get("folder", "") or None
             tags = state.get("tags", []) or None
-            doc_filter = None
+            doc_ids = None
             if folder or tags:
                 from src.storage.doc_store import get_doc_ids_by_filter
-                ids = get_doc_ids_by_filter(folder=folder, tags=tags)
-                if not ids:
+                doc_ids = get_doc_ids_by_filter(folder=folder, tags=tags)
+                if not doc_ids:
                     return {"documents": [], "error": "No documents match the filter"}
-                doc_filter = ids
 
             original_query = state["query"]
             graph_entities = state.get("graph_entities", [])
@@ -284,7 +283,7 @@ class AgenticRAGWorkflow:
                     if graph_entities:
                         bm25_q = f"{bm25_q} {' '.join(graph_entities[:10])}"
                     results = self.retrieval_agent.search(
-                        sq, doc_ids=doc_filter,
+                        sq, doc_ids=doc_ids,
                         dense_query=dense_q, bm25_query=bm25_q,
                     )
                     for r in results:
@@ -305,7 +304,7 @@ class AgenticRAGWorkflow:
 
             results, debug = self.retrieval_agent._retriever.retrieve(
                 original_query,
-                top_k=20, doc_filter=doc_filter,
+                top_k=20, doc_ids=doc_ids,
                 dense_query=dense_query, bm25_query=bm25_query,
             )
             results = self.retrieval_agent._dedup_by_chunk_id(results)
@@ -404,13 +403,12 @@ class AgenticRAGWorkflow:
         try:
             folder = state.get("folder", "") or None
             tags = state.get("tags", []) or None
-            doc_filter = None
+            doc_ids = None
             if folder or tags:
                 from src.storage.doc_store import get_doc_ids_by_filter
-                ids = get_doc_ids_by_filter(folder=folder, tags=tags)
-                if not ids:
+                doc_ids = get_doc_ids_by_filter(folder=folder, tags=tags)
+                if not doc_ids:
                     return {"documents": [], "retrieval_path": "No documents match filter"}
-                doc_filter = ids
 
             # Check if LightRAG indexes are populated; fall back if not
             if self.lightrag_retriever.entity_index.count() == 0:
@@ -436,7 +434,7 @@ class AgenticRAGWorkflow:
             # Full LightRAG pipeline
             result = self.lightrag_retriever.retrieve(
                 state["query"],
-                doc_filter=doc_filter,
+                doc_ids=doc_ids,
             )
 
             return {
@@ -517,8 +515,14 @@ class AgenticRAGWorkflow:
                 context = f"[Retrieval: {retrieval_path}]\n\n{context}"
 
             llm = self._get_llm()
+            # Truncate context at document boundary (on "\n\n---\n\n") to avoid
+            # cutting in the middle of a chunk. Budget: 8000 chars.
+            max_ctx = 8000
+            if len(context) > max_ctx:
+                cut = context.rfind("\n\n---\n\n", 0, max_ctx)
+                context = context[:cut] if cut > 0 else context[:max_ctx]
             prompt = ANSWER_GENERATION_SYSTEM.format(
-                context=context[:8000], question=state["query"]
+                context=context, question=state["query"]
             )
 
             # Incorporate validation feedback on retry
@@ -539,7 +543,21 @@ class AgenticRAGWorkflow:
         try:
             context = ""
             if state.get("documents"):
-                context = "\n".join(d.get("text", "")[:500] for d in state["documents"][:5])
+                # Use full text of top documents (up to 6000 chars) so the validator
+                # sees the same evidence the answer generator used, preventing false
+                # "unsupported_claim" verdicts from truncated context.
+                context_parts = []
+                char_budget = 6000
+                for d in state["documents"][:8]:
+                    text = d.get("text", "")
+                    if len(context_parts) > 0:
+                        char_budget -= 2  # for "\n"
+                    if char_budget <= 0:
+                        break
+                    text = text[:char_budget]
+                    char_budget -= len(text)
+                    context_parts.append(text)
+                context = "\n".join(context_parts)
 
             validation = self.answer_validator.validate(
                 question=state["query"],

@@ -56,7 +56,6 @@ class QARequest(BaseModel):
     query: str = Field(..., description="User's question", min_length=1, max_length=4096)
     stream: bool = Field(False, description="Whether to stream the response")
     top_k: int = Field(20, ge=1, le=100, description="Number of documents to retrieve")
-    doc_filter: Optional[str] = Field(None, description="Optional document ID filter")
     folder: Optional[str] = Field(None, description="Filter by folder path")
     tags: Optional[list[str]] = Field(None, description="Filter by tags")
 

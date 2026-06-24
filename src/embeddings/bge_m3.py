@@ -47,7 +47,7 @@ class BGEM3Embedding:
         return np.array([d["embedding"] for d in data], dtype=np.float32)
 
     def encode_dense(self, texts: list[str]) -> np.ndarray:
-        max_chars = settings.chunk_size
+        max_chars = settings.bge_m3_max_length
         truncated = [t[:max_chars] if len(t) > max_chars else t for t in texts]
         if self.use_local and self._model is not None:
             return np.array(self._model.encode(truncated)["dense_vecs"], dtype=np.float32)
@@ -59,7 +59,7 @@ class BGEM3Embedding:
         if self.use_local and self._model is not None:
             return self.encode_dense(texts)
 
-        max_chars = settings.chunk_size
+        max_chars = settings.bge_m3_max_length
         truncated = [t[:max_chars] if len(t) > max_chars else t for t in texts]
         batches = [truncated[i:i + batch_size] for i in range(0, len(truncated), batch_size)]
         max_workers = min(concurrency, len(batches))
