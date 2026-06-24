@@ -350,6 +350,10 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
             compute_chunk_hash, update_document_refs, build_sync_tasks,
             process_chunk_ref_zero_to_one, process_chunk_ref_one_to_zero,
         )
+        from src.retrieval.vector_retriever import MilvusVectorRetriever
+
+        vr = MilvusVectorRetriever()
+        force_reembed = not vr.doc_has_vectors(doc_id)
 
         chunk_hashes = []
         new_chunk_texts = []
@@ -363,6 +367,8 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
             existing = doc_store.get_chunk_content(ch)
             if not existing:
                 doc_store.create_chunk_content(ch, chunk["text"], milvus_id="")
+                new_chunk_texts.append(chunk)
+            elif not existing.get("milvus_id") or force_reembed:
                 new_chunk_texts.append(chunk)
 
         ref_result = update_document_refs(doc_id, doc_version, [
@@ -379,7 +385,6 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
 
         doc_store.update_document(doc_id, processing_stage="向量嵌入")
         from src.embeddings.bge_m3 import BGEM3Embedding
-        from src.retrieval.vector_retriever import MilvusVectorRetriever
 
         if new_chunk_texts:
             embedding = BGEM3Embedding()

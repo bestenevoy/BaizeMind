@@ -80,6 +80,15 @@ def ingest(file_path: str, skip_evidence: bool = False):
         vector_retriever.insert(new_chunks, embeddings)
         print(f"  -> Inserted {len(new_chunks)} vectors")
 
+        conn = doc_store._get_conn()
+        for nc in new_chunks:
+            conn.execute(
+                "UPDATE chunk_content SET milvus_id = ? WHERE chunk_hash = ?",
+                (nc.get("chunk_id", ""), nc["chunk_hash"]),
+            )
+        conn.commit()
+        conn.close()
+
         bm25 = BM25Retriever()
         bm25.load()
         bm25.merge_chunks(new_chunks)

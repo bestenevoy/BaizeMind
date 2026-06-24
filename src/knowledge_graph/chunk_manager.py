@@ -19,7 +19,8 @@ def create_or_reuse_chunk(text: str, milvus_id: str = "") -> tuple[str, bool]:
     existing = doc_store.get_chunk_content(chunk_hash)
 
     if existing:
-        return chunk_hash, False
+        is_new = bool(not existing.get("milvus_id"))
+        return chunk_hash, is_new
 
     doc_store.create_chunk_content(chunk_hash, text, milvus_id)
     return chunk_hash, True

@@ -106,6 +106,16 @@ class MilvusVectorRetriever:
         )
         return res[0]["count(*)"] if res else 0
 
+    def doc_has_vectors(self, doc_id: str) -> bool:
+        self.ensure_collection()
+        res = self._client.query(
+            collection_name=self.collection_name,
+            filter=f'doc_id == "{doc_id}"',
+            output_fields=["id"],
+            limit=1,
+        )
+        return len(res) > 0
+
     def get_chunks_by_doc(self, doc_id: str) -> list[dict[str, Any]]:
         self.ensure_collection()
         return self._client.query(
