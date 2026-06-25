@@ -101,6 +101,13 @@ class Settings(BaseSettings):
     # Ingest control
     ingest_skip_evidence: bool = False  # Skip evidence extraction + KG sync for fast chunk/index testing
 
+    # Cache (generic LLM-result cache, e.g. query rewrite)
+    cache_enabled: bool = True
+    cache_backend: str = "memory"  # "memory" | "sqlite" (扩展点：在 src/cache/factory.py 注册新后端)
+    cache_ttl_seconds: int = 86400  # 默认 24h；query rewrite 结果对相同输入是稳定的
+    cache_db_path: str = "data/cache.db"  # 仅 sqlite 后端使用
+    cache_query_rewrite_enabled: bool = True  # 单独开关：是否缓存 query rewrite 结果
+
     # Server
     server_host: str = "0.0.0.0"
     server_port: int = 8000
