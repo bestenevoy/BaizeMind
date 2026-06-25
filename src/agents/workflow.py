@@ -9,7 +9,7 @@ from src.agents.graph_agent import GraphAgent
 from src.agents.answer_validator import AnswerValidator
 from src.retrieval.lightrag_retriever import LightRAGRetriever
 from src.llm.deepseek import get_chat_llm
-from config.prompts import ANSWER_GENERATION_SYSTEM, QUERY_REWRITE_SYSTEM
+from config.prompts import ANSWER_GENERATION_SYSTEM, CHITCHAT_SYSTEM, QUERY_REWRITE_SYSTEM
 from config.settings import settings
 
 
@@ -244,7 +244,8 @@ class AgenticRAGWorkflow:
     def _node_chitchat(self, state: AgentState) -> dict:
         try:
             llm = self._get_llm()
-            resp = llm.invoke(state["query"])
+            system = CHITCHAT_SYSTEM.format(language=settings.query_rewrite_language)
+            resp = llm.invoke([("system", system), ("human", state["query"])])
             return {"final_answer": resp.content, "draft_answer": resp.content}
         except Exception as e:
             return {"final_answer": f"Chat failed: {e}", "error": str(e)}
@@ -530,7 +531,8 @@ class AgenticRAGWorkflow:
                 cut = context.rfind("\n\n---\n\n", 0, max_ctx)
                 context = context[:cut] if cut > 0 else context[:max_ctx]
             prompt = ANSWER_GENERATION_SYSTEM.format(
-                context=context, question=state["query"]
+                context=context, question=state["query"],
+                language=settings.query_rewrite_language,
             )
 
             # Incorporate validation feedback on retry
