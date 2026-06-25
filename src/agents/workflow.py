@@ -139,8 +139,35 @@ class AgenticRAGWorkflow:
         return self._llm
 
     def _rewrite_query(self, query: str) -> tuple[str, str]:
-        """Use LLM to rewrite query for dense (semantic) and BM25 (keyword) search."""
+        """Use LLM to rewrite query for dense (semantic) and BM25 (keyword) search.
+
+        相同 query 会命中 :mod:`src.cache` 通用缓存，避免重复 LLM 调用。
+        缓存 key 包含 ``query_rewrite_language``，切换语言会自动失效。
+        LLM 调用失败时回退原 query 且不写缓存（下次仍会重试）。
+        """
         import json
+
+        # ── 缓存读取 ──
+        if settings.cache_enabled and settings.cache_query_rewrite_enabled:
+            from src.cache import get_cache, make_key
+            cache = get_cache()
+            cache_key = make_key(
+                "query_rewrite",
+                settings.query_rewrite_language,
+                query,
+            )
+            hit = cache.get(cache_key)
+            if hit is not None:
+                try:
+                    dense, bm25 = json.loads(hit)
+                    return dense, bm25
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    pass  # 损坏条目按 miss 处理
+        else:
+            cache = None
+            cache_key = None
+
+        # ── LLM 调用 ──
         try:
             prompt = QUERY_REWRITE_SYSTEM.format(language=settings.query_rewrite_language)
             prompt += f"\n\nUser question: {query}"
@@ -151,6 +178,16 @@ class AgenticRAGWorkflow:
             result = json.loads(text)
             dense = result.get("dense_query", query)
             bm25 = result.get("bm25_query", query)
+
+            # 仅在 LLM 成功时写缓存（失败回退值不应被缓存）
+            if cache is not None and cache_key is not None:
+                try:
+                    cache.set(
+                        cache_key,
+                        json.dumps([dense, bm25], ensure_ascii=False),
+                    )
+                except (TypeError, ValueError):
+                    pass
             return dense, bm25
         except Exception:
             return query, query
