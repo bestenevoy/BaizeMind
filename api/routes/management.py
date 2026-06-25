@@ -64,7 +64,6 @@ SETTING_CATEGORIES = [
         ("hybrid_dense_weight", "稠密向量权重"),
         ("hybrid_bm25_weight", "BM25 权重"),
         ("hybrid_rrf_k", "RRF 平滑常数"),
-        ("rrf_score_threshold", "RRF 分数阈值"),
         ("dense_vector_threshold", "稠密向量阈值"),
         ("reranker_score_threshold", "Rerank 分数阈值"),
         ("rerank_top_k", "Rerank 输出数"),
@@ -476,7 +475,6 @@ async def search_debug(body: SearchDebugRequest):
             return {
                 "query": query,
                 "threshold": settings.retrieval_similarity_threshold,
-                "rrf_threshold": settings.rrf_score_threshold,
                 "dense_threshold": settings.dense_vector_threshold,
                 "rerank_threshold": settings.reranker_score_threshold,
                 "rewrite": {"enabled": settings.query_rewrite_enabled, "original": query, "dense_query": query, "bm25_query": query, "query_tokens": [], "dense_tokens": [], "bm25_tokens": []},

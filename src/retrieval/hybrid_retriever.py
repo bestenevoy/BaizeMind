@@ -53,10 +53,7 @@ class HybridRetriever:
         # Reranker stage — use rewritten dense query for cross-encoder.
         # The rewritten query captures the core semantic intent better than
         # the raw user input, yielding higher quality relevance scores.
-        rrf_threshold = settings.rrf_score_threshold
-        rrf_passed = [doc for cid, (doc, s) in rrf_data["ranked"]
-                      if rrf_data["max_raw"] == 0 or (s / rrf_data["max_raw"]) >= rrf_threshold]
-        all_for_rerank = rrf_passed[:top_k] if rrf_passed else [doc for _, (doc, _) in rrf_data["ranked"][:top_k]]
+        all_for_rerank = [doc for _, (doc, _) in rrf_data["ranked"][:top_k]]
         reranked_full = self.reranker.rerank(dense_q, all_for_rerank, top_k=min(settings.rerank_top_k, len(all_for_rerank)))
 
         threshold = settings.reranker_score_threshold

@@ -391,7 +391,6 @@ export interface SearchDebugChunk {
   score?: number
   rrf_raw?: number
   rrf_normalized?: number
-  rrf_pass_threshold?: boolean
   dense_score?: number
   bm25_score?: number
   rerank_score?: number
@@ -401,7 +400,6 @@ export interface SearchDebugChunk {
 export interface SearchDebugResponse {
   query: string
   threshold: number
-  rrf_threshold: number
   dense_threshold: number
   rerank_threshold: number
   rrf_k: number
@@ -456,8 +454,7 @@ export interface ConfigSchema {
 }
 
 export const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
-  rrf_score_threshold: { type: 'float', label: 'RRF 分数阈值', min: 0, max: 1 },
-  dense_vector_threshold: { type: 'float', label: 'Dense 向量阈值', min: 0, max: 1 },
+  dense_vector_threshold: { type: 'float', label: '稠密向量阈值', min: 0, max: 1 },
   reranker_score_threshold: { type: 'float', label: 'Rerank 分数阈值', min: 0, max: 1 },
   reranker_method: { type: 'enum', label: 'Rerank 方法', options: ['embedding', 'llm', 'hybrid'] },
   chunk_size: { type: 'int', label: '分块大小', min: 64, max: 4096 },

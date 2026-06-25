@@ -16,7 +16,6 @@ _EDITABLE_KEYS = {
     "hybrid_dense_weight",
     "hybrid_bm25_weight",
     "hybrid_rrf_k",
-    "rrf_score_threshold",
     "retrieval_over_fetch_multiplier",
     "rerank_top_k",
     "agent_max_iterations",

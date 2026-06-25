@@ -40,7 +40,6 @@ def build_search_debug_response(
     top_k: int = 20,
 ) -> dict:
     """Build a full SearchDebugResponse dict from raw hybrid retriever debug data."""
-    rrf_threshold = settings.rrf_score_threshold
     dense_threshold = settings.dense_vector_threshold
     rerank_threshold = settings.reranker_score_threshold
 
@@ -56,7 +55,6 @@ def build_search_debug_response(
             "text_preview": doc.get("text", ""),
             "rrf_raw": round(raw_score, 8),
             "rrf_normalized": round(normalized, 4),
-            "rrf_pass_threshold": rrf_threshold == 0 or normalized >= rrf_threshold,
             "dense_score": round(debug.get("dense_scores", {}).get(cid, 0), 6),
             "bm25_score": round(debug.get("bm25_scores", {}).get(cid, 0), 6),
         })
@@ -88,7 +86,6 @@ def build_search_debug_response(
     return {
         "query": query,
         "threshold": dense_threshold,
-        "rrf_threshold": rrf_threshold,
         "dense_threshold": dense_threshold,
         "rerank_threshold": rerank_threshold,
         "rrf_k": settings.hybrid_rrf_k,

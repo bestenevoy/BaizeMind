@@ -165,8 +165,6 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
               <div className="flex items-center gap-3 text-sm bg-muted/30 rounded p-2 flex-wrap flex-none">
                 <ThresholdValue label="Dense 阈值" configKey="dense_vector_threshold" value={result.dense_threshold} hint="Dense 向量相似度下限，低于此值的候选被丢弃" />
                 <span className="text-muted-foreground">|</span>
-                <ThresholdValue label="RRF 阈值" configKey="rrf_score_threshold" value={result.rrf_threshold} hint="RRF 归一化分数下限，控制融合后候选数量" />
-                <span className="text-muted-foreground">|</span>
                 <ThresholdValue label="Rerank 阈值" configKey="reranker_score_threshold" value={result.rerank_threshold || 0} hint="Rerank 分数下限，低于此值的候选不进入最终结果" />
                 <span className="text-muted-foreground">|</span>
                 <span className="flex items-center gap-0.5">
@@ -312,9 +310,8 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                   {resultTab === 'rrf' && (
                     <div className="space-y-1">
                       {result.stages.rrf.map((c, i) => {
-                        if (!showAll && !c.rrf_pass_threshold) return null
                         return (
-                        <div key={i} className={`rounded p-2 border ${c.rrf_pass_threshold ? 'bg-muted/20 border-border' : 'bg-red-50 dark:bg-red-950/10 border-red-200 dark:border-red-800'}`}>
+                        <div key={i} className="rounded p-2 border bg-muted/20 border-border">
                           <div className="flex items-center gap-1.5">
                             <span className="text-primary font-semibold text-xs">[{i + 1}]</span>
                             <span className="text-xs break-all" title={`${c.filename || c.doc_id} / ${c.chunk_id}`}>
@@ -322,11 +319,6 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                               <span className="text-muted-foreground ml-1 font-mono">/ {c.chunk_id}</span>
                             </span>
                             <span className="ml-auto font-mono text-xs shrink-0">RRF: {c.rrf_normalized}</span>
-                            {c.rrf_pass_threshold ? (
-                              <Check className="h-3 w-3 text-green-500 shrink-0" />
-                            ) : (
-                              <X className="h-3 w-3 text-red-400 shrink-0" />
-                            )}
                           </div>
                           <div className="flex gap-3 mt-0.5 text-xs text-muted-foreground/50 font-mono">
                             <span>Dense: {c.dense_score?.toFixed(4) || '-'}</span>
