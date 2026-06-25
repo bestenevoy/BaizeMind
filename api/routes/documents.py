@@ -342,6 +342,9 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
         chunks = merger.deduplicate(chunks)
         chunks = [c for c in chunks if c["text"].strip()]
 
+        from src.storage.text_cleaner import clean_chunks
+        clean_chunks(chunks)
+
         for chunk in chunks:
             chunk["folder"] = folder
 
@@ -355,6 +358,10 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
         vr = MilvusVectorRetriever()
         force_reembed = not vr.doc_has_vectors(doc_id)
 
+        if not force_reembed:
+            vr.delete_by_doc(doc_id)
+            force_reembed = True
+
         chunk_hashes = []
         new_chunk_texts = []
         all_affected_keys: dict[str, set[str]] = {}
@@ -363,6 +370,7 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
             ch = compute_chunk_hash(chunk["text"])
             chunk_hashes.append(ch)
             chunk["chunk_hash"] = ch
+            chunk["chunk_id"] = f"{doc_id}_{i:04d}_{ch[:8]}"
 
             existing = doc_store.get_chunk_content(ch)
             if not existing:
@@ -409,6 +417,7 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
         from src.retrieval.bm25_retriever import BM25Retriever
         bm25 = BM25Retriever()
         bm25.load()
+        bm25.remove_by_doc_id(doc_id)
         if new_chunk_texts:
             bm25.merge_chunks(new_chunk_texts)
             bm25.save()

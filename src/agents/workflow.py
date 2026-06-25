@@ -306,7 +306,7 @@ class AgenticRAGWorkflow:
 
             results, debug = self.retrieval_agent._retriever.retrieve(
                 original_query,
-                top_k=20, doc_ids=doc_ids,
+                top_k=settings.hybrid_top_k, doc_ids=doc_ids,
                 dense_query=dense_query, bm25_query=bm25_query,
             )
             results = self.retrieval_agent._dedup_by_chunk_id(results)

@@ -162,9 +162,9 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
           {result && (
             <div className="mt-3 flex-1 min-h-0 flex flex-col space-y-3">
               <div className="flex items-center gap-3 text-sm bg-muted/30 rounded p-2 flex-wrap flex-none">
-                <ThresholdValue label="Dense 阈值" configKey="dense_vector_threshold" value={result.dense_threshold || result.threshold} />
+                <ThresholdValue label="Dense 阈值" configKey="dense_vector_threshold" value={result.dense_threshold} />
                 <span className="text-muted-foreground">|</span>
-                <ThresholdValue label="RRF 阈值" configKey="rrf_score_threshold" value={result.rrf_threshold ?? result.threshold} />
+                <ThresholdValue label="RRF 阈值" configKey="rrf_score_threshold" value={result.rrf_threshold} />
                 <span className="text-muted-foreground">|</span>
                 <ThresholdValue label="Rerank 阈值" configKey="reranker_score_threshold" value={result.rerank_threshold || 0} />
                 <span className="text-muted-foreground">|</span>

@@ -65,9 +65,12 @@ SETTING_CATEGORIES = [
         ("hybrid_bm25_weight", "BM25 权重"),
         ("hybrid_rrf_k", "RRF 参数 k"),
         ("rrf_score_threshold", "RRF 分数阈值"),
+        ("dense_vector_threshold", "稠密向量阈值"),
+        ("reranker_score_threshold", "重排序阈值"),
         ("retrieval_over_fetch_multiplier", "检索过采样倍数"),
-        ("retrieval_similarity_threshold", "相似度阈值"),
         ("reranker_method", "重排序方式"),
+        ("query_rewrite_enabled", "查询改写开关"),
+        ("query_rewrite_language", "改写语言"),
     ]),
     ("重排序模型", [
         ("siliconflow_rerank_model", "重排模型"),

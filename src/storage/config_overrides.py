@@ -7,7 +7,6 @@ from config.settings import settings
 OVERRIDES_PATH = Path(settings.data_dir) / "config_overrides.json"
 
 _EDITABLE_KEYS = {
-    "retrieval_similarity_threshold",
     "dense_vector_threshold",
     "reranker_score_threshold",
     "reranker_method",
@@ -18,6 +17,7 @@ _EDITABLE_KEYS = {
     "hybrid_bm25_weight",
     "hybrid_rrf_k",
     "rrf_score_threshold",
+    "retrieval_over_fetch_multiplier",
     "agent_max_iterations",
     "agent_temperature",
     "query_rewrite_enabled",

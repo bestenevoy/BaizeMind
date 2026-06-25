@@ -37,7 +37,6 @@ def build_search_debug_response(
     top_k: int = 20,
 ) -> dict:
     """Build a full SearchDebugResponse dict from raw hybrid retriever debug data."""
-    current_threshold = settings.retrieval_similarity_threshold
     rrf_threshold = settings.rrf_score_threshold
     dense_threshold = settings.dense_vector_threshold
     rerank_threshold = settings.reranker_score_threshold
@@ -85,7 +84,7 @@ def build_search_debug_response(
 
     return {
         "query": query,
-        "threshold": current_threshold,
+        "threshold": dense_threshold,
         "rrf_threshold": rrf_threshold,
         "dense_threshold": dense_threshold,
         "rerank_threshold": rerank_threshold,

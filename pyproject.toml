@@ -33,6 +33,7 @@ dependencies = [
     "ragas>=0.2.0",
     "datasets>=3.0.0",
     "langchain-google-vertexai>=3.2.4",
+    "clean-text>=0.7.1",
 ]
 
 [dependency-groups]

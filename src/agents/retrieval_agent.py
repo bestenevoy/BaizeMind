@@ -20,11 +20,13 @@ class RetrievalAgent:
     def search(
         self,
         query: str,
-        top_k: int = 20,
+        top_k: int | None = None,
         doc_ids: list[str] | None = None,
         dense_query: str | None = None,
         bm25_query: str | None = None,
     ) -> list[dict[str, Any]]:
+        if top_k is None:
+            top_k = settings.hybrid_top_k
         results, _ = self._retriever.retrieve(
             query, top_k=top_k, doc_ids=doc_ids,
             dense_query=dense_query, bm25_query=bm25_query,

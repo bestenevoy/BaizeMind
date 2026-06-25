@@ -451,7 +451,6 @@ export interface ConfigSchema {
 }
 
 export const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
-  retrieval_similarity_threshold: { type: 'float', label: '相似度阈值', min: 0, max: 1 },
   rrf_score_threshold: { type: 'float', label: 'RRF 分数阈值', min: 0, max: 1 },
   dense_vector_threshold: { type: 'float', label: 'Dense 向量阈值', min: 0, max: 1 },
   reranker_score_threshold: { type: 'float', label: 'Rerank 阈值', min: 0, max: 1 },
@@ -462,6 +461,7 @@ export const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
   hybrid_dense_weight: { type: 'float', label: 'Dense 权重', min: 0, max: 1 },
   hybrid_bm25_weight: { type: 'float', label: 'BM25 权重', min: 0, max: 1 },
   hybrid_rrf_k: { type: 'int', label: 'RRF k 值', min: 1, max: 200 },
+  retrieval_over_fetch_multiplier: { type: 'int', label: '过采样倍数', min: 1, max: 10 },
   agent_max_iterations: { type: 'int', label: '验证最大轮次', min: 1, max: 10 },
   agent_temperature: { type: 'float', label: 'LLM 温度', min: 0, max: 2 },
   query_rewrite_enabled: { type: 'bool', label: '查询改写开关' },
