@@ -20,7 +20,7 @@ def setup_logging() -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
 
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
+    root.setLevel(logging.INFO)
 
     # Console: INFO and above
     console = logging.StreamHandler(sys.stderr)
@@ -28,14 +28,14 @@ def setup_logging() -> None:
     console.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
     root.addHandler(console)
 
-    # File: all levels (DEBUG+), rotate at 10 MB, keep 5 backups
+    # File: INFO and above, rotate at 10 MB, keep 5 backups
     app_handler = RotatingFileHandler(
         log_dir / "app.log",
         maxBytes=10 * 1024 * 1024,
         backupCount=5,
         encoding="utf-8",
     )
-    app_handler.setLevel(logging.DEBUG)
+    app_handler.setLevel(logging.INFO)
     app_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
     root.addHandler(app_handler)
 
