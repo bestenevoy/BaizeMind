@@ -13,7 +13,10 @@ def _build_rewrite_info(query: str, dense_query: str, bm25_query: str) -> dict:
     try:
         from src.retrieval.bm25_retriever import tokenize
         dense_tokens = list(tokenize(dense_query))
-        bm25_tokens = list(tokenize(bm25_query))
+        if settings.query_rewrite_enabled:
+            bm25_tokens = bm25_query.split()
+        else:
+            bm25_tokens = list(tokenize(bm25_query))
         query_tokens = list(tokenize(query)) if dense_query != query else []
     except Exception:
         dense_tokens, bm25_tokens, query_tokens = [], [], []

@@ -60,9 +60,6 @@ def _load_stopwords() -> set[str]:
 
 
 def tokenize(text: str) -> list[str]:
-    # 应该判断是否有 LLM 改写，如果LLM改写的话，结果应该直接 split 空格分割就好了
-    if settings.query_rewrite_enabled:
-        return text.split()
     try:
         import jieba
         _load_jieba()
@@ -221,7 +218,11 @@ class BM25Retriever:
             self.rebuild_from_milvus()
         if self._model is None:
             return []
-        tokenized = tokenize(query)
+        # 应该判断是否有 LLM 改写，如果LLM改写的话，结果应该直接 split 空格分割就好了
+        if settings.query_rewrite_enabled:
+            tokenized = query.split()
+        else:
+            tokenized = tokenize(query)
         scores = self._model.get_scores(tokenized)
 
         # Build doc_id filter set for fast lookup
