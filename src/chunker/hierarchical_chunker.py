@@ -90,9 +90,13 @@ class HierarchicalChunker:
             heading_article = _extract_article(text[:128])
         splits = self._splitter.split_text(text)
         result = []
+        # 将完整标题路径前置到每个 chunk 文本中，确保 embedding/BM25/rerank
+        # 都能捕获标题语义信号（标题常含核心关键词，如"产品规格""安装步骤"）。
+        # 无标题（heading 为空）时不拼接，避免引入空行。
+        prefix = f"{heading}\n" if heading else ""
         for s in splits:
             article_num = heading_article or _extract_article(s[:256])
-            result.append(self._make_chunk(doc_id, s, heading, chapter, article_num))
+            result.append(self._make_chunk(doc_id, prefix + s, heading, chapter, article_num))
         return result
 
     def _make_chunk(self, doc_id: str, text: str, heading: str, chapter: str, article_num: str) -> dict:
