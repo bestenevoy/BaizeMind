@@ -12,6 +12,11 @@ from src.llm.deepseek import get_chat_llm
 from config.prompts import ANSWER_GENERATION_SYSTEM, CHITCHAT_SYSTEM, QUERY_REWRITE_SYSTEM
 from config.settings import settings
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 
 def _serialize_debug(debug: dict, dense_query: str) -> dict:
     """Strip large text fields from debug info to keep state lightweight."""
@@ -159,6 +164,7 @@ class AgenticRAGWorkflow:
             hit = cache.get(cache_key)
             if hit is not None:
                 try:
+                    logger.info(f"Cache hit for query rewrite: {cache_key}")
                     dense, bm25 = json.loads(hit)
                     return dense, bm25
                 except (json.JSONDecodeError, ValueError, TypeError):
