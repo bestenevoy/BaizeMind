@@ -327,7 +327,6 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
         doc_store.update_document(doc_id, processing_stage="切分文本块")
         from src.chunker.hierarchical_chunker import HierarchicalChunker
         from src.chunker.table_chunker import TableChunker
-        from src.chunker.context_merger import ContextMerger
         from src.document_parser.table_parser import TableParser
 
         h_chunker = HierarchicalChunker(chunk_size=settings.chunk_size, chunk_overlap=settings.chunk_overlap)
@@ -337,9 +336,6 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
         table_chunks = TableChunker().chunk_tables(doc_id, tables)
         chunks.extend(table_chunks)
 
-        merger = ContextMerger()
-        chunks = merger.merge(chunks)
-        chunks = merger.deduplicate(chunks)
         chunks = [c for c in chunks if c["text"].strip()]
 
         from src.storage.text_cleaner import clean_chunks

@@ -13,7 +13,6 @@ setup_logging()
 from src.document_parser.mineru_parser import MinerUParser
 from src.chunker.hierarchical_chunker import HierarchicalChunker
 from src.chunker.table_chunker import TableChunker
-from src.chunker.context_merger import ContextMerger
 from src.document_parser.table_parser import TableParser
 from src.embeddings.bge_m3 import BGEM3Embedding
 from src.retrieval.vector_retriever import MilvusVectorRetriever
@@ -52,9 +51,7 @@ def ingest(file_path: str, skip_evidence: bool = False):
     table_chunks = TableChunker().chunk_tables(doc_id, tables)
     chunks.extend(table_chunks)
 
-    merger = ContextMerger()
-    chunks = merger.merge(chunks)
-    chunks = merger.deduplicate(chunks)
+    chunks = [c for c in chunks if c["text"].strip()]
     print(f"  -> Created {len(chunks)} chunks ({len(table_chunks)} table chunks)")
 
     # 3. Chunk dedup & ref management
