@@ -7,11 +7,10 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-import time
 from pathlib import Path
 from typing import Optional
 
-from src.cache.base import CacheBackend, now_ts
+from src.cache.base import CacheBackend, CacheEntry, now_ts
 
 
 class SQLiteCache(CacheBackend):
@@ -115,3 +114,42 @@ class SQLiteCache(CacheBackend):
                 return cur.rowcount
             finally:
                 conn.close()
+
+    def entries(self, prefix: Optional[str] = None) -> list[CacheEntry]:
+        """列举条目，顺带清除已过期项。"""
+        now = now_ts()
+        with self._lock:
+            conn = self._conn()
+            try:
+                # 先清除已过期
+                conn.execute(
+                    "DELETE FROM cache_entries WHERE expires_at IS NOT NULL AND expires_at <= ?",
+                    (now,),
+                )
+                if prefix is not None:
+                    like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                    rows = conn.execute(
+                        "SELECT key, value, created_at, expires_at FROM cache_entries "
+                        "WHERE key LIKE ? ESCAPE '\\' ORDER BY created_at DESC",
+                        (like,),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT key, value, created_at, expires_at FROM cache_entries "
+                        "ORDER BY created_at DESC"
+                    ).fetchall()
+                conn.commit()
+            finally:
+                conn.close()
+
+        result: list[CacheEntry] = []
+        for key, value, created_at, expires_at in rows:
+            ttl_remaining = (expires_at - now) if expires_at is not None else None
+            result.append(CacheEntry(
+                key=key,
+                value=value,
+                created_at=created_at,
+                expires_at=expires_at,
+                ttl_remaining=ttl_remaining,
+            ))
+        return result

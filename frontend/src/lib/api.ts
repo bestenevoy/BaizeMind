@@ -519,6 +519,49 @@ export async function resetConfigOverride(key: string): Promise<void> {
   if (!res.ok) throw new Error(`Reset config failed: ${res.statusText}`)
 }
 
+// ── Cache Management ──
+
+export interface CacheEntry {
+  key: string
+  namespace: string
+  value_preview: string
+  value_length: number
+  created_at: number
+  expires_at: number | null
+  ttl_remaining: number | null
+}
+
+export interface CacheListResponse {
+  enabled: boolean
+  backend: string
+  ttl_seconds: number
+  query_rewrite_enabled: boolean
+  total: number
+  namespaces?: Record<string, number>
+  entries: CacheEntry[]
+  message?: string
+}
+
+export async function listCache(prefix?: string): Promise<CacheListResponse> {
+  const params = prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''
+  const res = await fetch(`${API_BASE}/system/cache${params}`)
+  if (!res.ok) throw new Error(`List cache failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function clearCache(prefix?: string): Promise<{ success: boolean; cleared: number; prefix: string | null; message?: string }> {
+  const params = prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''
+  const res = await fetch(`${API_BASE}/system/cache/clear${params}`, { method: 'POST' })
+  if (!res.ok) throw new Error(`Clear cache failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function deleteCacheEntry(key: string): Promise<{ success: boolean; existed: boolean; key: string }> {
+  const res = await fetch(`${API_BASE}/system/cache/${encodeURIComponent(key)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`Delete cache entry failed: ${res.statusText}`)
+  return res.json()
+}
+
 export async function cleanupOrphans(): Promise<{ milvus_deleted: number; neo4j_deleted_entities: number }> {
   const res = await fetch(`${API_BASE}/system/cleanup-orphans`, { method: 'POST' })
   if (!res.ok) throw new Error(`Cleanup failed: ${res.statusText}`)

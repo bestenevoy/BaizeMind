@@ -8,7 +8,21 @@ from __future__ import annotations
 import hashlib
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, asdict
 from typing import Any, Optional
+
+
+@dataclass
+class CacheEntry:
+    """缓存条目元信息，用于管理面板列举展示。"""
+    key: str
+    value: str
+    created_at: float  # unix timestamp
+    expires_at: Optional[float]  # None 表示永不过期
+    ttl_remaining: Optional[float]  # 剩余秒数；None 表示永不过期；<=0 表示已过期
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 class CacheBackend(ABC):
@@ -35,6 +49,19 @@ class CacheBackend(ABC):
     @abstractmethod
     def clear(self) -> None:
         """清空当前 namespace 下的所有缓存条目。"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def entries(self, prefix: Optional[str] = None) -> list[CacheEntry]:
+        """列举缓存条目，供管理面板使用。
+
+        参数：
+            prefix: 仅返回 key 以该前缀开头的条目；None 表示全部。
+                     注意前缀匹配的是 ``make_key`` 生成的完整 key
+                     （形如 ``"query_rewrite:abc123..."``），可用 namespace 作前缀。
+
+        实现应主动剔除已过期条目，不返回它们。
+        """
         raise NotImplementedError
 
 

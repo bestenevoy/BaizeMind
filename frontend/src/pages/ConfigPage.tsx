@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, Wifi, Save, RotateCcw, Pencil, Trash2, GitGraph, Settings, Activity } from 'lucide-react'
+import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, Loader2, Wifi, Save, RotateCcw, Pencil, Trash2, GitGraph, Settings, Activity, Database } from 'lucide-react'
+import { CachePanel } from '@/components/CachePanel'
 
 function StatusIcon({ status }: { status: string }) {
   if (status === 'ok')
@@ -149,6 +150,17 @@ export function ConfigPage() {
         >
           <Pencil className="h-4 w-4" />
           运行时配置
+        </button>
+        <button
+          onClick={() => setActiveTab('cache')}
+          className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-md border border-b-0 transition-colors ${
+            activeTab === 'cache'
+              ? 'bg-background text-foreground border-border font-medium'
+              : 'text-muted-foreground hover:text-foreground border-transparent'
+          }`}
+        >
+          <Database className="h-4 w-4" />
+          缓存
         </button>
         <div className="flex-1 border-b" />
       </div>
@@ -434,6 +446,8 @@ export function ConfigPage() {
           </CardContent>
         </Card>
       </div>
+      ) : activeTab === 'cache' ? (
+        <CachePanel />
       ) : (
       <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
 

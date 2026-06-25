@@ -13,13 +13,14 @@ import json
 from typing import Any, Callable
 
 from config.settings import settings
-from src.cache.base import CacheBackend, make_key
+from src.cache.base import CacheBackend, CacheEntry, make_key
 from src.cache.factory import get_cache, register_backend
 from src.cache.memory import MemoryCache
 from src.cache.sqlite_backend import SQLiteCache
 
 __all__ = [
     "CacheBackend",
+    "CacheEntry",
     "get_cache",
     "register_backend",
     "make_key",
