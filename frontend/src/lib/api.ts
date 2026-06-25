@@ -395,10 +395,27 @@ export interface SearchDebugChunk {
   bm25_score?: number
   rerank_score?: number
   rerank_pass_threshold?: boolean
+  source_queries?: number[]
+}
+
+export interface DenseQueryInfo {
+  index: number
+  dense_query: string
+  dense_tokens: string[]
+  query_tokens: string[]
+}
+
+export interface PerQueryStage {
+  index: number
+  dense_query: string
+  dense_top: SearchDebugChunk[]
+  dense_count: number
 }
 
 export interface SearchDebugResponse {
   query: string
+  multi_query?: boolean
+  query_count?: number
   threshold: number
   dense_threshold: number
   rerank_threshold: number
@@ -414,13 +431,16 @@ export interface SearchDebugResponse {
     bm25_tokens: string[]
     query_tokens: string[]
     enabled: boolean
+    dense_queries?: DenseQueryInfo[]
   }
   stages: {
+    per_query?: PerQueryStage[]
     dense_top5: SearchDebugChunk[]
     bm25_top5: SearchDebugChunk[]
     rrf: SearchDebugChunk[]
     rerank: SearchDebugChunk[]
   }
+  source_queries?: Record<string, number[]>
   final_count: number
   filtered_out_by_rerank_threshold: number
   message?: string
@@ -469,6 +489,7 @@ export const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
   agent_temperature: { type: 'float', label: 'LLM 温度', min: 0, max: 2 },
   query_rewrite_enabled: { type: 'bool', label: '查询改写开关' },
   query_rewrite_language: { type: 'string', label: '改写语言' },
+  query_rewrite_count: { type: 'int', label: '改写 Query 数量', min: 1, max: 8 },
 }
 
 export function validateConfigValue(key: string, value: string): string | null {

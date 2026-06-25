@@ -22,6 +22,7 @@ _EDITABLE_KEYS = {
     "agent_temperature",
     "query_rewrite_enabled",
     "query_rewrite_language",
+    "query_rewrite_count",
 }
 
 

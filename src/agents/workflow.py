@@ -20,9 +20,19 @@ logger = logging.getLogger(__name__)
 
 def _serialize_debug(debug: dict, dense_query: str) -> dict:
     """Strip large text fields from debug info to keep state lightweight."""
+    if debug.get("multi_query"):
+        per_query = debug.get("per_query", [])
+        dense_count = sum(len(q.get("dense_results", [])) for q in per_query)
+        bm25_count = sum(len(q.get("bm25_results", [])) for q in per_query)
+    else:
+        dense_count = len(debug.get("dense_results", []))
+        bm25_count = len(debug.get("bm25_results", []))
+    reranked = debug.get("reranked", debug.get("reranked_filtered", []))
     result = {
-        "dense_count": len(debug.get("dense_results", [])),
-        "bm25_count": len(debug.get("bm25_results", [])),
+        "multi_query": debug.get("multi_query", False),
+        "query_count": debug.get("query_count", 1),
+        "dense_count": dense_count,
+        "bm25_count": bm25_count,
         "rrf_total": len(debug.get("rrf_ranked", [])),
         "rrf_top5_scores": [
             {
@@ -33,14 +43,14 @@ def _serialize_debug(debug: dict, dense_query: str) -> dict:
             }
             for cid, (_, s) in debug.get("rrf_ranked", [])[:5]
         ],
-        "reranked_count": len(debug.get("reranked_filtered", [])),
+        "reranked_count": len(reranked),
         "rerank_top3_scores": [
             {
                 "chunk_id": r.get("chunk_id", ""),
                 "rerank_score": round(r.get("rerank_score", r.get("score", 0)), 4),
                 "text_preview": r.get("text", "")[:100],
             }
-            for r in debug.get("reranked_filtered", [])[:3]
+            for r in reranked[:3]
         ],
         "dense_query_used": dense_query,
     }
@@ -143,14 +153,24 @@ class AgenticRAGWorkflow:
             self._llm = get_chat_llm()
         return self._llm
 
-    def _rewrite_query(self, query: str) -> tuple[str, str]:
-        """Use LLM to rewrite query for dense (semantic) and BM25 (keyword) search.
+    def _rewrite_query(self, query: str) -> tuple[list[str], str]:
+        """Use LLM to rewrite a query into multiple dense rephrases + one bm25 query.
+
+        Multi-Query Retrieval：把一个问题改写成多条等价 dense query（语义召回靠
+        多样性），并提取一份共享的 bm25 query（关键词无需多样化）。返回
+        ``(dense_queries, bm25_query)``，dense 数量由 LLM 在
+        ``[query_rewrite_count-1, query_rewrite_count+1]`` 区间内自行决定。
 
         相同 query 会命中 :mod:`src.cache` 通用缓存，避免重复 LLM 调用。
-        缓存 key 包含 ``query_rewrite_language``，切换语言会自动失效。
-        LLM 调用失败时回退原 query 且不写缓存（下次仍会重试）。
+        缓存 key 包含 ``query_rewrite_language`` 与 ``query_rewrite_count``，
+        切换语言/数量会自动失效。LLM 调用失败时回退 ``([query], query)`` 且
+        不写缓存（下次仍会重试）。
         """
         import json
+
+        n = max(1, int(settings.query_rewrite_count))
+        min_n = max(1, n - 1)
+        max_n = n + 1
 
         # ── 缓存读取 ──
         if settings.cache_enabled and settings.cache_query_rewrite_enabled:
@@ -159,14 +179,19 @@ class AgenticRAGWorkflow:
             cache_key = make_key(
                 "query_rewrite",
                 settings.query_rewrite_language,
+                f"n{n}",
                 query,
             )
             hit = cache.get(cache_key)
             if hit is not None:
                 try:
                     logger.info(f"Cache hit for query rewrite: {cache_key}")
-                    dense, bm25 = json.loads(hit)
-                    return dense, bm25
+                    cached = json.loads(hit)
+                    if isinstance(cached, dict):
+                        dqs = cached.get("dense_queries", [])
+                        bq = cached.get("bm25_query", query)
+                        if isinstance(dqs, list) and dqs:
+                            return [str(x) for x in dqs], str(bq)
                 except (json.JSONDecodeError, ValueError, TypeError):
                     pass  # 损坏条目按 miss 处理
         else:
@@ -175,28 +200,39 @@ class AgenticRAGWorkflow:
 
         # ── LLM 调用 ──
         try:
-            prompt = QUERY_REWRITE_SYSTEM.format(language=settings.query_rewrite_language)
+            prompt = QUERY_REWRITE_SYSTEM.format(
+                language=settings.query_rewrite_language,
+                n=n,
+                min_n=min_n,
+                max_n=max_n,
+            )
             prompt += f"\n\nUser question: {query}"
             resp = self._get_llm().invoke(prompt)
             text = resp.content.strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[1].rsplit("\n```", 1)[0]
             result = json.loads(text)
-            dense = result.get("dense_query", query)
-            bm25 = result.get("bm25_query", query)
+            dense_queries = [str(x) for x in result.get("dense_queries", []) if x]
+            bm25_query = str(result.get("bm25_query", query)) or query
+
+            # 约束 dense 数量到 [min_n, max_n]；LLM 偶发越界时截断/补足
+            if len(dense_queries) > max_n:
+                dense_queries = dense_queries[:max_n]
+            while len(dense_queries) < min_n:
+                dense_queries.append(query)
 
             # 仅在 LLM 成功时写缓存（失败回退值不应被缓存）
-            if cache is not None and cache_key is not None:
+            if cache is not None and cache_key is not None and dense_queries:
                 try:
                     cache.set(
                         cache_key,
-                        json.dumps([dense, bm25], ensure_ascii=False),
+                        json.dumps({"dense_queries": dense_queries, "bm25_query": bm25_query}, ensure_ascii=False),
                     )
                 except (TypeError, ValueError):
                     pass
-            return dense, bm25
+            return dense_queries if dense_queries else [query], bm25_query
         except Exception:
-            return query, query
+            return [query], query
 
     # [DISABLED] GraphRAG query instance — retained for graph compilation
     def _get_graphrag(self):
@@ -315,54 +351,55 @@ class AgenticRAGWorkflow:
             original_query = state["query"]
             graph_entities = state.get("graph_entities", [])
             sub_queries = state.get("sub_queries", [])
+            extra_terms = " ".join(graph_entities[:10]) if graph_entities else ""
 
-            # Multi-query retrieval: search with each sub-question, merge results
+            # 构建 Multi-Query 改写：(dense_queries, bm25_query)
             if sub_queries:
-                seen_ids = set()
-                all_results = []
+                # 图谱子问题路径：每个子问题各自改写，dense 汇总，bm25 取首条
+                all_dense: list[str] = []
+                shared_bm25 = original_query
                 for sq in sub_queries[:3]:
-                    dense_q = sq
-                    bm25_q = sq
                     if settings.query_rewrite_enabled:
-                        dense_q, bm25_q = self._rewrite_query(sq)
-                    if graph_entities:
-                        bm25_q = f"{bm25_q} {' '.join(graph_entities[:10])}"
-                    results = self.retrieval_agent.search(
-                        sq, doc_ids=doc_ids,
-                        dense_query=dense_q, bm25_query=bm25_q,
-                    )
-                    for r in results:
-                        cid = r.get("chunk_id", "")
-                        if cid and cid not in seen_ids:
-                            seen_ids.add(cid)
-                            all_results.append(r)
-                return {"documents": all_results[:20], "retrieval_path": f"[Multi-query] {len(sub_queries)} sub-queries → {len(all_results)} chunks"}
+                        dqs, bq = self._rewrite_query(sq)
+                        all_dense.extend(dqs)
+                        if not shared_bm25 or shared_bm25 == original_query:
+                            shared_bm25 = bq
+                    else:
+                        all_dense.append(sq)
+                # 子问题 × 多改写可能产生过多 dense query，封顶避免检索开销爆炸
+                max_pairs = max(3, settings.query_rewrite_count * 2)
+                dense_queries = all_dense[:max_pairs]
+                path_label = f"[Multi-query] {len(sub_queries)} sub-queries × rewrite → {len(dense_queries)} dense queries"
+            else:
+                # 单问题路径：改写成多条等价 dense query + 一条共享 bm25 query
+                if settings.query_rewrite_enabled:
+                    dense_queries, shared_bm25 = self._rewrite_query(original_query)
+                else:
+                    dense_queries, shared_bm25 = [original_query], original_query
+                path_label = f"[Multi-query] {len(dense_queries)} dense + 1 bm25"
 
-            # Single query: rewrite for dense (semantic) and BM25 (keyword)
-            original_query = state["query"]
-            dense_query = original_query
-            bm25_query = original_query
-            if settings.query_rewrite_enabled:
-                dense_query, bm25_query = self._rewrite_query(original_query)
-            if graph_entities:
-                bm25_query = f"{bm25_query} {' '.join(graph_entities[:10])}"
+            # 图谱实体关键词追加到 bm25 query（仅 BM25 通道，保留 dense 语义方向）
+            if extra_terms:
+                shared_bm25 = f"{shared_bm25} {extra_terms}".strip()
 
-            results, debug = self.retrieval_agent._retriever.retrieve(
+            results, debug = self.retrieval_agent._retriever.retrieve_multi(
                 original_query,
-                top_k=settings.hybrid_top_k, doc_ids=doc_ids,
-                dense_query=dense_query, bm25_query=bm25_query,
+                dense_queries,
+                shared_bm25,
+                top_k=settings.hybrid_top_k,
+                doc_ids=doc_ids,
             )
             results = self.retrieval_agent._dedup_by_chunk_id(results)
 
             from src.retrieval.debug_formatter import build_search_debug_response
             search_debug_data = build_search_debug_response(
-                original_query, debug, dense_query, bm25_query, top_k=20,
+                original_query, debug, dense_queries, shared_bm25, top_k=settings.hybrid_top_k,
             )
 
             return {
                 "documents": results,
-                "retrieval_path": "[Retrieval] hybrid (dense + BM25)",
-                "retrieval_debug": _serialize_debug(debug, dense_query),
+                "retrieval_path": path_label,
+                "retrieval_debug": _serialize_debug(debug, original_query),
                 "search_debug_data": search_debug_data,
             }
         except Exception as e:

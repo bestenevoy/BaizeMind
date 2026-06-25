@@ -3,52 +3,82 @@
 Used by both the /system/search API endpoint and the chat workflow's
 _retrieval_agent node (to attach full debug data to stream steps for
 the "分析" button in the frontend).
+
+Supports both single-query retrieval (``retrieve``) and Multi-Query
+Retrieval (``retrieve_multi``)。多 query 模式下输出 N 条 dense query + 1 条
+共享 bm25 query，以及 ``source_queries`` 标记，便于前端按改写 query 筛选审查。
 """
 
 from src.storage import doc_store
 from config.settings import settings
 
 
-def _build_rewrite_info(query: str, dense_query: str, bm25_query: str) -> dict:
+def _tokenize_query(text: str) -> list[str]:
     try:
         from src.retrieval.bm25_retriever import tokenize
-        dense_tokens = list(tokenize(dense_query))
-        if settings.query_rewrite_enabled:
-            bm25_tokens = bm25_query.split()
-        else:
-            bm25_tokens = list(tokenize(bm25_query))
-        query_tokens = list(tokenize(query)) if dense_query != query else []
+        return list(tokenize(text))
     except Exception:
-        dense_tokens, bm25_tokens, query_tokens = [], [], []
+        return []
 
+
+def _split_tokens(text: str) -> list[str]:
+    """BM25 通道在 query_rewrite 开启时按空格切分（保留实体词）。"""
+    if settings.query_rewrite_enabled:
+        return text.split()
+    return _tokenize_query(text)
+
+
+def _dense_query_info(index: int, dense_query: str, original: str) -> dict:
     return {
-        "original": query,
+        "index": index,
         "dense_query": dense_query,
-        "bm25_query": bm25_query,
-        "dense_tokens": dense_tokens,
-        "bm25_tokens": bm25_tokens,
-        "query_tokens": query_tokens,
-        "enabled": settings.query_rewrite_enabled,
+        "dense_tokens": _tokenize_query(dense_query),
+        "query_tokens": _tokenize_query(original) if dense_query != original else [],
     }
+
+
+def _enrich_doc_name(item: dict, doc_name_cache: dict[str, str]) -> None:
+    did = item.get("doc_id", "")
+    if did and did not in doc_name_cache:
+        d = doc_store.get_document(did)
+        doc_name_cache[did] = d["filename"] if d else did
+    item["filename"] = doc_name_cache.get(did, "")
 
 
 def build_search_debug_response(
     query: str,
     debug: dict,
-    dense_query: str = "",
+    dense_queries=None,
     bm25_query: str = "",
     top_k: int = 20,
 ) -> dict:
-    """Build a full SearchDebugResponse dict from raw hybrid retriever debug data."""
+    """Build a full SearchDebugResponse dict from raw hybrid retriever debug data.
+
+    ``dense_queries`` 为 Multi-Query Retrieval 的多条等价 dense query 列表，
+    ``bm25_query`` 为共享的单条关键词 query。若 ``dense_queries`` 未提供则
+    回退到单 query 模式（使用 debug 中的 dense_results/bm25_results）。
+    """
     dense_threshold = settings.dense_vector_threshold
     rerank_threshold = settings.reranker_score_threshold
+    doc_name_cache: dict[str, str] = {}
 
-    rewrite_info = _build_rewrite_info(query, dense_query or query, bm25_query or query)
+    # ── 归一化 dense_queries ──
+    if dense_queries is None:
+        dense_queries = [query]
+    is_multi = bool(debug.get("multi_query")) and len(dense_queries) > 1
 
-    max_rrf = debug["rrf_max_raw"]
+    dense_queries_info = [
+        _dense_query_info(i, dq, query) for i, dq in enumerate(dense_queries)
+    ]
+
+    # ── RRF（全局聚合，多 query 模式下为跨 dense query 累加 + bm25 一次）──
+    max_rrf = debug.get("rrf_max_raw", 0)
     rrf_debug = []
+    source_queries_map: dict[str, list[int]] = {}
     for cid, (doc, raw_score) in debug.get("rrf_ranked", []):
         normalized = raw_score / max_rrf if max_rrf > 0 else 0
+        sq = doc.get("source_queries", debug.get("source_queries", {}).get(cid, []))
+        source_queries_map[cid] = list(sq) if isinstance(sq, list) else []
         rrf_debug.append({
             "chunk_id": cid,
             "doc_id": doc.get("doc_id", ""),
@@ -57,34 +87,80 @@ def build_search_debug_response(
             "rrf_normalized": round(normalized, 4),
             "dense_score": round(debug.get("dense_scores", {}).get(cid, 0), 6),
             "bm25_score": round(debug.get("bm25_scores", {}).get(cid, 0), 6),
+            "source_queries": source_queries_map[cid],
         })
 
+    # ── Rerank（用原始 query 的 rerank 结果）──
     rerank_debug = []
     for r in debug.get("reranked", []):
         rs = r.get("rerank_score", r.get("score", 0))
+        cid = r.get("chunk_id", "")
+        sq = r.get("source_queries", source_queries_map.get(cid, []))
         rerank_debug.append({
-            "chunk_id": r.get("chunk_id", ""),
+            "chunk_id": cid,
             "doc_id": r.get("doc_id", ""),
             "text_preview": r.get("text", ""),
             "rerank_score": round(rs, 4) if isinstance(rs, (int, float)) else 0,
             "rerank_pass_threshold": rerank_threshold == 0 or (isinstance(rs, (int, float)) and rs >= rerank_threshold),
+            "source_queries": list(sq) if isinstance(sq, list) else [],
         })
 
-    # Build filename cache
-    doc_name_cache: dict[str, str] = {}
+    # ── 文件名补全 ──
     for item in rrf_debug + rerank_debug:
-        did = item.get("doc_id", "")
-        if did and did not in doc_name_cache:
-            d = doc_store.get_document(did)
-            doc_name_cache[did] = d["filename"] if d else did
+        _enrich_doc_name(item, doc_name_cache)
 
-    for item in rrf_debug + rerank_debug:
-        item["filename"] = doc_name_cache.get(item.get("doc_id", ""), "")
+    # ── bm25 结果（多 query 模式从 debug 顶层取；单 query 模式从 debug["bm25_results"] 取）──
+    bm25_results = debug.get("bm25_results", [])
+    bm25_top = [{
+        "chunk_id": d.get("chunk_id", ""),
+        "doc_id": d.get("doc_id", ""),
+        "text_preview": d.get("text", ""),
+        "score": round(d.get("score", 0), 4),
+    } for d in bm25_results[:top_k]]
+    for item in bm25_top:
+        _enrich_doc_name(item, doc_name_cache)
+
+    # ── per-query 明细（仅多 query 模式，每条 dense query 的召回）──
+    per_query_stages = []
+    if is_multi:
+        for q_info in debug.get("per_query", []):
+            idx = q_info.get("index", 0)
+            dense_results = q_info.get("dense_results", [])
+            dense_top = [{
+                "chunk_id": d.get("chunk_id", ""),
+                "doc_id": d.get("doc_id", ""),
+                "text_preview": d.get("text", ""),
+                "score": round(d.get("score", 0), 4),
+            } for d in dense_results[:top_k]]
+            for item in dense_top:
+                _enrich_doc_name(item, doc_name_cache)
+            per_query_stages.append({
+                "index": idx,
+                "dense_query": q_info.get("dense_query", ""),
+                "dense_top": dense_top,
+                "dense_count": len(dense_results),
+            })
+
+    # ── 全局 dense top（单 query 模式从原始列表取；多 query 模式留空，前端用 per_query）──
+    if is_multi:
+        global_dense_top: list[dict] = []
+    else:
+        global_dense_top = [{
+            "chunk_id": d.get("chunk_id", ""),
+            "doc_id": d.get("doc_id", ""),
+            "text_preview": d.get("text", ""),
+            "score": round(d.get("score", 0), 4),
+        } for d in debug.get("dense_results", [])[:top_k]]
+        for item in global_dense_top:
+            _enrich_doc_name(item, doc_name_cache)
+        # 单 query 模式下 bm25_top 用 debug["bm25_results"]，已上面处理
 
     final = [r for r in rerank_debug if r["rerank_pass_threshold"]]
 
     return {
         "query": query,
+        "multi_query": is_multi,
+        "query_count": len(dense_queries),
         "threshold": dense_threshold,
         "dense_threshold": dense_threshold,
         "rerank_threshold": rerank_threshold,
@@ -92,25 +168,25 @@ def build_search_debug_response(
         "over_fetch_multiplier": settings.retrieval_over_fetch_multiplier,
         "top_k": top_k,
         "rerank_top_k": settings.rerank_top_k,
-        "rewrite": rewrite_info,
+        "rewrite": {
+            "enabled": settings.query_rewrite_enabled,
+            "original": query,
+            "dense_queries": dense_queries_info,
+            "bm25_query": bm25_query,
+            "bm25_tokens": _split_tokens(bm25_query),
+            # 兼容旧字段：取首条 dense query
+            "dense_query": dense_queries_info[0]["dense_query"] if dense_queries_info else query,
+            "dense_tokens": dense_queries_info[0]["dense_tokens"] if dense_queries_info else [],
+            "query_tokens": dense_queries_info[0]["query_tokens"] if dense_queries_info else [],
+        },
         "stages": {
-            "dense_top5": [{
-                "chunk_id": d.get("chunk_id", ""),
-                "doc_id": d.get("doc_id", ""),
-                "filename": doc_name_cache.get(d.get("doc_id", ""), ""),
-                "text_preview": d.get("text", ""),
-                "score": round(d.get("score", 0), 4),
-            } for d in debug.get("dense_results", [])[:top_k]],
-            "bm25_top5": [{
-                "chunk_id": d.get("chunk_id", ""),
-                "doc_id": d.get("doc_id", ""),
-                "filename": doc_name_cache.get(d.get("doc_id", ""), ""),
-                "text_preview": d.get("text", ""),
-                "score": round(d.get("score", 0), 4),
-            } for d in debug.get("bm25_results", [])[:top_k]],
+            "per_query": per_query_stages,
+            "dense_top5": global_dense_top,
+            "bm25_top5": bm25_top,
             "rrf": rrf_debug[:20],
             "rerank": rerank_debug,
         },
+        "source_queries": source_queries_map,
         "final_count": len(final),
         "filtered_out_by_rerank_threshold": len(rerank_debug) - len(final),
     }

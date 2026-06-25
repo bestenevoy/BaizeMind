@@ -71,6 +71,7 @@ SETTING_CATEGORIES = [
         ("reranker_method", "重排序方式"),
         ("query_rewrite_enabled", "查询改写开关"),
         ("query_rewrite_language", "改写语言"),
+        ("query_rewrite_count", "改写 Query 数量"),
     ]),
     ("重排序模型", [
         ("siliconflow_rerank_model", "重排模型"),
@@ -474,38 +475,39 @@ async def search_debug(body: SearchDebugRequest):
         if not ids:
             return {
                 "query": query,
+                "multi_query": False,
+                "query_count": 1,
                 "threshold": settings.retrieval_similarity_threshold,
                 "dense_threshold": settings.dense_vector_threshold,
                 "rerank_threshold": settings.reranker_score_threshold,
-                "rewrite": {"enabled": settings.query_rewrite_enabled, "original": query, "dense_query": query, "bm25_query": query, "query_tokens": [], "dense_tokens": [], "bm25_tokens": []},
-                "stages": {"dense_top5": [], "bm25_top5": [], "rrf": [], "rerank": []},
+                "rewrite": {"enabled": settings.query_rewrite_enabled, "original": query, "pairs": [], "dense_query": query, "bm25_query": query, "query_tokens": [], "dense_tokens": [], "bm25_tokens": []},
+                "stages": {"per_query": [], "dense_top5": [], "bm25_top5": [], "rrf": [], "rerank": []},
+                "source_queries": {},
                 "final_count": 0,
                 "filtered_out_by_rerank_threshold": 0,
                 "message": "No documents match the folder/tag filter",
             }
         doc_ids = ids
 
-    # Query rewriting
-    dense_query = query
+    # Query rewriting (Multi-Query Retrieval)
+    dense_queries: list[str] = [query]
     bm25_query = query
     if settings.query_rewrite_enabled:
         try:
             from src.agents.workflow import get_workflow
-            dense_query, bm25_query = get_workflow()._rewrite_query(query)
+            dense_queries, bm25_query = get_workflow()._rewrite_query(query)
         except Exception:
-            pass
+            dense_queries, bm25_query = [query], query
 
     from src.retrieval.hybrid_retriever import HybridRetriever
     from src.retrieval.debug_formatter import build_search_debug_response
 
     hybrid = HybridRetriever()
-    _, debug = hybrid.retrieve(
-        query, top_k=top_k,
-        dense_query=dense_query, bm25_query=bm25_query,
-        doc_ids=doc_ids,
+    _, debug = hybrid.retrieve_multi(
+        query, dense_queries, bm25_query, top_k=top_k, doc_ids=doc_ids,
     )
 
-    return build_search_debug_response(query, debug, dense_query, bm25_query, top_k)
+    return build_search_debug_response(query, debug, dense_queries, bm25_query, top_k=top_k)
 
 
 # ── Build Graph ──

@@ -20,6 +20,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   const [editValue, setEditValue] = useState('')
   const [saving, setSaving] = useState(false)
   const [showAll, setShowAll] = useState(true)
+  const [queryFilter, setQueryFilter] = useState<number>(-1) // -1=汇总, 0..N-1=按改写 query 筛选
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Check for pre-fetched data from chat (sessionStorage)
@@ -61,6 +62,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
     setResult(null)
     setExpandedPreviews({})
     setResultTab('rewrite')
+    setQueryFilter(-1)
     try {
       const res = await searchDebug(searchQuery, folder, tags, docId)
       setResult(res)
@@ -273,32 +275,62 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                           <div className="bg-muted/30 rounded p-3 space-y-1">
                             <div className="text-xs font-medium text-muted-foreground mb-2">原始查询</div>
                             <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.original}</pre>
-                            {result.rewrite.query_tokens.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {result.rewrite.query_tokens.map((t, i) => (
-                                  <Badge key={i} variant="outline" className="text-xs font-mono">{t}</Badge>
-                                ))}
+                          </div>
+                          {(result.multi_query && result.rewrite.dense_queries && result.rewrite.dense_queries.length > 0) ? (
+                            <>
+                              <div className="text-xs text-muted-foreground">
+                                Multi-Query Retrieval：改写出
+                                <span className="font-mono font-semibold text-foreground mx-1">{result.rewrite.dense_queries.length}</span>
+                                条等价 Dense Query + 1 条共享 BM25 Query（Rerank 使用原始查询）
                               </div>
-                            )}
-                          </div>
-                          <div className="bg-blue-50 dark:bg-blue-950/20 rounded p-3 space-y-1">
-                            <div className="text-xs font-medium text-blue-600 dark:text-blue-400 mb-2">Dense 查询（语义检索用）</div>
-                            <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.dense_query}</pre>
-                            <div className="flex flex-wrap gap-1 mt-1">
-                              {result.rewrite.dense_tokens.map((t, i) => (
-                                <Badge key={i} variant="outline" className="text-xs font-mono bg-blue-50 dark:bg-blue-950/30">{t}</Badge>
+                              {result.rewrite.dense_queries.map((p) => (
+                                <div key={p.index} className="space-y-2 border rounded p-2">
+                                  <div className="flex items-center gap-1.5">
+                                    <Badge variant="secondary" className="text-xs font-mono">Q{p.index + 1}</Badge>
+                                    <span className="text-xs text-muted-foreground">Dense 改写 #{p.index + 1}</span>
+                                  </div>
+                                  <div className="bg-blue-50 dark:bg-blue-950/20 rounded p-2 space-y-1">
+                                    <pre className="text-sm whitespace-pre-wrap break-all">{p.dense_query}</pre>
+                                    <div className="flex flex-wrap gap-1">
+                                      {p.dense_tokens.map((t, i) => (
+                                        <Badge key={i} variant="outline" className="text-xs font-mono bg-blue-50 dark:bg-blue-950/30">{t}</Badge>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
                               ))}
-                            </div>
-                          </div>
-                          <div className="bg-emerald-50 dark:bg-emerald-950/20 rounded p-3 space-y-1">
-                            <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400 mb-2">BM25 查询（关键词检索用）</div>
-                            <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.bm25_query}</pre>
-                            <div className="flex flex-wrap gap-1 mt-1">
-                              {result.rewrite.bm25_tokens.map((t, i) => (
-                                <Badge key={i} variant="outline" className="text-xs font-mono bg-emerald-50 dark:bg-emerald-950/30">{t}</Badge>
-                              ))}
-                            </div>
-                          </div>
+                              <div className="bg-emerald-50 dark:bg-emerald-950/20 rounded p-3 space-y-1">
+                                <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400 mb-2">共享 BM25 查询（关键词检索用）</div>
+                                <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.bm25_query}</pre>
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {result.rewrite.bm25_tokens.map((t, i) => (
+                                    <Badge key={i} variant="outline" className="text-xs font-mono bg-emerald-50 dark:bg-emerald-950/30">{t}</Badge>
+                                  ))}
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="bg-blue-50 dark:bg-blue-950/20 rounded p-3 space-y-1">
+                                <div className="text-xs font-medium text-blue-600 dark:text-blue-400 mb-2">Dense 查询（语义检索用）</div>
+                                <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.dense_query}</pre>
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {result.rewrite.dense_tokens.map((t, i) => (
+                                    <Badge key={i} variant="outline" className="text-xs font-mono bg-blue-50 dark:bg-blue-950/30">{t}</Badge>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="bg-emerald-50 dark:bg-emerald-950/20 rounded p-3 space-y-1">
+                                <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400 mb-2">BM25 查询（关键词检索用）</div>
+                                <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.bm25_query}</pre>
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {result.rewrite.bm25_tokens.map((t, i) => (
+                                    <Badge key={i} variant="outline" className="text-xs font-mono bg-emerald-50 dark:bg-emerald-950/30">{t}</Badge>
+                                  ))}
+                                </div>
+                              </div>
+                            </>
+                          )}
                         </>
                       ) : (
                         <div className="text-sm text-muted-foreground text-center py-8">
@@ -309,7 +341,17 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                   )}
                   {resultTab === 'rrf' && (
                     <div className="space-y-1">
+                      {result.multi_query && result.rewrite.dense_queries && result.rewrite.dense_queries.length > 0 && (
+                        <div className="flex items-center gap-1 flex-wrap mb-1 pb-1 border-b">
+                          <span className="text-xs text-muted-foreground">按改写 Query 筛选:</span>
+                          <button onClick={() => setQueryFilter(-1)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === -1 ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}>汇总</button>
+                          {result.rewrite.dense_queries.map((p) => (
+                            <button key={p.index} onClick={() => setQueryFilter(p.index)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === p.index ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`} title={p.dense_query}>Q{p.index + 1}</button>
+                          ))}
+                        </div>
+                      )}
                       {result.stages.rrf.map((c, i) => {
+                        if (queryFilter >= 0 && !(c.source_queries ?? []).includes(queryFilter)) return null
                         return (
                         <div key={i} className="rounded p-2 border bg-muted/20 border-border">
                           <div className="flex items-center gap-1.5">
@@ -318,6 +360,11 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                               <span className="font-medium">{c.filename || c.doc_id}</span>
                               <span className="text-muted-foreground ml-1 font-mono">/ {c.chunk_id}</span>
                             </span>
+                            {result.multi_query && (c.source_queries ?? []).length > 0 && (
+                              <span className="flex gap-0.5">
+                                {c.source_queries!.map(qi => <Badge key={qi} variant="outline" className="text-xs font-mono px-1 py-0">Q{qi + 1}</Badge>)}
+                              </span>
+                            )}
                             <span className="ml-auto font-mono text-xs shrink-0">RRF: {c.rrf_normalized}</span>
                           </div>
                           <div className="flex gap-3 mt-0.5 text-xs text-muted-foreground/50 font-mono">
@@ -337,7 +384,17 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                   )}
                   {resultTab === 'rerank' && (
                     <div className="space-y-1">
+                      {result.multi_query && result.rewrite.dense_queries && result.rewrite.dense_queries.length > 0 && (
+                        <div className="flex items-center gap-1 flex-wrap mb-1 pb-1 border-b">
+                          <span className="text-xs text-muted-foreground">按改写 Query 筛选:</span>
+                          <button onClick={() => setQueryFilter(-1)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === -1 ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}>汇总</button>
+                          {result.rewrite.dense_queries.map((p) => (
+                            <button key={p.index} onClick={() => setQueryFilter(p.index)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === p.index ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`} title={p.dense_query}>Q{p.index + 1}</button>
+                          ))}
+                        </div>
+                      )}
                       {result.stages.rerank.map((c, i) => {
+                        if (queryFilter >= 0 && !(c.source_queries ?? []).includes(queryFilter)) return null
                         if (!showAll && !c.rerank_pass_threshold) return null
                         return (
                         <div key={i} className={`rounded p-2 border ${c.rerank_pass_threshold ? 'bg-muted/20 border-border' : 'bg-red-50 dark:bg-red-950/10 border-red-200 dark:border-red-800'}`}>
@@ -347,6 +404,11 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                               <span className="font-medium">{c.filename || c.doc_id}</span>
                               <span className="text-muted-foreground ml-1 font-mono">/ {c.chunk_id}</span>
                             </span>
+                            {result.multi_query && (c.source_queries ?? []).length > 0 && (
+                              <span className="flex gap-0.5">
+                                {c.source_queries!.map(qi => <Badge key={qi} variant="outline" className="text-xs font-mono px-1 py-0">Q{qi + 1}</Badge>)}
+                              </span>
+                            )}
                             <span className="ml-auto font-mono text-xs shrink-0">score: {c.rerank_score}</span>
                             {c.rerank_pass_threshold ? (
                               <Check className="h-3 w-3 text-green-500 shrink-0" />
@@ -366,11 +428,25 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                   )}
                   {resultTab === 'dense' && (
                     <div>
-                      <StageMini label="" items={result.stages.dense_top5.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="dense" scoreThreshold={result.dense_threshold || result.threshold} showAll={showAll} />
+                      {result.multi_query && result.stages.per_query && result.stages.per_query.length > 0 ? (
+                        <div className="space-y-3">
+                          {result.stages.per_query.map((q) => (
+                            <div key={q.index}>
+                              <div className="text-xs font-medium text-muted-foreground mb-1">Q{q.index + 1} · Dense ({q.dense_count}) <span className="font-normal text-muted-foreground/70 truncate">{q.dense_query}</span></div>
+                              <StageMini label="" items={q.dense_top.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix={`dense-q${q.index}`} scoreThreshold={result.dense_threshold || result.threshold} showAll={showAll} />
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <StageMini label="" items={result.stages.dense_top5.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="dense" scoreThreshold={result.dense_threshold || result.threshold} showAll={showAll} />
+                      )}
                     </div>
                   )}
                   {resultTab === 'bm25' && (
                     <div>
+                      {result.multi_query && result.rewrite.bm25_query && (
+                        <div className="text-xs text-muted-foreground mb-1">共享 BM25 查询: <span className="font-mono text-foreground">{result.rewrite.bm25_query}</span></div>
+                      )}
                       <StageMini label="" items={result.stages.bm25_top5} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="bm25" />
                     </div>
                   )}

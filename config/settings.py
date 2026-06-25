@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     reranker_method: str = "embedding"  # "embedding" | "llm" | "hybrid"
     query_rewrite_enabled: bool = True
     query_rewrite_language: str = "简体中文"
+    # Multi-Query Retrieval: 将一个问题改写成多个等价 Query 的目标数量。
+    # 提示词会约束 LLM 在 [count-1, count+1] 区间内根据问题表述自行决定实际数量
+    # （例如 count=3 时，LLM 可产出 2~4 条等价 Query）。
+    query_rewrite_count: int = 3
 
     # Graph relation type filtering: high-relevance types for multi-hop/entity enrichment
     # Only paths involving these relation types are forwarded to the LLM entity filter

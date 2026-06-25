@@ -50,22 +50,131 @@ class HybridRetriever:
             {"dense": dense_weight, "bm25": bm25_weight},
         )
 
-        # Reranker stage — use rewritten dense query for cross-encoder.
-        # The rewritten query captures the core semantic intent better than
-        # the raw user input, yielding higher quality relevance scores.
+        # Reranker stage — use the ORIGINAL user query for cross-encoder.
+        # 原始 query 最贴近用户真实意图；改写 query 已在 dense/bm25 召回阶段
+        # 发挥作用，rerank 阶段回到原始 query 可避免改写偏差放大。
         all_for_rerank = [doc for _, (doc, _) in rrf_data["ranked"][:top_k]]
-        reranked_full = self.reranker.rerank(dense_q, all_for_rerank, top_k=min(settings.rerank_top_k, len(all_for_rerank)))
+        reranked_full = self.reranker.rerank(query, all_for_rerank, top_k=min(settings.rerank_top_k, len(all_for_rerank)))
 
         threshold = settings.reranker_score_threshold
         reranked = [r for r in reranked_full if r.get("rerank_score", r.get("score", 0)) >= threshold] if threshold > 0 else list(reranked_full)
 
         debug = {
+            "multi_query": False,
+            "query_count": 1,
             "dense_results": dense_results,
             "bm25_results": bm25_results,
             "rrf_ranked": rrf_data["ranked"],
             "rrf_max_raw": rrf_data["max_raw"],
             "dense_scores": rrf_data["dense_scores"],
             "bm25_scores": rrf_data["bm25_scores"],
+            "reranked": reranked_full,
+        }
+        return reranked, debug
+
+    def retrieve_multi(
+        self,
+        original_query: str,
+        dense_queries: list[str],
+        bm25_query: str,
+        top_k: int = 20,
+        doc_ids: Optional[list[str]] = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Multi-Query Retrieval.
+
+        对每条 dense_query 各跑一次稠密检索，BM25 只跑一次（关键词无需多样化），
+        跨所有 dense query 把 RRF 分数累加、BM25 贡献只计一次，最后用
+        ``original_query``（用户原始问题）做 rerank。
+
+        每条结果会带上 ``source_queries`` 字段（贡献该 chunk 的 dense query
+        下标列表），便于前端在检索测试页按 query 筛选审查；不筛选即为汇总结果。
+
+        Returns (final_results, debug_info)。
+        """
+        dense_weight = settings.hybrid_dense_weight
+        bm25_weight = settings.hybrid_bm25_weight
+        rrf_k = settings.hybrid_rrf_k
+        fetch_k = min(top_k * settings.retrieval_over_fetch_multiplier, 100)
+
+        # BM25 只跑一次
+        bm25_results = self._bm25_search(bm25_query, fetch_k, doc_ids)
+
+        per_query: list[dict] = []
+        # 全局聚合：chunk_id -> (doc, 累计 RRF 分数)
+        global_scores: dict[str, tuple[dict, float]] = {}
+        source_queries: dict[str, set[int]] = {}
+        dense_scores_global: dict[str, float] = {}
+        bm25_scores_global: dict[str, float] = {}
+
+        # BM25 贡献只计一次
+        for rank, r in enumerate(bm25_results):
+            cid = r.get("chunk_id", "")
+            if not cid:
+                continue
+            bs = r.get("score", 0)
+            bm25_scores_global[cid] = max(bs, bm25_scores_global.get(cid, 0))
+            contrib = bm25_weight / (rrf_k + rank + 1)
+            if cid not in global_scores:
+                global_scores[cid] = (r, 0.0)
+            global_scores[cid] = (global_scores[cid][0], global_scores[cid][1] + contrib)
+
+        # 每个 dense query 各跑一次，累加 RRF 贡献
+        for idx, dq in enumerate(dense_queries):
+            dense_results = self._dense_search(dq, fetch_k, doc_ids)
+            per_query.append({
+                "index": idx,
+                "dense_query": dq,
+                "dense_results": dense_results,
+            })
+            for rank, r in enumerate(dense_results):
+                cid = r.get("chunk_id", "")
+                if not cid:
+                    continue
+                ds = r.get("score", 0)
+                if ds > dense_scores_global.get(cid, 0):
+                    dense_scores_global[cid] = ds
+                contrib = dense_weight / (rrf_k + rank + 1)
+                if cid not in global_scores:
+                    global_scores[cid] = (r, 0.0)
+                global_scores[cid] = (global_scores[cid][0], global_scores[cid][1] + contrib)
+                source_queries.setdefault(cid, set()).add(idx)
+
+        global_ranked = sorted(global_scores.items(), key=lambda x: x[1][1], reverse=True)
+        max_raw = global_ranked[0][1][1] if global_ranked else 0.0
+
+        # 把 source_queries 与最佳 dense/bm25 分数写回代表 doc
+        sq_map = {cid: sorted(s) for cid, s in source_queries.items()}
+        for cid, (doc, _) in global_ranked:
+            doc["source_queries"] = sq_map.get(cid, [])
+            doc["dense_score"] = dense_scores_global.get(cid, 0)
+            doc["bm25_score"] = bm25_scores_global.get(cid, 0)
+
+        # Rerank 用原始 query（贴近用户真实意图）
+        all_for_rerank = [doc for _, (doc, _) in global_ranked[:top_k]]
+        reranked_full = self.reranker.rerank(
+            original_query, all_for_rerank,
+            top_k=min(settings.rerank_top_k, len(all_for_rerank)),
+        )
+        # 确保 rerank 结果带 source_queries（不同 rerank 实现可能复制/引用 doc）
+        for r in reranked_full:
+            cid = r.get("chunk_id", "")
+            if not r.get("source_queries"):
+                r["source_queries"] = sq_map.get(cid, [])
+
+        threshold = settings.reranker_score_threshold
+        reranked = [r for r in reranked_full if r.get("rerank_score", r.get("score", 0)) >= threshold] if threshold > 0 else list(reranked_full)
+
+        debug = {
+            "multi_query": True,
+            "query_count": len(dense_queries),
+            "bm25_query": bm25_query,
+            "bm25_results": bm25_results,
+            "per_query": per_query,
+            "rrf_ranked": global_ranked,
+            "rrf_max_raw": max_raw,
+            "dense_scores": dense_scores_global,
+            "bm25_scores": bm25_scores_global,
+            "source_queries": sq_map,
             "reranked": reranked_full,
         }
         return reranked, debug
