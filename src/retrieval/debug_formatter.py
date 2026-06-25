@@ -88,6 +88,9 @@ def build_search_debug_response(
         "rrf_threshold": rrf_threshold,
         "dense_threshold": dense_threshold,
         "rerank_threshold": rerank_threshold,
+        "rrf_k": settings.hybrid_rrf_k,
+        "over_fetch_multiplier": settings.retrieval_over_fetch_multiplier,
+        "top_k": top_k,
         "rewrite": rewrite_info,
         "stages": {
             "dense_top5": [{

@@ -456,12 +456,15 @@ class SearchDebugRequest(BaseModel):
     folder: str | None = None
     tags: list[str] | None = None
     doc_id: str | None = None
-    top_k: int = 20
+    top_k: int | None = None
 
 
 @router.post("/search")
 async def search_debug(body: SearchDebugRequest):
     query = body.query
+    # 未指定 top_k 时用运行时配置（可被 runtime 页 / 检索测试页编辑覆盖），
+    # 这样编辑 hybrid_top_k 能直接影响 Rerank 数量与最终输出
+    top_k = body.top_k if body.top_k is not None else settings.hybrid_top_k
 
     doc_ids = None
     if body.doc_id:
@@ -498,12 +501,12 @@ async def search_debug(body: SearchDebugRequest):
 
     hybrid = HybridRetriever()
     _, debug = hybrid.retrieve(
-        query, top_k=body.top_k,
+        query, top_k=top_k,
         dense_query=dense_query, bm25_query=bm25_query,
         doc_ids=doc_ids,
     )
 
-    return build_search_debug_response(query, debug, dense_query, bm25_query, body.top_k)
+    return build_search_debug_response(query, debug, dense_query, bm25_query, top_k)
 
 
 # ── Build Graph ──

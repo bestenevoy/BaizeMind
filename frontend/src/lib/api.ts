@@ -404,6 +404,9 @@ export interface SearchDebugResponse {
   rrf_threshold: number
   dense_threshold: number
   rerank_threshold: number
+  rrf_k: number
+  over_fetch_multiplier: number
+  top_k: number
   rewrite: {
     original: string
     dense_query: string
@@ -428,7 +431,8 @@ export async function searchDebug(query: string, folder?: string | null, tags?: 
   const res = await fetch(`${API_BASE}/system/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, folder: folder || undefined, tags: tags?.length ? tags : undefined, doc_id: docId || undefined, top_k: topK || 20 }),
+    // top_k 不传时后端用 settings.hybrid_top_k（可被 runtime 页编辑覆盖）
+    body: JSON.stringify({ query, folder: folder || undefined, tags: tags?.length ? tags : undefined, doc_id: docId || undefined, ...(topK ? { top_k: topK } : {}) }),
   })
   if (!res.ok) throw new Error(`Search debug failed: ${res.statusText}`)
   return res.json()

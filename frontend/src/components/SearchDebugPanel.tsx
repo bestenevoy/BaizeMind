@@ -168,11 +168,13 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                 <span className="text-muted-foreground">|</span>
                 <ThresholdValue label="Rerank 阈值" configKey="reranker_score_threshold" value={result.rerank_threshold || 0} />
                 <span className="text-muted-foreground">|</span>
-                <span className="text-muted-foreground">RRF 候选:</span>
-                <span className="font-mono">{result.stages.rrf.length}</span>
+                <ThresholdValue label="RRF k" configKey="hybrid_rrf_k" value={result.rrf_k} />
                 <span className="text-muted-foreground">|</span>
-                <span className="text-muted-foreground">Rerank:</span>
-                <span className="font-mono">{result.stages.rerank.length}</span>
+                <ThresholdValue label="过采样" configKey="retrieval_over_fetch_multiplier" value={result.over_fetch_multiplier} />
+                <span className="text-muted-foreground text-xs">候选{result.stages.rrf.length}</span>
+                <span className="text-muted-foreground">|</span>
+                <ThresholdValue label="Top-K" configKey="hybrid_top_k" value={result.top_k} />
+                <span className="text-muted-foreground text-xs">rerank{result.stages.rerank.length}</span>
                 <span className="text-muted-foreground">|</span>
                 <span className="text-muted-foreground">最终输出:</span>
                 <span className={`font-mono font-semibold ${result.final_count === 0 ? 'text-red-500' : 'text-primary'}`}>
