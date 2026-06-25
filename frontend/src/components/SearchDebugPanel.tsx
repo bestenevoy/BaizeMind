@@ -127,6 +127,10 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   if (tags.length) filterInfo.push(`标签: ${tags.join(', ')}`)
   if (!docId && !folder && !tags.length) filterInfo.push('全部文档')
   const denseUpToThreshold = result?.stages?.dense_top5 ? result.stages.dense_top5.filter(c => (c.score ?? 0) >= (result.dense_threshold || result.threshold)).length : 0
+  // Dense 召回并集 chunk 数：multi 模式汇总所有 Q（含 Q0 原始）的 dense 召回去重；单 query 模式取 dense_top5
+  const denseUnionCount = result?.multi_query && result?.stages?.per_query
+    ? new Set(result.stages.per_query.flatMap(q => (q.dense_top ?? []).map(c => c.chunk_id))).size
+    : (result?.stages?.dense_top5?.length ?? 0)
 
   return (
     <Card className="p-4 text-sm h-full flex flex-col min-h-0">
@@ -250,7 +254,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                     { key: 'rewrite', label: '查询改写' },
                     { key: 'rrf', label: `RRF融合 (${result.stages.rrf.length})` },
                     { key: 'rerank', label: `Reranker (${result.stages.rerank.length})` },
-                    { key: 'dense', label: `Dense向量 (${result.stages.dense_top5.length})` },
+                    { key: 'dense', label: `Dense向量 (${denseUnionCount})` },
                     { key: 'bm25', label: `BM25 (${result.stages.bm25_top5.length})` },
                   ].map(t => (
                     <button
@@ -279,15 +283,21 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                           {(result.multi_query && result.rewrite.dense_queries && result.rewrite.dense_queries.length > 0) ? (
                             <>
                               <div className="text-xs text-muted-foreground">
-                                Multi-Query Retrieval：改写出
-                                <span className="font-mono font-semibold text-foreground mx-1">{result.rewrite.dense_queries.length}</span>
-                                条等价 Dense Query + 1 条共享 BM25 Query（Rerank 使用原始查询）
+                                Multi-Query Retrieval：Q0 为原始查询 + 改写出
+                                <span className="font-mono font-semibold text-foreground mx-1">{result.rewrite.dense_queries.length - 1}</span>
+                                条等价 Dense Query + 1 条共享 BM25 Query（全部参与 RRF 融合，Rerank 使用原始查询）
                               </div>
-                              {result.rewrite.dense_queries.map((p) => (
+                              {result.rewrite.dense_queries.map((p) => {
+                                const isOrig = p.index === 0 && p.dense_query === result.rewrite.original
+                                return (
                                 <div key={p.index} className="space-y-2 border rounded p-2">
                                   <div className="flex items-center gap-1.5">
-                                    <Badge variant="secondary" className="text-xs font-mono">Q{p.index + 1}</Badge>
-                                    <span className="text-xs text-muted-foreground">Dense 改写 #{p.index + 1}</span>
+                                    {isOrig ? (
+                                      <Badge variant="outline" className="text-xs font-mono bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-300">Q0 · 原始</Badge>
+                                    ) : (
+                                      <Badge variant="secondary" className="text-xs font-mono">Q{p.index}</Badge>
+                                    )}
+                                    <span className="text-xs text-muted-foreground">{isOrig ? '原始查询（参与召回兜底）' : `Dense 改写 #${p.index}`}</span>
                                   </div>
                                   <div className="bg-blue-50 dark:bg-blue-950/20 rounded p-2 space-y-1">
                                     <pre className="text-sm whitespace-pre-wrap break-all">{p.dense_query}</pre>
@@ -298,7 +308,8 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                                     </div>
                                   </div>
                                 </div>
-                              ))}
+                                )
+                              })}
                               <div className="bg-emerald-50 dark:bg-emerald-950/20 rounded p-3 space-y-1">
                                 <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400 mb-2">共享 BM25 查询（关键词检索用）</div>
                                 <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.bm25_query}</pre>
@@ -343,11 +354,16 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                     <div className="space-y-1">
                       {result.multi_query && result.rewrite.dense_queries && result.rewrite.dense_queries.length > 0 && (
                         <div className="flex items-center gap-1 flex-wrap mb-1 pb-1 border-b">
-                          <span className="text-xs text-muted-foreground">按改写 Query 筛选:</span>
+                          <span className="text-xs text-muted-foreground">按 Query 筛选:</span>
                           <button onClick={() => setQueryFilter(-1)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === -1 ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}>汇总</button>
-                          {result.rewrite.dense_queries.map((p) => (
-                            <button key={p.index} onClick={() => setQueryFilter(p.index)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === p.index ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`} title={p.dense_query}>Q{p.index + 1}</button>
-                          ))}
+                          {result.rewrite.dense_queries.map((p) => {
+                            const isOrig = p.index === 0 && p.dense_query === result.rewrite.original
+                            return (
+                              <button key={p.index} onClick={() => setQueryFilter(p.index)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === p.index ? 'bg-primary text-primary-foreground border-primary' : isOrig ? 'border-amber-300 text-amber-700 dark:text-amber-300' : 'border-border text-muted-foreground hover:text-foreground'}`} title={p.dense_query}>
+                                {isOrig ? `Q0·原始` : `Q${p.index}`}
+                              </button>
+                            )
+                          })}
                         </div>
                       )}
                       {result.stages.rrf.map((c, i) => {
@@ -362,7 +378,10 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                             </span>
                             {result.multi_query && (c.source_queries ?? []).length > 0 && (
                               <span className="flex gap-0.5">
-                                {c.source_queries!.map(qi => <Badge key={qi} variant="outline" className="text-xs font-mono px-1 py-0">Q{qi + 1}</Badge>)}
+                                {c.source_queries!.map(qi => {
+                                  const isOrig = qi === 0 && result.rewrite.original === (result.rewrite.dense_queries?.[0]?.dense_query ?? '')
+                                  return <Badge key={qi} variant="outline" className={`text-xs font-mono px-1 py-0 ${isOrig ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-300' : ''}`}>{isOrig ? 'Q0·原' : `Q${qi}`}</Badge>
+                                })}
                               </span>
                             )}
                             <span className="ml-auto font-mono text-xs shrink-0">RRF: {c.rrf_normalized}</span>
@@ -386,11 +405,16 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                     <div className="space-y-1">
                       {result.multi_query && result.rewrite.dense_queries && result.rewrite.dense_queries.length > 0 && (
                         <div className="flex items-center gap-1 flex-wrap mb-1 pb-1 border-b">
-                          <span className="text-xs text-muted-foreground">按改写 Query 筛选:</span>
+                          <span className="text-xs text-muted-foreground">按 Query 筛选:</span>
                           <button onClick={() => setQueryFilter(-1)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === -1 ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}>汇总</button>
-                          {result.rewrite.dense_queries.map((p) => (
-                            <button key={p.index} onClick={() => setQueryFilter(p.index)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === p.index ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`} title={p.dense_query}>Q{p.index + 1}</button>
-                          ))}
+                          {result.rewrite.dense_queries.map((p) => {
+                            const isOrig = p.index === 0 && p.dense_query === result.rewrite.original
+                            return (
+                              <button key={p.index} onClick={() => setQueryFilter(p.index)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === p.index ? 'bg-primary text-primary-foreground border-primary' : isOrig ? 'border-amber-300 text-amber-700 dark:text-amber-300' : 'border-border text-muted-foreground hover:text-foreground'}`} title={p.dense_query}>
+                                {isOrig ? `Q0·原始` : `Q${p.index}`}
+                              </button>
+                            )
+                          })}
                         </div>
                       )}
                       {result.stages.rerank.map((c, i) => {
@@ -406,7 +430,10 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                             </span>
                             {result.multi_query && (c.source_queries ?? []).length > 0 && (
                               <span className="flex gap-0.5">
-                                {c.source_queries!.map(qi => <Badge key={qi} variant="outline" className="text-xs font-mono px-1 py-0">Q{qi + 1}</Badge>)}
+                                {c.source_queries!.map(qi => {
+                                  const isOrig = qi === 0 && result.rewrite.original === (result.rewrite.dense_queries?.[0]?.dense_query ?? '')
+                                  return <Badge key={qi} variant="outline" className={`text-xs font-mono px-1 py-0 ${isOrig ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-300' : ''}`}>{isOrig ? 'Q0·原' : `Q${qi}`}</Badge>
+                                })}
                               </span>
                             )}
                             <span className="ml-auto font-mono text-xs shrink-0">score: {c.rerank_score}</span>
@@ -429,14 +456,40 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                   {resultTab === 'dense' && (
                     <div>
                       {result.multi_query && result.stages.per_query && result.stages.per_query.length > 0 ? (
-                        <div className="space-y-3">
-                          {result.stages.per_query.map((q) => (
-                            <div key={q.index}>
-                              <div className="text-xs font-medium text-muted-foreground mb-1">Q{q.index + 1} · Dense ({q.dense_count}) <span className="font-normal text-muted-foreground/70 truncate">{q.dense_query}</span></div>
-                              <StageMini label="" items={q.dense_top.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix={`dense-q${q.index}`} scoreThreshold={result.dense_threshold || result.threshold} showAll={showAll} />
-                            </div>
-                          ))}
-                        </div>
+                        <>
+                          <div className="flex items-center gap-1 flex-wrap mb-1 pb-1 border-b">
+                            <span className="text-xs text-muted-foreground">按 Query 筛选:</span>
+                            <button onClick={() => setQueryFilter(-1)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === -1 ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}>汇总</button>
+                            {result.stages.per_query.map((q) => {
+                              const isOrig = q.index === 0 && q.dense_query === result.rewrite.original
+                              return (
+                                <button key={q.index} onClick={() => setQueryFilter(q.index)} className={`px-2 py-0.5 rounded text-xs border ${queryFilter === q.index ? 'bg-primary text-primary-foreground border-primary' : isOrig ? 'border-amber-300 text-amber-700 dark:text-amber-300' : 'border-border text-muted-foreground hover:text-foreground'}`} title={q.dense_query}>
+                                  {isOrig ? `Q0·原始` : `Q${q.index}`}
+                                </button>
+                              )
+                            })}
+                          </div>
+                          <div className="space-y-3">
+                            {result.stages.per_query
+                              .filter((q) => queryFilter === -1 || q.index === queryFilter)
+                              .map((q) => {
+                                const isOriginal = q.index === 0 && q.dense_query === result.rewrite.original
+                                return (
+                                <div key={q.index}>
+                                  <div className="text-xs font-medium text-muted-foreground mb-1">
+                                    {isOriginal ? (
+                                      <><Badge variant="outline" className="text-xs font-mono mr-1 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-300">Q0 · 原始</Badge> Dense ({q.dense_count})</>
+                                    ) : (
+                                      <><Badge variant="secondary" className="text-xs font-mono mr-1">Q{q.index}</Badge> Dense ({q.dense_count})</>
+                                    )}
+                                    <span className="font-normal text-muted-foreground/70 truncate ml-1">{q.dense_query}</span>
+                                  </div>
+                                  <StageMini label="" items={q.dense_top.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix={`dense-q${q.index}`} scoreThreshold={result.dense_threshold || result.threshold} showAll={showAll} />
+                                </div>
+                                )
+                              })}
+                          </div>
+                        </>
                       ) : (
                         <StageMini label="" items={result.stages.dense_top5.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="dense" scoreThreshold={result.dense_threshold || result.threshold} showAll={showAll} />
                       )}

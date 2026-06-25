@@ -490,12 +490,14 @@ async def search_debug(body: SearchDebugRequest):
         doc_ids = ids
 
     # Query rewriting (Multi-Query Retrieval)
+    # 原始 query 作为 Q0 参与 dense 检索 + RRF 融合（兜底 + 多信号源）
     dense_queries: list[str] = [query]
     bm25_query = query
     if settings.query_rewrite_enabled:
         try:
             from src.agents.workflow import get_workflow
-            dense_queries, bm25_query = get_workflow()._rewrite_query(query)
+            rewrites, bm25_query = get_workflow()._rewrite_query(query)
+            dense_queries = [query] + [q for q in rewrites if q and q != query]
         except Exception:
             dense_queries, bm25_query = [query], query
 

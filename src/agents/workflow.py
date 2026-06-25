@@ -371,12 +371,16 @@ class AgenticRAGWorkflow:
                 dense_queries = all_dense[:max_pairs]
                 path_label = f"[Multi-query] {len(sub_queries)} sub-queries × rewrite → {len(dense_queries)} dense queries"
             else:
-                # 单问题路径：改写成多条等价 dense query + 一条共享 bm25 query
+                # 单问题路径：原始 query 作为 Q0 + 改写 dense query + 一条共享 bm25 query
+                # 原始 query 参与 dense 检索 + RRF 融合（兜底 + 多信号源，与 rerank 用原始 query 对齐）
                 if settings.query_rewrite_enabled:
-                    dense_queries, shared_bm25 = self._rewrite_query(original_query)
+                    rewrites, shared_bm25 = self._rewrite_query(original_query)
+                    dense_queries = [original_query] + [
+                        q for q in rewrites if q and q != original_query
+                    ]
                 else:
                     dense_queries, shared_bm25 = [original_query], original_query
-                path_label = f"[Multi-query] {len(dense_queries)} dense + 1 bm25"
+                path_label = f"[Multi-query] {len(dense_queries)} dense (Q0=原始) + 1 bm25"
 
             # 图谱实体关键词追加到 bm25 query（仅 BM25 通道，保留 dense 语义方向）
             if extra_terms:
