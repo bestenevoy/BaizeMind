@@ -94,6 +94,7 @@ def build_search_debug_response(
         "rrf_k": settings.hybrid_rrf_k,
         "over_fetch_multiplier": settings.retrieval_over_fetch_multiplier,
         "top_k": top_k,
+        "rerank_top_k": settings.rerank_top_k,
         "rewrite": rewrite_info,
         "stages": {
             "dense_top5": [{

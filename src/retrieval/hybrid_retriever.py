@@ -57,7 +57,7 @@ class HybridRetriever:
         rrf_passed = [doc for cid, (doc, s) in rrf_data["ranked"]
                       if rrf_data["max_raw"] == 0 or (s / rrf_data["max_raw"]) >= rrf_threshold]
         all_for_rerank = rrf_passed[:top_k] if rrf_passed else [doc for _, (doc, _) in rrf_data["ranked"][:top_k]]
-        reranked_full = self.reranker.rerank(dense_q, all_for_rerank, top_k=min(10, len(all_for_rerank)))
+        reranked_full = self.reranker.rerank(dense_q, all_for_rerank, top_k=min(settings.rerank_top_k, len(all_for_rerank)))
 
         threshold = settings.reranker_score_threshold
         reranked = [r for r in reranked_full if r.get("rerank_score", r.get("score", 0)) >= threshold] if threshold > 0 else list(reranked_full)

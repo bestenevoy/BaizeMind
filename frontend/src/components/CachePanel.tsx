@@ -23,28 +23,43 @@ function formatTTL(seconds: number | null): string {
 
 export function CachePanel() {
   const [data, setData] = useState<CacheListResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(true)        // 首次加载 / 手动刷新时显示 skeleton
+  const [refreshing, setRefreshing] = useState(false) // namespace 切换时的轻量指示
   const [error, setError] = useState('')
   const [filterNs, setFilterNs] = useState<string>('')  // 空 = 全部
   const [busy, setBusy] = useState(false)
 
-  const fetchCache = useCallback(async () => {
-    setLoading(true)
+  // showSkeleton=true: 显示 skeleton（首次加载/手动刷新）
+  // showSkeleton=false: 保留旧数据 + 轻量 refreshing 指示（namespace 切换）
+  const fetchCache = useCallback(async (ns: string, showSkeleton: boolean) => {
+    if (showSkeleton) {
+      setLoading(true)
+    } else {
+      setRefreshing(true)
+    }
     setError('')
     try {
-      const r = await listCache(filterNs || undefined)
+      const r = await listCache(ns || undefined)
       setData(r)
     } catch (e: any) {
       setError(e?.message || String(e))
-      setData(null)
+      if (showSkeleton) setData(null)
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
-  }, [filterNs])
+  }, [])
 
+  // 首次挂载加载
   useEffect(() => {
-    fetchCache()
+    fetchCache('', true)
   }, [fetchCache])
+
+  // 切换 namespace：不显示 skeleton，保留旧数据，只加轻量指示
+  const switchNs = (ns: string) => {
+    setFilterNs(ns)
+    fetchCache(ns, false)
+  }
 
   const handleClearAll = async () => {
     if (!confirm('⚠️ 清空所有缓存条目？此操作不可撤销！')) return
@@ -53,7 +68,7 @@ export function CachePanel() {
     try {
       const r = await clearCache()
       alert(`已清空 ${r.cleared} 条缓存`)
-      await fetchCache()
+      await fetchCache(filterNs, false)
     } catch (e: any) {
       alert(`清空失败: ${e?.message || e}`)
     } finally {
@@ -67,7 +82,7 @@ export function CachePanel() {
     try {
       const r = await clearCache(ns)
       alert(`已清空 ${r.cleared} 条`)
-      await fetchCache()
+      await fetchCache(filterNs, false)
     } catch (e: any) {
       alert(`清空失败: ${e?.message || e}`)
     } finally {
@@ -79,7 +94,7 @@ export function CachePanel() {
     if (!confirm('删除该缓存条目？')) return
     try {
       await deleteCacheEntry(key)
-      await fetchCache()
+      await fetchCache(filterNs, false)
     } catch (e: any) {
       alert(`删除失败: ${e?.message || e}`)
     }
@@ -97,8 +112,8 @@ export function CachePanel() {
             <Database className="h-5 w-5" />
             缓存概览
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={fetchCache} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
+          <Button variant="outline" size="sm" onClick={() => fetchCache(filterNs, true)} disabled={loading}>
+            <RefreshCw className={`h-4 w-4 mr-1 ${(loading || refreshing) ? 'animate-spin' : ''}`} />
             刷新
           </Button>
         </CardHeader>
@@ -161,7 +176,7 @@ export function CachePanel() {
                   variant={filterNs === '' ? 'default' : 'outline'}
                   size="sm"
                   className="h-7 text-xs"
-                  onClick={() => setFilterNs('')}
+                  onClick={() => switchNs('')}
                 >
                   全部
                 </Button>
@@ -171,7 +186,7 @@ export function CachePanel() {
                     variant={filterNs === ns ? 'default' : 'outline'}
                     size="sm"
                     className="h-7 text-xs"
-                    onClick={() => setFilterNs(ns)}
+                    onClick={() => switchNs(ns)}
                   >
                     {ns} ({data.namespaces?.[ns] ?? 0})
                   </Button>

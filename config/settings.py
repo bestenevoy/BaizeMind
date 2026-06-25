@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     retrieval_similarity_threshold: float = 0.6
     dense_vector_threshold: float = 0.6
     reranker_score_threshold: float = 0.3
+    # Reranker 输出数量上限（Rerank 阶段截断到此数，再按 reranker_score_threshold 过滤）
+    rerank_top_k: int = 10
     reranker_method: str = "embedding"  # "embedding" | "llm" | "hybrid"
     query_rewrite_enabled: bool = True
     query_rewrite_language: str = "简体中文"

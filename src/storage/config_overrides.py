@@ -18,6 +18,7 @@ _EDITABLE_KEYS = {
     "hybrid_rrf_k",
     "rrf_score_threshold",
     "retrieval_over_fetch_multiplier",
+    "rerank_top_k",
     "agent_max_iterations",
     "agent_temperature",
     "query_rewrite_enabled",

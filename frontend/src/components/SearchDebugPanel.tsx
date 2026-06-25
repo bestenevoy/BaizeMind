@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Search, Loader2, ChevronDown, ChevronRight, Check, X, Eye, EyeOff } from 'lucide-react'
+import { Search, Loader2, ChevronDown, ChevronRight, Check, X, Eye, EyeOff, HelpCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -92,9 +92,9 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
     }
   }
 
-  const ThresholdValue = ({ label, configKey, value }: { label: string; configKey: string; value: number }) => (
+  const ThresholdValue = ({ label, configKey, value, hint }: { label: string; configKey: string; value: number; hint?: string }) => (
     <>
-      <span className="text-muted-foreground">{label}:</span>
+      <span className="text-muted-foreground" title={hint}>{label}:</span>
       {editingKey === configKey ? (
         <span className="flex items-center gap-1">
           <Input
@@ -161,37 +161,83 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
 
           {result && (
             <div className="mt-3 flex-1 min-h-0 flex flex-col space-y-3">
+              {/* 第一行：可编辑配置项（点击数值修改） */}
               <div className="flex items-center gap-3 text-sm bg-muted/30 rounded p-2 flex-wrap flex-none">
-                <ThresholdValue label="Dense 阈值" configKey="dense_vector_threshold" value={result.dense_threshold} />
+                <ThresholdValue label="Dense 阈值" configKey="dense_vector_threshold" value={result.dense_threshold} hint="Dense 向量相似度下限，低于此值的候选被丢弃" />
                 <span className="text-muted-foreground">|</span>
-                <ThresholdValue label="RRF 阈值" configKey="rrf_score_threshold" value={result.rrf_threshold} />
+                <ThresholdValue label="RRF 阈值" configKey="rrf_score_threshold" value={result.rrf_threshold} hint="RRF 归一化分数下限，控制融合后候选数量" />
                 <span className="text-muted-foreground">|</span>
-                <ThresholdValue label="Rerank 阈值" configKey="reranker_score_threshold" value={result.rerank_threshold || 0} />
+                <ThresholdValue label="Rerank 阈值" configKey="reranker_score_threshold" value={result.rerank_threshold || 0} hint="Rerank 分数下限，低于此值的候选不进入最终结果" />
                 <span className="text-muted-foreground">|</span>
-                <ThresholdValue label="RRF k" configKey="hybrid_rrf_k" value={result.rrf_k} />
-                <span className="text-muted-foreground">|</span>
-                <ThresholdValue label="过采样" configKey="retrieval_over_fetch_multiplier" value={result.over_fetch_multiplier} />
-                <span className="text-muted-foreground text-xs">候选{result.stages.rrf.length}</span>
-                <span className="text-muted-foreground">|</span>
-                <ThresholdValue label="Top-K" configKey="hybrid_top_k" value={result.top_k} />
-                <span className="text-muted-foreground text-xs">rerank{result.stages.rerank.length}</span>
-                <span className="text-muted-foreground">|</span>
-                <span className="text-muted-foreground">最终输出:</span>
-                <span className={`font-mono font-semibold ${result.final_count === 0 ? 'text-red-500' : 'text-primary'}`}>
-                  {result.final_count}
-                </span>
-                {editingKey && saving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-                {result.final_count === 0 && (
-                  <span className="text-xs text-red-400">— 所有结果被阈值过滤！点击阈值数值修改</span>
-                )}
-                {result.filtered_out_by_rerank_threshold > 0 && (
-                  <span className="text-xs text-red-400 ml-auto">
-                    Rerank 阶段过滤 {result.filtered_out_by_rerank_threshold} 条
+                <span className="flex items-center gap-0.5">
+                  <ThresholdValue label="RRF 平滑常数" configKey="hybrid_rrf_k" value={result.rrf_k} hint="RRF 融合公式参数 k，值越大排名越平滑" />
+                  <span title={"RRF 融合公式:\n\nscore(d) = Σ  w_i / (k + rank_i(d) + 1)\n\n  k: 平滑常数（此处可编辑）\n  w_i: 第 i 个检索源的权重（Dense/BM25）\n  rank_i(d): 文档 d 在第 i 个源中的排名（从 0 开始）\n\n归一化: normalized = score(d) / max_score\n\nk 越大 → 头部优势衰减，排名越平滑\nk 越小 → 头部优势放大，更看重高排名"}>
+                    <HelpCircle className="h-3 w-3 text-muted-foreground/70 hover:text-foreground cursor-help" />
                   </span>
+                </span>
+                <span className="text-muted-foreground">|</span>
+                <ThresholdValue label="预取倍数" configKey="retrieval_over_fetch_multiplier" value={result.over_fetch_multiplier} hint="Dense/BM25 各预取 检索返回数 × 此倍数 条候选，再经 RRF 融合 + Rerank 缩减" />
+                <span className="text-muted-foreground">|</span>
+                <ThresholdValue label="检索返回数" configKey="hybrid_top_k" value={result.top_k} hint="RRF 融合后截断到此数，送入 Reranker" />
+                <span className="text-muted-foreground">|</span>
+                <ThresholdValue label="Rerank 输出数" configKey="rerank_top_k" value={result.rerank_top_k} hint="Reranker 实际输出的最大数量（再按 Rerank 阈值过滤得到最终结果）" />
+                {editingKey && saving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+              </div>
+
+              {/* 第二行：检索流程对照（配置值 → 实际产出条数） */}
+              <div className="flex items-center gap-2 text-xs flex-none px-1 flex-wrap">
+                <span className="text-muted-foreground font-medium">流程对照:</span>
+
+                {/* 阶段1: 预取 */}
+                <span className="text-muted-foreground">
+                  预取
+                  <span className="font-mono text-foreground"> {result.over_fetch_multiplier}×{result.top_k}={result.over_fetch_multiplier * result.top_k} </span>
+                  /源
+                </span>
+                <span className="text-muted-foreground">→</span>
+
+                {/* 阶段2: RRF 融合后 */}
+                <span className="text-muted-foreground">
+                  RRF融合后
+                  <span className="font-mono font-semibold text-foreground"> {result.stages.rrf.length} </span>
+                  条
+                </span>
+                <span className="text-muted-foreground">→</span>
+
+                {/* 阶段3: 送入 Reranker（受 检索返回数 限制） */}
+                <span className="text-muted-foreground">
+                  送入Rerank
+                  <span className="font-mono text-foreground"> ≤{result.top_k} </span>
+                  (检索返回数)
+                </span>
+                <span className="text-muted-foreground">→</span>
+
+                {/* 阶段4: Rerank 输出（受 Rerank 输出数 限制） */}
+                <span className="text-muted-foreground">
+                  Rerank输出
+                  <span className="font-mono font-semibold text-foreground"> {result.stages.rerank.length} </span>
+                  条
+                  <span className="text-muted-foreground/70"> (≤{result.rerank_top_k})</span>
+                </span>
+                <span className="text-muted-foreground">→</span>
+
+                {/* 阶段5: 最终（受 Rerank 阈值过滤） */}
+                <span className="text-muted-foreground">
+                  最终
+                  <span className={`font-mono font-semibold ${result.final_count === 0 ? 'text-red-500' : 'text-primary'}`}> {result.final_count} </span>
+                  条
+                </span>
+
+                {result.filtered_out_by_rerank_threshold > 0 && (
+                  <span className="text-red-400">(Rerank阈值过滤 {result.filtered_out_by_rerank_threshold} 条)</span>
                 )}
+                {result.final_count === 0 && (
+                  <span className="text-red-400">— 所有结果被阈值过滤！点击上方数值修改</span>
+                )}
+                <div className="flex-1" />
                 <button
                   onClick={() => setShowAll(!showAll)}
-                  className="ml-auto flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
                 >
                   {showAll ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                   {showAll ? '仅通过阈值' : '显示全部'}

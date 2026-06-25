@@ -407,6 +407,7 @@ export interface SearchDebugResponse {
   rrf_k: number
   over_fetch_multiplier: number
   top_k: number
+  rerank_top_k: number
   rewrite: {
     original: string
     dense_query: string
@@ -457,15 +458,16 @@ export interface ConfigSchema {
 export const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
   rrf_score_threshold: { type: 'float', label: 'RRF 分数阈值', min: 0, max: 1 },
   dense_vector_threshold: { type: 'float', label: 'Dense 向量阈值', min: 0, max: 1 },
-  reranker_score_threshold: { type: 'float', label: 'Rerank 阈值', min: 0, max: 1 },
+  reranker_score_threshold: { type: 'float', label: 'Rerank 分数阈值', min: 0, max: 1 },
   reranker_method: { type: 'enum', label: 'Rerank 方法', options: ['embedding', 'llm', 'hybrid'] },
   chunk_size: { type: 'int', label: '分块大小', min: 64, max: 4096 },
   chunk_overlap: { type: 'int', label: '分块重叠', min: 0, max: 2048 },
-  hybrid_top_k: { type: 'int', label: '混合检索 Top-K', min: 1, max: 100 },
+  hybrid_top_k: { type: 'int', label: '检索返回数 (Top-K)', min: 1, max: 100 },
   hybrid_dense_weight: { type: 'float', label: 'Dense 权重', min: 0, max: 1 },
   hybrid_bm25_weight: { type: 'float', label: 'BM25 权重', min: 0, max: 1 },
-  hybrid_rrf_k: { type: 'int', label: 'RRF k 值', min: 1, max: 200 },
-  retrieval_over_fetch_multiplier: { type: 'int', label: '过采样倍数', min: 1, max: 10 },
+  hybrid_rrf_k: { type: 'int', label: 'RRF 平滑常数', min: 1, max: 200 },
+  retrieval_over_fetch_multiplier: { type: 'int', label: '预取倍数', min: 1, max: 10 },
+  rerank_top_k: { type: 'int', label: 'Rerank 输出数', min: 1, max: 100 },
   agent_max_iterations: { type: 'int', label: '验证最大轮次', min: 1, max: 10 },
   agent_temperature: { type: 'float', label: 'LLM 温度', min: 0, max: 2 },
   query_rewrite_enabled: { type: 'bool', label: '查询改写开关' },
