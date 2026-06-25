@@ -122,10 +122,34 @@ def build_search_debug_response(
 
     # ── per-query 明细（仅多 query 模式，每条 dense query 的召回）──
     per_query_stages = []
+    dense_union_count = 0
+    dense_union_top: list[dict] = []  # 汇总：去重并集按最高 score 排序
     if is_multi:
+        # 所有 Q 完整 dense 召回的去重并集 chunk（用于汇总列表 + 标签数字）
+        union_map: dict[str, dict] = {}
+        union_source: dict[str, list[int]] = {}
         for q_info in debug.get("per_query", []):
             idx = q_info.get("index", 0)
             dense_results = q_info.get("dense_results", [])
+            for d in dense_results:
+                cid = d.get("chunk_id", "")
+                if not cid:
+                    continue
+                existing = union_map.get(cid)
+                if existing is None:
+                    union_map[cid] = {
+                        "chunk_id": cid,
+                        "doc_id": d.get("doc_id", ""),
+                        "text_preview": d.get("text", ""),
+                        "score": round(d.get("score", 0), 4),
+                    }
+                    union_source[cid] = [idx]
+                else:
+                    # 多 query 命中同一 chunk，取最高分并合并 source
+                    sc = round(d.get("score", 0), 4)
+                    if sc > existing["score"]:
+                        existing["score"] = sc
+                    union_source.setdefault(cid, []).append(idx) if idx not in union_source.get(cid, []) else None
             dense_top = [{
                 "chunk_id": d.get("chunk_id", ""),
                 "doc_id": d.get("doc_id", ""),
@@ -140,10 +164,16 @@ def build_search_debug_response(
                 "dense_top": dense_top,
                 "dense_count": len(dense_results),
             })
+        dense_union_count = len(union_map)
+        # 汇总列表：按 score 降序，带 source_queries（不截断，显示完整去重并集）
+        dense_union_top = sorted(union_map.values(), key=lambda x: x["score"], reverse=True)
+        for item in dense_union_top:
+            _enrich_doc_name(item, doc_name_cache)
+            item["source_queries"] = sorted(set(union_source.get(item["chunk_id"], [])))
 
-    # ── 全局 dense top（单 query 模式从原始列表取；多 query 模式留空，前端用 per_query）──
+    # ── 全局 dense top（multi 模式 = 去重并集；单 query 模式 = 原始列表）──
     if is_multi:
-        global_dense_top: list[dict] = []
+        global_dense_top: list[dict] = dense_union_top
     else:
         global_dense_top = [{
             "chunk_id": d.get("chunk_id", ""),
@@ -153,7 +183,6 @@ def build_search_debug_response(
         } for d in debug.get("dense_results", [])[:top_k]]
         for item in global_dense_top:
             _enrich_doc_name(item, doc_name_cache)
-        # 单 query 模式下 bm25_top 用 debug["bm25_results"]，已上面处理
 
     final = [r for r in rerank_debug if r["rerank_pass_threshold"]]
 
@@ -161,6 +190,7 @@ def build_search_debug_response(
         "query": query,
         "multi_query": is_multi,
         "query_count": len(dense_queries),
+        "dense_union_count": dense_union_count,
         "threshold": dense_threshold,
         "dense_threshold": dense_threshold,
         "rerank_threshold": rerank_threshold,

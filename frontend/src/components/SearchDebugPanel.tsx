@@ -127,9 +127,10 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   if (tags.length) filterInfo.push(`标签: ${tags.join(', ')}`)
   if (!docId && !folder && !tags.length) filterInfo.push('全部文档')
   const denseUpToThreshold = result?.stages?.dense_top5 ? result.stages.dense_top5.filter(c => (c.score ?? 0) >= (result.dense_threshold || result.threshold)).length : 0
-  // Dense 召回并集 chunk 数：multi 模式汇总所有 Q（含 Q0 原始）的 dense 召回去重；单 query 模式取 dense_top5
-  const denseUnionCount = result?.multi_query && result?.stages?.per_query
-    ? new Set(result.stages.per_query.flatMap(q => (q.dense_top ?? []).map(c => c.chunk_id))).size
+  // Dense 召回去重并集 chunk 数：multi 模式用后端计算的 dense_union_count（所有 Q 完整召回去重）；
+  // 单 query 模式取 dense_top5.length
+  const denseUnionCount = result?.multi_query
+    ? (result.dense_union_count ?? 0)
     : (result?.stages?.dense_top5?.length ?? 0)
 
   return (
@@ -276,10 +277,6 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                     <div className="space-y-4">
                       {result.rewrite.enabled ? (
                         <>
-                          <div className="bg-muted/30 rounded p-3 space-y-1">
-                            <div className="text-xs font-medium text-muted-foreground mb-2">原始查询</div>
-                            <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.original}</pre>
-                          </div>
                           {(result.multi_query && result.rewrite.dense_queries && result.rewrite.dense_queries.length > 0) ? (
                             <>
                               <div className="text-xs text-muted-foreground">
@@ -469,26 +466,66 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                               )
                             })}
                           </div>
-                          <div className="space-y-3">
-                            {result.stages.per_query
-                              .filter((q) => queryFilter === -1 || q.index === queryFilter)
-                              .map((q) => {
-                                const isOriginal = q.index === 0 && q.dense_query === result.rewrite.original
+                          {queryFilter === -1 ? (
+                            // 汇总状态：用去重并集列表，按行显示（与 RRF/Rerank 风格一致）
+                            <div className="space-y-0.5">
+                              {result.stages.dense_top5.map((c, i) => {
+                                const s = c.score ?? 0
+                                const pass = (result.dense_threshold || result.threshold) != null ? s >= (result.dense_threshold || result.threshold) : null
+                                if (!showAll && pass === false) return null
                                 return (
-                                <div key={q.index}>
-                                  <div className="text-xs font-medium text-muted-foreground mb-1">
-                                    {isOriginal ? (
-                                      <><Badge variant="outline" className="text-xs font-mono mr-1 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-300">Q0 · 原始</Badge> Dense ({q.dense_count})</>
-                                    ) : (
-                                      <><Badge variant="secondary" className="text-xs font-mono mr-1">Q{q.index}</Badge> Dense ({q.dense_count})</>
+                                <div key={i} className={`rounded p-1.5 ${pass === false ? 'bg-red-50 dark:bg-red-950/10 border border-red-200 dark:border-red-800' : pass === true ? 'bg-green-50 dark:bg-green-950/10 border border-green-200 dark:border-green-800' : 'bg-muted/20'}`}>
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-primary font-semibold text-xs">[{i + 1}]</span>
+                                    <span className="text-xs break-all" title={`${c.filename || c.doc_id} / ${c.chunk_id}`}>
+                                      <span className="font-medium">{c.filename || c.doc_id}</span>
+                                      <span className="text-muted-foreground ml-1 font-mono">/ {c.chunk_id}</span>
+                                    </span>
+                                    {(c.source_queries ?? []).length > 0 && (
+                                      <span className="flex gap-0.5">
+                                        {c.source_queries!.map(qi => {
+                                          const isOrig = qi === 0 && result.rewrite.original === (result.rewrite.dense_queries?.[0]?.dense_query ?? '')
+                                          return <Badge key={qi} variant="outline" className={`text-xs font-mono px-1 py-0 ${isOrig ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-300' : ''}`}>{isOrig ? 'Q0·原' : `Q${qi}`}</Badge>
+                                        })}
+                                      </span>
                                     )}
-                                    <span className="font-normal text-muted-foreground/70 truncate ml-1">{q.dense_query}</span>
+                                    <span className="ml-auto font-mono text-xs shrink-0">score: {s}</span>
+                                    {pass !== null && (
+                                      pass ? <Check className="h-3 w-3 text-green-500 shrink-0" /> : <X className="h-3 w-3 text-red-400 shrink-0" />
+                                    )}
                                   </div>
-                                  <StageMini label="" items={q.dense_top.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix={`dense-q${q.index}`} scoreThreshold={result.dense_threshold || result.threshold} showAll={showAll} />
+                                  <button onClick={() => togglePreview(`dense-${i}`)} className="text-xs text-primary/70 hover:text-primary">
+                                    {expandedPreviews[`dense-${i}`] ? '收起' : '展开'}文本
+                                  </button>
+                                  {expandedPreviews[`dense-${i}`] && (
+                                    <p className="mt-0.5 text-xs text-muted-foreground whitespace-pre-wrap break-all overflow-y-auto">{c.text_preview}</p>
+                                  )}
                                 </div>
-                                )
-                              })}
-                          </div>
+                              )})}
+                            </div>
+                          ) : (
+                            // 筛选某 Q：显示该 Q 的 dense_top
+                            <div className="space-y-3">
+                              {result.stages.per_query
+                                .filter((q) => q.index === queryFilter)
+                                .map((q) => {
+                                  const isOriginal = q.index === 0 && q.dense_query === result.rewrite.original
+                                  return (
+                                  <div key={q.index}>
+                                    <div className="text-xs font-medium text-muted-foreground mb-1">
+                                      {isOriginal ? (
+                                        <><Badge variant="outline" className="text-xs font-mono mr-1 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-300">Q0 · 原始</Badge> Dense ({q.dense_count})</>
+                                      ) : (
+                                        <><Badge variant="secondary" className="text-xs font-mono mr-1">Q{q.index}</Badge> Dense ({q.dense_count})</>
+                                      )}
+                                      <span className="font-normal text-muted-foreground/70 truncate ml-1">{q.dense_query}</span>
+                                    </div>
+                                    <StageMini label="" items={q.dense_top.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix={`dense-q${q.index}`} scoreThreshold={result.dense_threshold || result.threshold} showAll={showAll} />
+                                  </div>
+                                  )
+                                })}
+                            </div>
+                          )}
                         </>
                       ) : (
                         <StageMini label="" items={result.stages.dense_top5.map(c => ({ ...c, score: c.score ?? 0 }))} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="dense" scoreThreshold={result.dense_threshold || result.threshold} showAll={showAll} />

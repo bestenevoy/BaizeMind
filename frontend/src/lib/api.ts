@@ -416,6 +416,7 @@ export interface SearchDebugResponse {
   query: string
   multi_query?: boolean
   query_count?: number
+  dense_union_count?: number
   threshold: number
   dense_threshold: number
   rerank_threshold: number

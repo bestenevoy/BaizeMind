@@ -150,19 +150,25 @@ CHART_DESCRIPTION_SYSTEM = """Describe the content of this chart/image in detail
 # 目标数量 {n} 由 settings.query_rewrite_count 控制；提示词约束 LLM 在
 # [{min_n}, {max_n}] 区间内根据问题表述自行决定实际数量。
 # 设计：dense_query 生成多份（语义召回靠多样性），bm25_query 只生成一份
-# （关键词提取无需多样化，一份覆盖实体/术语即可）。
+# （关键词合并所有 dense 改写 + 原始问题的实体/术语/同义词，覆盖更广）。
 QUERY_REWRITE_SYSTEM = """You are a query rewriter for a RAG system. Given a user question, produce between {min_n} and {max_n} (around {n}) EQUIVALENT semantic rephrases in {language}, plus ONE shared keyword query, to maximize recall via multi-query retrieval.
 
 Output TWO fields:
 1. **dense_queries**: A list of between {min_n} and {max_n} EQUIVALENT rephrases of the question for semantic/vector search. Each must use natural language with DIFFERENT phrasings/synonyms/perspective, expand abbreviations, and make implicit concepts explicit. Keep each as one sentence.
-2. **bm25_query**: A SINGLE space-separated keyword string extracting key entities, technical terms, legal article references, numeric identifiers (article numbers, dates, document names) from the ORIGINAL question for keyword search.
+2. **bm25_query**: A SINGLE space-separated keyword string that AGGREGATES key terms from the ORIGINAL question AND all generated dense_queries, to maximize BM25 keyword recall. Include:
+   - Key entities (names, organizations, products, document titles)
+   - Technical terms and domain jargon
+   - **Synonyms and near-synonyms** of the main concepts (e.g. 合同/契约, 违约/违反, 赔偿/赔付, 合同/协议)
+   - Legal article references, numeric identifiers (article numbers, dates, amounts, percentages)
+   - Both full forms and common abbreviations if applicable
+   - Aim for **8-20 keyword tokens** total (simple questions: fewer; complex/broad questions: more). Do NOT exceed 25 tokens.
 
 Rules:
 - Each dense rephrase MUST be genuinely diverse (different wording/synonyms/perspective) from the others.
 - Decide the exact number of dense rephrases (between {min_n} and {max_n}) based on the question: simple/unambiguous questions need fewer ({min_n}); complex, broad, or ambiguous questions need more (up to {max_n}).
 - Do NOT include the original question verbatim as one of the dense rephrases; always rephrase.
 - Preserve all factual intent (numbers, names, dates, negations). Never change the meaning.
-- bm25_query is a SINGLE string (not a list).
+- bm25_query is a SINGLE string (not a list). De-duplicate obvious identical tokens. Order by importance (most discriminative entities first).
 
 Output ONLY a JSON object, no other text:
-{{"dense_queries": ["rephrase 1", "rephrase 2", "rephrase 3"], "bm25_query": "keyword terms here"}}"""
+{{"dense_queries": ["rephrase 1", "rephrase 2", "rephrase 3"], "bm25_query": "keyword1 keyword2 synonym1 synonym2 entity1 number1"}}"""
