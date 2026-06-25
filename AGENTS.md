@@ -4,7 +4,8 @@
 
 ```bash
 # Backend
-uv run -m uvicorn api.main:app --host 0.0.0.0 --port 8000   # Start server
+uv run -m uvicorn api.main:app --host 0.0.0.0 --port 8000   # Start server (prod)
+uv run -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload --reload-exclude 'data/*' --reload-exclude '*.log'   # Dev (auto-reload, ignore logs/data to avoid reload loop)
 uv run -m pytest tests/test_parser.py tests/test_chunker.py tests/test_graph.py tests/test_evidence.py tests/test_evidence_pipeline.py -v  # Unit tests (safe, no network)
 uv run -m pytest tests/ -v  # ALL tests — WARNING: test_retrieval.py and test_agents.py::test_workflow_init hang if Milvus/models unavailable
 
