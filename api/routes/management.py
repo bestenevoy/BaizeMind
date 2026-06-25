@@ -60,7 +60,7 @@ SETTING_CATEGORIES = [
         ("chunk_overlap", "重叠大小"),
     ]),
     ("检索参数", [
-        ("hybrid_top_k", "检索返回数 (Top-K)"),
+        ("hybrid_top_k", "RRF Top-K"),
         ("hybrid_dense_weight", "稠密向量权重"),
         ("hybrid_bm25_weight", "BM25 权重"),
         ("hybrid_rrf_k", "RRF 平滑常数"),

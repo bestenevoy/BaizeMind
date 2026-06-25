@@ -176,9 +176,9 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                   </span>
                 </span>
                 <span className="text-muted-foreground">|</span>
-                <ThresholdValue label="预取倍数" configKey="retrieval_over_fetch_multiplier" value={result.over_fetch_multiplier} hint="Dense/BM25 各预取 检索返回数 × 此倍数 条候选，再经 RRF 融合 + Rerank 缩减" />
+                <ThresholdValue label="预取倍数" configKey="retrieval_over_fetch_multiplier" value={result.over_fetch_multiplier} hint="Dense/BM25 各预取 RRF Top-K × 此倍数 条候选，再经 RRF 融合 + Rerank 缩减" />
                 <span className="text-muted-foreground">|</span>
-                <ThresholdValue label="检索返回数" configKey="hybrid_top_k" value={result.top_k} hint="RRF 融合后截断到此数，送入 Reranker" />
+                <ThresholdValue label="RRF Top-K" configKey="hybrid_top_k" value={result.top_k} hint="RRF 融合后截断到此数，送入 Reranker" />
                 <span className="text-muted-foreground">|</span>
                 <ThresholdValue label="Rerank 输出数" configKey="rerank_top_k" value={result.rerank_top_k} hint="Reranker 实际输出的最大数量（再按 Rerank 阈值过滤得到最终结果）" />
                 {editingKey && saving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
@@ -192,7 +192,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                 <span className="text-muted-foreground">
                   预取
                   <span className="font-mono text-foreground"> {result.over_fetch_multiplier}×{result.top_k}={result.over_fetch_multiplier * result.top_k} </span>
-                  /源
+                  /源 (预取倍数×RRF Top-K)
                 </span>
                 <span className="text-muted-foreground">→</span>
 
@@ -208,7 +208,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                 <span className="text-muted-foreground">
                   送入Rerank
                   <span className="font-mono text-foreground"> ≤{result.top_k} </span>
-                  (检索返回数)
+                  (RRF Top-K)
                 </span>
                 <span className="text-muted-foreground">→</span>
 
