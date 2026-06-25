@@ -27,11 +27,17 @@ def _load_jieba():
         cache_dir = settings.data_dir / "jieba_cache"
         os.makedirs(cache_dir, exist_ok=True)
 
+        # jieba 是懒加载：首次 cut() 才触发 initialize()，此时会用
+        # tempfile.gettempdir() 决定缓存路径。若仅 import 不初始化，
+        # 等 finally 恢复 tempdir 后，初始化仍会写到 /tmp/jieba.cache，
+        # 可能因权限不足（文件被其他用户占用）导致 PermissionError。
+        # 因此必须在 tempdir 指向 cache_dir 期间强制 initialize()。
+        import jieba
+        jieba.setLogLevel(20)
         _orig = tempfile.tempdir
         tempfile.tempdir = str(cache_dir)
         try:
-            import jieba
-            jieba.setLogLevel(20)
+            jieba.initialize()
         finally:
             tempfile.tempdir = _orig
 
