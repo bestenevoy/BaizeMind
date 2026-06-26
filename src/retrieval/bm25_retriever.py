@@ -197,7 +197,12 @@ class BM25Retriever:
 
     def remove_by_doc_id(self, doc_id: str):
         if not self._model:
-            return
+            # 调用方可能未 load 或 load 失败（pickle 不兼容等），
+            # 但磁盘上可能有该 doc_id 的 chunks 残留。
+            # 这里尝试 load 一次，确保磁盘状态被读到内存才能清理。
+            self.load()
+            if not self._model:
+                return
         keep = [c for c in self._chunks if c.get("doc_id") != doc_id]
         removed = len(self._chunks) - len(keep)
         if removed == 0:

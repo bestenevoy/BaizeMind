@@ -631,8 +631,8 @@ async def delete_folder(folder_path: str, current: User = Depends(require_user))
             bm25 = BM25Retriever()
             bm25.load()
             bm25.remove_by_doc_id(did)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("BM25 cleanup failed for doc %s in folder delete: %s", did, e, exc_info=True)
 
     return {"deleted": True, "folder": path, "doc_count": count, "cleaned_vectors": True}
 
