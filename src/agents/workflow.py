@@ -80,6 +80,15 @@ class AgentState(TypedDict):
     error: str
     folder: str
     tags: list[str]
+    # 单文件筛选（前端选中具体文件时传入；优先于 folder/tags 用于检索过滤）
+    doc_ids: list[str]
+    # Excel 强制路由相关：
+    # force_sql=True 时（folder/tags 过滤后文档全为 Excel 文件），强制走 sql_agent
+    # 且 sql_agent 失败时不再 fallback 到文本检索（用户明确只看 Excel）
+    force_sql: bool
+    # 重判防死循环：从 retrieval_agent → answer_validator → sql_agent 自动重判后置 True
+    # 防止 sql_agent → answer_generator → answer_validator → sql_agent 循环
+    rerouted_to_sql: bool
 
 
 # [DISABLED] GraphRAG pipeline: holistic queries now route to retrieval_agent.
@@ -186,17 +195,127 @@ def _route_after_graphrag(state: AgentState) -> str:
     return "retrieval_agent"
 
 
+# 检测回答中"信息不足"标识的短语（answer_generator prompt 固定输出"提供的文档中没有足够的信息..."）
+_INSUFFICIENT_PHRASES = (
+    "没有足够的信息",
+    "无法回答",
+    "无法找到",
+    "信息不足",
+    "不足以回答",
+    "缺乏相关信息",
+    "未提供足够",
+    "insufficient information",
+    "cannot answer",
+    "no information",
+    "not enough information",
+)
+
+
+def _answer_indicates_insufficient(answer: str) -> bool:
+    """检测 LLM 回答是否表示"信息不足以回答"。
+
+    answer_generator 的 prompt 在 context 不足时固定输出"提供的文档中没有足够的信息来回答这个问题。"
+    这种情况 answer_validator 通常会判 is_valid=true（因为回答说了实话），
+    但实际上用户问题没被解决，应该尝试走 nl2sql 拿真实数据。
+    """
+    if not answer:
+        return False
+    text = answer.lower()
+    return any(p.lower() in text for p in _INSUFFICIENT_PHRASES)
+
+
+def _has_excel_sheet_chunk(documents: list[dict]) -> bool:
+    """检测 documents 中是否存在 excel_sheet 类型的 chunk。"""
+    for d in documents:
+        meta = d.get("metadata", {}) or {}
+        if meta.get("source") == "excel_sheet":
+            return True
+        if d.get("source_type") == "excel_sheet":
+            return True
+        # 兜底：chunk_id 前缀 excel: 也是 excel_sheet chunk（_build_sheet_summary_chunk 的格式）
+        cid = d.get("chunk_id", "") or ""
+        if cid.startswith("excel:"):
+            return True
+    return False
+
+
 def _route_after_validation(state: AgentState) -> str:
     validation = state.get("validation", {})
     iteration = state.get("iteration", 0)
     max_iter = state.get("max_iterations", settings.agent_max_iterations)
+    is_valid = validation.get("is_valid", True)
+    failure_reasons = validation.get("failure_reasons", [])
+    docs = state.get("documents", [])
+    has_excel_chunk = _has_excel_sheet_chunk(docs)
 
-    if not validation.get("is_valid", True) and iteration < max_iter:
-        failure_reasons = validation.get("failure_reasons", [])
+    # 自动重判触发条件（优先于正常 END/重试路径）：
+    # 1. 尚未重判过（防死循环）
+    # 2. 检索到了 excel_sheet 类型的 chunk（之前 doc rag 检索到了 sheet 摘要 chunk）
+    # 3. validator 标 context_insufficient，OR 回答文本本身含"信息不足"标识
+    #    （后者用于 validator 误判 is_valid=true 的兜底场景）
+    if (
+        not state.get("rerouted_to_sql", False)
+        and has_excel_chunk
+        and iteration < max_iter
+    ):
+        answer = state.get("final_answer") or state.get("draft_answer") or ""
+        if "context_insufficient" in failure_reasons or _answer_indicates_insufficient(answer):
+            logger.info(
+                "Rerouting to sql_agent: excel_sheet chunk + %s detected",
+                "context_insufficient" if "context_insufficient" in failure_reasons
+                else "answer indicates insufficiency",
+            )
+            return "sql_agent"
+
+    if not is_valid and iteration < max_iter:
         if "context_insufficient" in failure_reasons:
             return "retrieval_agent"
         return "answer_generator"
     return END
+
+
+def _should_force_sql(
+    folder: str | None,
+    tags: list[str] | None,
+    doc_ids: list[str] | None = None,
+) -> bool:
+    """检测 folder/tags/doc_ids 过滤后的文档是否全为 Excel 文件。
+
+    - folder/tags/doc_ids 都为空 → False（不强制，走正常路由）
+    - 过滤后无文档 → False（让 sql_agent 自然 fallback 处理"无数据"场景）
+    - 过滤后文档全为 .xlsx/.xls → True（强制 sql_agent，且失败时不 fallback 到文本检索）
+    - 含其他类型文档 → False（保持正常路由）
+
+    doc_ids 优先于 folder/tags：用户在前端选中具体文件时走 doc_ids 路径。
+    """
+    if not folder and not tags and not doc_ids:
+        return False
+    try:
+        from src.storage.doc_store import list_documents, get_document
+        if doc_ids:
+            # 单/多文件筛选：逐个查 doc 元数据
+            docs = []
+            for did in doc_ids:
+                d = get_document(did)
+                if d:
+                    docs.append(d)
+        else:
+            docs = list_documents(folder=folder, tags=tags, limit=1000)
+        if not docs:
+            return False
+        excel_exts = {".xlsx", ".xls"}
+        for d in docs:
+            fn = d.get("filename", "")
+            ext = "." + fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
+            if ext not in excel_exts:
+                return False
+        logger.info(
+            "force_sql=True: all %d docs in filter are Excel files", len(docs)
+        )
+        return True
+    except Exception as e:
+        logger.warning("force_sql detection failed: %s", e)
+        return False
 
 
 class AgenticRAGWorkflow:
@@ -299,7 +418,14 @@ class AgenticRAGWorkflow:
 
         return builder.compile()
 
-    def invoke(self, query: str, folder: str | None = None, tags: list[str] | None = None) -> dict[str, Any]:
+    def invoke(
+        self,
+        query: str,
+        folder: str | None = None,
+        tags: list[str] | None = None,
+        doc_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        force_sql = _should_force_sql(folder, tags, doc_ids)
         state: AgentState = {
             "query": query,
             "query_type": "simple_fact",
@@ -322,10 +448,20 @@ class AgenticRAGWorkflow:
             "error": "",
             "folder": folder or "",
             "tags": tags or [],
+            "doc_ids": doc_ids or [],
+            "force_sql": force_sql,
+            "rerouted_to_sql": False,
         }
         return self._graph.invoke(state)
 
-    async def astream(self, query: str, folder: str | None = None, tags: list[str] | None = None):
+    async def astream(
+        self,
+        query: str,
+        folder: str | None = None,
+        tags: list[str] | None = None,
+        doc_ids: list[str] | None = None,
+    ):
+        force_sql = _should_force_sql(folder, tags, doc_ids)
         state: AgentState = {
             "query": query,
             "query_type": "simple_fact",
@@ -348,6 +484,9 @@ class AgenticRAGWorkflow:
             "error": "",
             "folder": folder or "",
             "tags": tags or [],
+            "doc_ids": doc_ids or [],
+            "force_sql": force_sql,
+            "rerouted_to_sql": False,
         }
         async for event in self._graph.astream(state):
             yield event
@@ -366,8 +505,20 @@ class AgenticRAGWorkflow:
 
         不生成最终回答。把执行结果格式化为 documents 注入 state，
         交给 answer_generator → validator 统一生成链路。
-        若未召回任何结构化数据，自动 fallback 到 retrieval_agent（文本 RAG）。
+
+        失败处理：
+        - force_sql=True（用户明确选了 Excel 文件）→ 不 fallback，返回空 documents
+          让 answer_generator 看到"无数据"信号自己组织回答
+        - 否则 → 自动 fallback 到 retrieval_agent（文本 RAG）
+
+        重判场景（从 answer_validator 路由过来）：设置 rerouted_to_sql=True 防死循环。
+        此时之前 retrieval_agent 检索到的 sheet 摘要 chunk 仍在 documents 中，
+        sql_agent 返回的 SQL 结果会追加进去（operator.add），让 answer_generator 看到
+        "sheet 摘要 + 真实 SQL 结果" 双重信息生成更好的回答。
         """
+        # 判断是否为重判场景：已有 documents 且不是 force_sql 模式（force_sql 首次进入时 documents 为空）
+        is_reroute = bool(state.get("documents")) and not state.get("force_sql", False)
+
         try:
             from src.excel_rag.qa import ExcelQA
             qa = ExcelQA()
@@ -375,10 +526,24 @@ class AgenticRAGWorkflow:
                 state["query"],
                 folder=state.get("folder") or None,
                 tags=state.get("tags") or None,
+                doc_ids=state.get("doc_ids") or None,
             )
 
-            # 没有任何结构化数据或召回失败 → 降级到文本检索路径
+            # 没有任何结构化数据或召回失败
             if r.get("error") in ("no_sheets", "no_relevant_sheet"):
+                if state.get("force_sql"):
+                    # 用户明确选了 Excel 文件，不 fallback 到文本检索
+                    logger.info("force_sql=True, no sheet recalled, skipping fallback: %s", r["error"])
+                    return {
+                        "documents": [],
+                        "retrieval_path": "sql_no_sheet_forced",
+                        "error": r["error"],
+                        "rerouted_to_sql": is_reroute,
+                        "retrieval_debug": {
+                            "sql_fallback_reason": f"forced_sql_{r['error']}",
+                            "sql_recalled_sheets": r.get("recalled_sheets", []),
+                        },
+                    }
                 logger.info("sql_agent fallback to retrieval_agent: %s", r["error"])
                 retrieval_result = self._node_retrieval_agent(state)
                 retrieval_result["retrieval_path"] = "sql_fallback"
@@ -388,6 +553,7 @@ class AgenticRAGWorkflow:
                     "sql_fallback_reason": r["error"],
                     "sql_recalled_sheets": r.get("recalled_sheets", []),
                 }
+                retrieval_result["rerouted_to_sql"] = is_reroute
                 return retrieval_result
 
             selected = r["selected_sheet"]
@@ -409,7 +575,8 @@ class AgenticRAGWorkflow:
 
             return {
                 "documents": documents,
-                "retrieval_path": "sql_nl2sql",
+                "retrieval_path": "sql_nl2sql" if not is_reroute else "sql_rerouted",
+                "rerouted_to_sql": is_reroute,
                 "retrieval_debug": {
                     "sql_query": sql,
                     "sql_sheet_meta_id": selected["meta_id"],
@@ -423,14 +590,31 @@ class AgenticRAGWorkflow:
             }
         except Exception as e:
             logger.error("sql_agent failed: %s", e, exc_info=True)
+            if state.get("force_sql"):
+                # force_sql 模式下异常也不 fallback，保留错误信息给 answer_generator
+                return {
+                    "documents": [],
+                    "retrieval_path": "sql_error_forced",
+                    "error": str(e),
+                    "rerouted_to_sql": is_reroute,
+                }
             # 任何异常都降级到文本检索，保证不阻断主流程
             retrieval_result = self._node_retrieval_agent(state)
             retrieval_result["retrieval_path"] = "sql_fallback_error"
             retrieval_result["error"] = str(e)
+            retrieval_result["rerouted_to_sql"] = is_reroute
             return retrieval_result
 
     def _node_query_router(self, state: AgentState) -> dict:
         result = self.query_router.classify(state["query"])
+        # force_sql=True（用户筛选的文档全为 Excel 文件）→ 强制走 sql_agent
+        # chitchat 例外：闲聊仍走 chitchat，否则 "你好" 也会跑去 NL2SQL
+        if state.get("force_sql") and result["query_type"] != "chitchat":
+            logger.info(
+                "force_sql=True, overriding query_type %s → sql_query",
+                result["query_type"],
+            )
+            result["query_type"] = "sql_query"
         return {
             "query_type": result["query_type"],
             "confidence": result["confidence"],
@@ -441,8 +625,9 @@ class AgenticRAGWorkflow:
         try:
             folder = state.get("folder", "") or None
             tags = state.get("tags", []) or None
-            doc_ids = None
-            if folder or tags:
+            # doc_ids 优先于 folder/tags：前端选中具体文件时直接用，避免被文件夹稀释
+            doc_ids = state.get("doc_ids") or None
+            if not doc_ids and (folder or tags):
                 from src.storage.doc_store import get_doc_ids_by_filter
                 doc_ids = get_doc_ids_by_filter(folder=folder, tags=tags)
                 if not doc_ids:

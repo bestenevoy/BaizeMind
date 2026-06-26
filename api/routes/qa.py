@@ -29,6 +29,7 @@ async def ask(request: QARequest, current: User = Depends(get_current_user_optio
             request.query,
             folder=request.folder,
             tags=request.tags,
+            doc_ids=request.doc_ids,
         )
 
         elapsed = (time.time() - start) * 1000
@@ -96,6 +97,7 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                 request.query,
                 folder=request.folder,
                 tags=request.tags,
+                doc_ids=request.doc_ids,
             ):
                 if not isinstance(event, dict) or not event:
                     logger.warning(f"Skipping non-dict/empty event: {event!r}")

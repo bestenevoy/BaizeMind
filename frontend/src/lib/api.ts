@@ -266,11 +266,16 @@ export async function listTags(): Promise<TagInfo[]> {
 
 // ── QA ──
 
-export async function askQuestion(query: string, folder?: string, tags?: string[]): Promise<QAResponse> {
+export async function askQuestion(
+  query: string,
+  folder?: string,
+  tags?: string[],
+  docIds?: string[],
+): Promise<QAResponse> {
   const res = await authFetch(`${API_BASE}/qa/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, stream: false, folder, tags }),
+    body: JSON.stringify({ query, stream: false, folder, tags, doc_ids: docIds }),
   })
   if (!res.ok) throw new Error(`QA failed: ${res.statusText}`)
   return res.json()
@@ -293,11 +298,12 @@ export async function askQuestionStream(
   onError: (err: string) => void,
   folder?: string,
   tags?: string[],
+  docIds?: string[],
 ): Promise<void> {
   const res = await authFetch(`${API_BASE}/qa/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, stream: true, folder, tags }),
+    body: JSON.stringify({ query, stream: true, folder, tags, doc_ids: docIds }),
   })
   if (!res.ok) {
     onError(`Stream failed: ${res.statusText}`)

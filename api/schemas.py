@@ -67,6 +67,7 @@ class QARequest(BaseModel):
     top_k: int = Field(20, ge=1, le=100, description="Number of documents to retrieve")
     folder: Optional[str] = Field(None, description="Filter by folder path")
     tags: Optional[list[str]] = Field(None, description="Filter by tags")
+    doc_ids: Optional[list[str]] = Field(None, description="Filter by specific doc_ids (e.g. when user selects a single file)")
 
 
 class QAResponse(BaseModel):

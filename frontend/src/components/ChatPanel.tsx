@@ -170,6 +170,7 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
         },
         folder || undefined,
         tags.length ? tags : undefined,
+        docId ? [docId] : undefined,
       )
     } catch (err) {
       setMessages((prev) => {

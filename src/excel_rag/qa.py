@@ -53,6 +53,7 @@ class ExcelQA:
         query: str,
         folder: Optional[str] = None,
         tags: Optional[list[str]] = None,
+        doc_ids: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """纯检索阶段：向量召回 → 多表选择 → NL2SQL → 执行（含重试）。
 
@@ -60,9 +61,11 @@ class ExcelQA:
         返回:
             {recalled_sheets, selected_sheet, sql, sql_result, attempts, error}
         其中 selected_sheet / sql / sql_result 在失败场景下可能为空。
+
+        过滤优先级：doc_ids > folder/tags（前端选中具体文件时直接按 doc_ids 过滤）。
         """
         # ── 1. 向量召回 TopK Sheet ──
-        recalled = self._recall_sheets(query, folder=folder, tags=tags)
+        recalled = self._recall_sheets(query, folder=folder, tags=tags, doc_ids=doc_ids)
         if not recalled:
             return {
                 "recalled_sheets": [], "selected_sheet": None,
@@ -144,8 +147,12 @@ class ExcelQA:
         query: str,
         folder: Optional[str] = None,
         tags: Optional[list[str]] = None,
+        doc_ids: Optional[list[str]] = None,
     ) -> list[dict[str, Any]]:
-        """向量召回 TopK Sheet，返回带 meta_id 的候选列表。"""
+        """向量召回 TopK Sheet，返回带 meta_id 的候选列表。
+
+        过滤优先级：doc_ids（前端选具体文件）> folder/tags（文件夹/标签筛选）。
+        """
         try:
             embedding = self._get_embedding()
             query_vec = embedding.encode_query_dense(query)
@@ -153,17 +160,17 @@ class ExcelQA:
             logger.error(f"Excel query embedding failed: {e}")
             return []
 
-        # folder/tag 过滤 → doc_id 列表
-        doc_ids = None
-        if folder or tags:
+        # folder/tag 过滤 → doc_id 列表（doc_ids 优先，避免被 folder/tags 覆盖）
+        filter_doc_ids = doc_ids
+        if not filter_doc_ids and (folder or tags):
             from src.storage.doc_store import get_doc_ids_by_filter
-            doc_ids = get_doc_ids_by_filter(folder=folder, tags=tags)
-            if not doc_ids:
+            filter_doc_ids = get_doc_ids_by_filter(folder=folder, tags=tags)
+            if not filter_doc_ids:
                 return []
 
         try:
             vs = self._get_vector_store()
-            hits = vs.search(query_vec, top_k=settings.excel_recall_top_k, doc_ids=doc_ids)
+            hits = vs.search(query_vec, top_k=settings.excel_recall_top_k, doc_ids=filter_doc_ids)
         except Exception as e:
             logger.error(f"Excel vector search failed: {e}")
             return []
