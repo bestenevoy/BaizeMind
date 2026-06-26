@@ -58,6 +58,65 @@ def _serialize_messages(input: Any) -> str:
     return str(input)
 
 
+# LLM 缓存 value 中的 input_preview 截断长度（够看出是哪个 query，又不至于占空间）
+_INPUT_PREVIEW_LEN = 400
+
+
+def _encode_llm_cache_value(content: str, input_serialized: str, caller: str) -> str:
+    """把 LLM 响应 + 触发它的 input 预览 + 调用方打包成 JSON 字符串。
+
+    用于缓存 value，便于在 cache_admin 列表里看出"这条缓存是哪个 query 触发的"。
+
+    向后兼容：旧缓存 value 是纯 content 字符串（不是 JSON），由 _decode 处理。
+    """
+    preview = input_serialized[:_INPUT_PREVIEW_LEN]
+    return json.dumps(
+        {
+            "content": content,
+            "input_preview": preview,
+            "caller": caller,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _decode_llm_cache_value(raw: str) -> str:
+    """从缓存 value 中提取 content 字符串。
+
+    兼容两种格式：
+    - 新格式：JSON ``{"content": ..., "input_preview": ..., "caller": ...}``
+    - 旧格式：纯 content 字符串（直接返回）
+    """
+    if not raw:
+        return raw
+    # JSON 一定以 '{' 开头；纯 content 可能也以 '{' 开头但极少
+    # 保险起见尝试 parse，失败则当作旧格式
+    if raw.lstrip().startswith("{"):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and "content" in data:
+                return data["content"]
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return raw
+
+
+def _extract_llm_cache_meta(raw: str) -> dict:
+    """从缓存 value 中提取 meta（input_preview / caller），无法解析时返回空。"""
+    if not raw or not raw.lstrip().startswith("{"):
+        return {}
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and "content" in data:
+            return {
+                "input_preview": data.get("input_preview", ""),
+                "caller": data.get("caller", ""),
+            }
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return {}
+
+
 class CachedLLM:
     """LLM 缓存包装器（组合模式，不继承 ChatOpenAI）。
 
@@ -109,50 +168,77 @@ class CachedLLM:
         缓存命中时构造 AIMessage(content=cached) 返回。
         config 和 **kwargs 不参与缓存 key（一般是无状态配置）。
         """
+        from src.llm.token_stats import get_token_stats, extract_caller, extract_token_usage
+        stats = get_token_stats()
+        caller = extract_caller(skip_frames=2)
+        input_serialized = _serialize_messages(input)
+        input_chars = len(input_serialized)
+
         cache = self._get_cache()
         # NoopCache 直接跳过
         from src.cache import NoopCache
         if isinstance(cache, NoopCache):
-            return self._base.invoke(input, config=config, **kwargs)
+            result = self._base.invoke(input, config=config, **kwargs)
+            content = result.content if isinstance(result.content, str) else json.dumps(result.content, ensure_ascii=False)
+            in_tok, out_tok = extract_token_usage(result)
+            stats.record(caller, input_chars, len(content), in_tok, out_tok, cache_hit=False)
+            return result
 
-        input_serialized = _serialize_messages(input)
         key = self._make_key(input_serialized)
 
         cached = cache.get(key)
         if cached is not None:
             logger.debug("LLM cache hit: key=%s...", key[:24])
-            return AIMessage(content=cached)
+            cached_content = _decode_llm_cache_value(cached)
+            # 缓存命中：不计 token（未发起 API 调用），只记字符数
+            stats.record(caller, input_chars, len(cached_content), cache_hit=True)
+            return AIMessage(content=cached_content)
 
         logger.debug("LLM cache miss: key=%s...", key[:24])
         result = self._base.invoke(input, config=config, **kwargs)
         content = result.content if isinstance(result.content, str) else json.dumps(result.content, ensure_ascii=False)
         if content:
-            cache.set(key, content, ttl=self._ttl)
+            cache.set(key, _encode_llm_cache_value(content, input_serialized, caller), ttl=self._ttl)
+        in_tok, out_tok = extract_token_usage(result)
+        stats.record(caller, input_chars, len(content), in_tok, out_tok, cache_hit=False)
         return result
 
     def stream(self, input: Any, config: Any = None, **kwargs: Any):
         """带缓存的流式调用。
 
         缓存命中：生成单块 AIMessageChunk 流（一次性 yield 完整 content）。
-        缓存未命中：透传真实流，同时在流结束后缓存拼接的完整 content。
+        缓存未命中：透传真实流，同时在流结束后缓存拼接的 content。
         """
         from src.cache import NoopCache
+        from src.llm.token_stats import get_token_stats, extract_caller
+        stats = get_token_stats()
+        caller = extract_caller(skip_frames=2)
+        input_serialized = _serialize_messages(input)
+        input_chars = len(input_serialized)
+
         cache = self._get_cache()
         if isinstance(cache, NoopCache):
-            return self._base.stream(input, config=config, **kwargs)
+            # NoopCache 模式：透传真实流，包一层 _StreamCollector 仅用于统计字符数
+            real_stream = self._base.stream(input, config=config, **kwargs)
+            return _StreamCollector(real_stream, cache=None, key=None, ttl=0,
+                                    stats=stats, caller=caller, input_chars=input_chars,
+                                    input_serialized=input_serialized)
 
-        input_serialized = _serialize_messages(input)
         key = self._make_key(input_serialized)
 
         cached = cache.get(key)
         if cached is not None:
             logger.debug("LLM stream cache hit: key=%s...", key[:24])
+            cached_content = _decode_llm_cache_value(cached)
+            stats.record(caller, input_chars, len(cached_content), cache_hit=True)
             from langchain_core.messages import AIMessageChunk
-            return iter([AIMessageChunk(content=cached)])
+            return iter([AIMessageChunk(content=cached_content)])
 
         logger.debug("LLM stream cache miss: key=%s...", key[:24])
         real_stream = self._base.stream(input, config=config, **kwargs)
-        return _StreamCollector(real_stream, cache, key, self._ttl)
+        return _StreamCollector(real_stream, cache, key, self._ttl,
+                                stats=stats, caller=caller, input_chars=input_chars,
+                                input_serialized=input_serialized)
 
     def __getattr__(self, name: str) -> Any:
         """代理所有未显式实现的属性到 base_llm。"""
@@ -172,15 +258,42 @@ class _StreamCollector:
     """包装流式迭代器，在迭代结束时缓存拼接的 content。
 
     用法：直接迭代该对象，每次 yield 一个 chunk（与原 stream 行为一致）。
-    迭代结束后自动把拼接的 content 写入缓存。
+    迭代结束后自动把拼接的 content 写入缓存，并记录 token/字符数统计。
+
+    stats / caller / input_chars 可选：传入时会在流结束后记录一次统计。
+    流式响应通常不带 token_usage（SSE 协议不包含），所以只记字符数。
     """
 
-    def __init__(self, base_stream, cache, key: str, ttl: int):
+    def __init__(self, base_stream, cache, key: str | None, ttl: int,
+                 stats=None, caller: str = "", input_chars: int = 0,
+                 input_serialized: str = ""):
         self._base = base_stream
         self._cache = cache
         self._key = key
         self._ttl = ttl
         self._parts: list[str] = []
+        self._stats = stats
+        self._caller = caller
+        self._input_chars = input_chars
+        self._input_serialized = input_serialized
+        self._recorded = False  # 防止 __next__/__anext__ 都结束时重复记录
+
+    def _write_cache(self, full_content: str) -> None:
+        """写入缓存（带 input_preview + caller 元数据）。"""
+        if full_content and self._cache is not None and self._key is not None:
+            self._cache.set(
+                self._key,
+                _encode_llm_cache_value(full_content, self._input_serialized, self._caller),
+                ttl=self._ttl,
+            )
+
+    def _record_stats(self) -> None:
+        if self._recorded or self._stats is None:
+            return
+        self._recorded = True
+        full = "".join(self._parts)
+        # 流式响应拿不到 token_usage，只记字符数（cache_hit=False，因为是真实 LLM 调用）
+        self._stats.record(self._caller, self._input_chars, len(full), cache_hit=False)
 
     def __iter__(self):
         return self
@@ -195,9 +308,8 @@ class _StreamCollector:
                 self._parts.append(json.dumps(content, ensure_ascii=False))
             return chunk
         except StopIteration:
-            full_content = "".join(self._parts)
-            if full_content:
-                self._cache.set(self._key, full_content, ttl=self._ttl)
+            self._write_cache("".join(self._parts))
+            self._record_stats()
             raise
 
     # 支持 async for（LangChain 的 astream 可能需要）
@@ -214,9 +326,8 @@ class _StreamCollector:
                 self._parts.append(json.dumps(content, ensure_ascii=False))
             return chunk
         except StopAsyncIteration:
-            full_content = "".join(self._parts)
-            if full_content:
-                self._cache.set(self._key, full_content, ttl=self._ttl)
+            self._write_cache("".join(self._parts))
+            self._record_stats()
             raise
 
 

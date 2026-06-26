@@ -7,12 +7,52 @@ from fastapi import APIRouter, Depends
 
 from config.settings import settings
 from src.auth import User, require_admin, require_login
+from src.llm.cached_wrapper import _decode_llm_cache_value, _extract_llm_cache_meta
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
 
 def _truncate(s: str, n: int = 200) -> str:
     return s if len(s) <= n else s[:n] + "..."
+
+
+def _format_entry(e) -> dict:
+    """构造 cache 条目返回结构。
+
+    LLM namespace（``llm:*``）的 value 是 JSON ``{content, input_preview, caller}``，
+    这里把它解包：value_preview 显示真实 content（响应），并额外提供 input_preview
+    和 caller 字段方便定位"是哪个 query 触发的"。
+    """
+    namespace = e.key.split(":", 1)[0] if ":" in e.key else ""
+    raw = e.value
+
+    if namespace == "llm":
+        meta = _extract_llm_cache_meta(raw)
+        content = _decode_llm_cache_value(raw)
+        return {
+            "key": e.key,
+            "namespace": namespace,
+            "value_preview": _truncate(content),
+            "value_length": len(content),
+            "input_preview": _truncate(meta.get("input_preview", ""), 400),
+            "caller": meta.get("caller", ""),
+            "created_at": e.created_at,
+            "expires_at": e.expires_at,
+            "ttl_remaining": e.ttl_remaining,
+        }
+
+    # 其他 namespace（emb / rerank）：value 直接是字符串
+    return {
+        "key": e.key,
+        "namespace": namespace,
+        "value_preview": _truncate(raw),
+        "value_length": len(raw),
+        "input_preview": "",
+        "caller": "",
+        "created_at": e.created_at,
+        "expires_at": e.expires_at,
+        "ttl_remaining": e.ttl_remaining,
+    }
 
 
 @router.get("/cache")
@@ -58,18 +98,7 @@ async def list_cache(prefix: str | None = None, _: User = Depends(require_login)
         "filtered_total": len(entries),
         "filtered_prefix": prefix,
         "namespaces": namespace_counts,
-        "entries": [
-            {
-                "key": e.key,
-                "namespace": e.key.split(":", 1)[0] if ":" in e.key else "",
-                "value_preview": _truncate(e.value),
-                "value_length": len(e.value),
-                "created_at": e.created_at,
-                "expires_at": e.expires_at,
-                "ttl_remaining": e.ttl_remaining,
-            }
-            for e in entries
-        ],
+        "entries": [_format_entry(e) for e in entries],
     }
 
 

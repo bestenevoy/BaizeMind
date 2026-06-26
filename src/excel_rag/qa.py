@@ -188,13 +188,20 @@ class ExcelQA:
         query: str,
         recalled: list[dict[str, Any]],
     ) -> Optional[dict[str, Any]]:
-        """TopK > 1 时让 LLM 选择最相关表；否则直接取 Top1。"""
+        """TopK > 1 时让 LLM 选择最相关表；否则直接取 Top1。
+
+        候选 prompt 中带 similarity score，避免不同召回结果下 prompt 完全相同
+        导致 LLM 缓存命中旧响应（如曾经判过 null 的 sheet 集合）。
+        LLM 返回 null 时不再直接 fail，而是 fallback 到 Top1 继续走 NL2SQL —
+        让向量召回的分数来兜底，避免单纯依赖 LLM 判定。
+        """
         if len(recalled) == 1:
             return recalled[0]
 
-        # 构造候选列表
+        # 构造候选列表（含 score，避免同样 sheet 集合但不同召回分数下 prompt 重复）
         candidates = "\n".join(
-            f'- meta_id: {r["meta_id"]}, sheet: "{r["sheet_name"]}", summary: {r["summary"][:200]}'
+            f'- meta_id: {r["meta_id"]}, sheet: "{r["sheet_name"]}", '
+            f'similarity: {r["score"]:.4f}, summary: {r["summary"][:200]}'
             for r in recalled
         )
         try:
@@ -210,7 +217,13 @@ class ExcelQA:
             data = json.loads(text)
             selected_id = data.get("selected_meta_id")
             if not selected_id:
-                return None
+                # LLM 判定"都不相关"，但向量检索已经给出 TopK 候选；
+                # 兜底走 Top1 而不是直接报 no_relevant_sheet，避免 LLM 误判导致全流程失败
+                logger.info(
+                    "LLM table_selector returned null; falling back to Top1 (score=%.4f, sheet=%s)",
+                    recalled[0]["score"], recalled[0]["sheet_name"],
+                )
+                return recalled[0]
             for r in recalled:
                 if r["meta_id"] == selected_id:
                     return r
