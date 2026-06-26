@@ -6,6 +6,11 @@
 - 执行隔离：独立连接 + PRAGMA query_only（双保险，即便校验漏过也无法写入）
 - 超时控制：SQLite busy timeout
 - 自动修正：执行失败时把错误信息回喂 LLM，最多 N 轮
+
+缓存策略：
+- LLM 调用统一由 src/llm/cached_wrapper.py 的 CachedLLM 包装缓存
+  （相同 model + temperature + messages 直接返回，无需本模块单独管理）
+- SQL 校验/执行/重试都不缓存，每次都重走真实流程，保证数据最新
 """
 from __future__ import annotations
 
@@ -23,6 +28,7 @@ from src.excel_rag import store as excel_store
 from src.llm.deepseek import get_chat_llm
 
 logger = logging.getLogger(__name__)
+
 
 # 禁止的 SQL 关键字（不区分大小写）
 _FORBIDDEN_RE = re.compile(
@@ -97,7 +103,11 @@ def generate_sql(
     question: str,
     correction: dict[str, str] | None = None,
 ) -> str:
-    """调用 LLM 生成 SQL。correction 非空时走修正 prompt。"""
+    """调用 LLM 生成 SQL。correction 非空时走修正 prompt。
+
+    LLM 调用由 CachedLLM 统一缓存（相同 model + temperature + messages 命中即返回），
+    本函数无需单独管理缓存。correction 路径的 messages 包含错误信息，自然不会命中首次生成的缓存。
+    """
     llm = get_chat_llm(temperature=0.0)
     columns = sheet_meta["columns"]
     cols_text = _format_columns_for_prompt(columns)

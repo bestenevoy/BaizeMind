@@ -123,10 +123,20 @@ class Settings(BaseSettings):
 
     # Cache (generic LLM-result cache, e.g. query rewrite)
     cache_enabled: bool = True
-    cache_backend: str = "memory"  # "memory" | "sqlite" (扩展点：在 src/cache/factory.py 注册新后端)
+    cache_backend: str = "memory"  # "memory" | "file" | "garnet" | "sqlite"
     cache_ttl_seconds: int = 86400  # 默认 24h；query rewrite 结果对相同输入是稳定的
     cache_db_path: str = "data/cache.db"  # 仅 sqlite 后端使用
+    cache_file_dir: str = "data/cache"  # file 后端的缓存目录
     cache_query_rewrite_enabled: bool = True  # 单独开关：是否缓存 query rewrite 结果
+
+    # LLM response cache（对所有 LLM 调用统一缓存，相同输入直接返回）
+    llm_cache_enabled: bool = True  # 全局开关：关闭后所有 LLM 调用走真实请求
+    llm_cache_backend: str = "file"  # "file" | "garnet" | "memory"（独立于 cache_backend，便于单独配置）
+    llm_cache_ttl_seconds: int = 86400  # 默认 24h；temperature=0 时输出稳定
+    llm_cache_namespace: str = "llm"  # Redis key 前缀，避免与 query rewrite 等冲突
+
+    # Garnet / Redis（LLM 缓存的 garnet 后端配置）
+    garnet_url: str = "redis://127.0.0.1:16389/0"  # Garnet 服务器地址
 
     # Auth / User system
     auth_enabled: bool = True  # 全局开关：关闭后所有接口无需登录（开发用）
