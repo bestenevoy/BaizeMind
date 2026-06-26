@@ -6,14 +6,21 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { searchDebug, updateConfigOverride, type SearchDebugResponse } from '@/lib/api'
+import { useAuth } from '@/hooks/useAuth'
 
 export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }: {
   folder: string | null; docId: string | null; tags: string[]
   folderTree: React.ReactNode; tagFilter: React.ReactNode
 }) {
+  const { isGuest, user } = useAuth()
+  // 访客查询长度上限（与 chat 一致）
+  const guestMax = user?.guest_chat_max_length ?? 200
+  const maxLength = isGuest ? guestMax : undefined
+
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<SearchDebugResponse | null>(null)
+  const [error, setError] = useState('')
   const [expandedPreviews, setExpandedPreviews] = useState<Record<string, boolean>>({})
   const [resultTab, setResultTab] = useState<string>('rewrite')
   const [editingKey, setEditingKey] = useState<string | null>(null)
@@ -58,6 +65,11 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   const handleSearch = async (q?: string) => {
     const searchQuery = (q || query).trim()
     if (!searchQuery || loading) return
+    if (maxLength && searchQuery.length > maxLength) {
+      setError(`访客模式下单次查询不能超过 ${maxLength} 字符，请登录后继续使用。`)
+      return
+    }
+    setError('')
     setLoading(true)
     setResult(null)
     setExpandedPreviews({})
@@ -67,6 +79,8 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
       const res = await searchDebug(searchQuery, folder, tags, docId)
       setResult(res)
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(msg)
       console.error('Search debug failed:', err)
     } finally {
       setLoading(false)
@@ -152,19 +166,32 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
         </div>
 
         <div className="lg:col-span-9 flex flex-col min-h-0">
+          {isGuest && (
+            <div className="flex items-center justify-between mb-1.5 text-[11px] text-muted-foreground">
+              <span>访客模式：仅用于展示</span>
+              <span className={query.length > (maxLength ?? 0) ? 'text-destructive' : ''}>
+                {query.length}/{maxLength}
+              </span>
+            </div>
+          )}
           <div className="flex gap-2 flex-none">
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
-              placeholder="输入查询文本，测试检索召回效果..."
+              placeholder={isGuest ? '访客模式：输入查询文本（受字数限制）' : '输入查询文本，测试检索召回效果...'}
               className="flex-1"
+              maxLength={maxLength}
             />
-            <Button onClick={() => handleSearch()} disabled={loading || !query.trim()}>
+            <Button
+              onClick={() => handleSearch()}
+              disabled={loading || !query.trim() || (!!maxLength && query.length > maxLength)}
+            >
               {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Search className="h-4 w-4 mr-1" />}
               检索
             </Button>
           </div>
+          {error && <p className="text-xs text-destructive mt-2">{error}</p>}
 
           {result && (
             <div className="mt-3 flex-1 min-h-0 flex flex-col space-y-3">

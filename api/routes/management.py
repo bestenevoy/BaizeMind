@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 
 from api.schemas import SystemStatsResponse, ConnectivityResult, GraphOverviewResponse, GraphNode, GraphEdge, EntityDetailResponse, ChunkInfo
 from config.settings import settings
-from src.auth import User, require_admin, require_login
+from src.auth import User, enforce_guest_query_limit, get_current_user_optional, require_admin, require_login
 from src.retrieval.vector_retriever import MilvusVectorRetriever
 from src.retrieval.bm25_retriever import BM25Retriever
 from src.retrieval.hybrid_retriever import HybridRetriever
@@ -470,7 +470,8 @@ class SearchDebugRequest(BaseModel):
 
 
 @router.post("/search")
-async def search_debug(body: SearchDebugRequest):
+async def search_debug(body: SearchDebugRequest, current: User = Depends(get_current_user_optional)):
+    enforce_guest_query_limit(body.query, current)
     query = body.query
     # 未指定 top_k 时用运行时配置（可被 runtime 页 / 检索测试页编辑覆盖），
     # 这样编辑 hybrid_top_k 能直接影响 Rerank 数量与最终输出

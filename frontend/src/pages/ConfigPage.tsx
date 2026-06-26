@@ -453,6 +453,7 @@ export function ConfigPage() {
                 { title: 'Rerank', keys: ['reranker_method', 'reranker_score_threshold', 'retrieval_over_fetch_multiplier', 'rerank_top_k'] },
                 { title: '查询改写', keys: ['query_rewrite_enabled', 'query_rewrite_language', 'query_rewrite_count'] },
                 { title: 'Agent', keys: ['agent_max_iterations', 'agent_temperature'] },
+                { title: '用户系统', keys: ['auth_guest_chat_max_length'] },
               ]
               const grouped = groups
                 .map(g => ({ title: g.title, items: g.keys.map(k => editableItems.find(it => it.key === k)).filter(Boolean) as EditableConfigItem[] }))
@@ -473,6 +474,9 @@ export function ConfigPage() {
                   >
                     <div className="w-44 shrink-0 flex flex-col">
                       <span className="text-sm font-medium">{label}</span>
+                      {schema?.description && (
+                        <span className="text-[10px] text-muted-foreground leading-tight">{schema.description}</span>
+                      )}
                       {(schema?.type === 'int' || schema?.type === 'float') && schema.min !== undefined && schema.max !== undefined && (
                         <span className="text-[10px] text-muted-foreground">{schema.min}–{schema.max}</span>
                       )}

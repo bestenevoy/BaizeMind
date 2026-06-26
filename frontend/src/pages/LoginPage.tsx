@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { Brain, Loader2, Lock, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -6,11 +7,17 @@ import { Card, CardContent } from '@/components/ui/card'
 import { useAuth } from '@/hooks/useAuth'
 
 export function LoginPage() {
-  const { login } = useAuth()
+  const { login, isAuthenticated, loading: authLoading } = useAuth()
+  const navigate = useNavigate()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  // 已登录用户访问 /login 直接回首页
+  if (!authLoading && isAuthenticated) {
+    return <Navigate to="/" replace />
+  }
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -19,6 +26,8 @@ export function LoginPage() {
     setLoading(true)
     try {
       await login(username.trim(), password)
+      // 登录成功跳转首页
+      navigate('/', { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {

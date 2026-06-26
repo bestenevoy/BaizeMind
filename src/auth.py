@@ -393,5 +393,26 @@ def require_role(min_role: str):
     return _dep
 
 
+def enforce_guest_query_limit(query: str, user: "User") -> None:
+    """访客查询长度限制（聊天 / 检索测试通用）。
+
+    当 ``auth_guest_chat_max_length > 0`` 且用户为访客时，校验 query 长度。
+    超限抛出 400，提示用户登录后继续使用。
+    """
+    if (
+        user.role == ROLE_GUEST
+        and settings.auth_enabled
+        and settings.auth_guest_chat_max_length > 0
+        and len(query) > settings.auth_guest_chat_max_length
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"访客模式下单次查询不能超过 {settings.auth_guest_chat_max_length} 字符，"
+                f"当前 {len(query)} 字符。请登录后继续使用。"
+            ),
+        )
+
+
 # 启动时初始化
 init_db()

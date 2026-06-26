@@ -505,6 +505,7 @@ export interface ConfigSchema {
   min?: number
   max?: number
   options?: string[]
+  description?: string
 }
 
 export const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
@@ -525,6 +526,7 @@ export const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
   query_rewrite_language: { type: 'string', label: '改写语言' },
   query_rewrite_count: { type: 'int', label: '改写 Query 数量', min: 1, max: 8 },
   parser_backend: { type: 'enum', label: '默认解析器', options: ['mineru', 'paddleocr_vl'] },
+  auth_guest_chat_max_length: { type: 'int', label: '访客单次查询字数上限', min: 0, max: 10000, description: '0 表示不限制；同时作用于 chat 与检索测试' },
 }
 
 export function validateConfigValue(key: string, value: string): string | null {

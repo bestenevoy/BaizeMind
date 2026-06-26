@@ -24,6 +24,7 @@ _EDITABLE_KEYS = {
     "query_rewrite_language",
     "query_rewrite_count",
     "parser_backend",
+    "auth_guest_chat_max_length",
 }
 
 
