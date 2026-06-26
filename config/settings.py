@@ -121,21 +121,21 @@ class Settings(BaseSettings):
     excel_sql_max_retries: int = 2  # Auto-correction rounds on SQL execution failure
     excel_sample_rows_for_inference: int = 200  # Rows scanned for type/stat inference
 
-    # Cache (generic LLM-result cache, e.g. query rewrite)
-    cache_enabled: bool = True
-    cache_backend: str = "memory"  # "memory" | "file" | "garnet" | "sqlite"
-    cache_ttl_seconds: int = 86400  # 默认 24h；query rewrite 结果对相同输入是稳定的
-    cache_db_path: str = "data/cache.db"  # 仅 sqlite 后端使用
+    # Cache（统一缓存层，LLM 响应 / embedding / query rewrite 等共用）
+    cache_enabled: bool = True  # 全局开关：False 时所有缓存（LLM/embedding）禁用，走真实请求
+    # 后端可选（不区分 garnet/redis，协议相同）：
+    #   "memory" - 进程内 LRU（默认；最快，重启丢失，单进程适用）
+    #   "file"   - 文件持久化（多 worker 共享，IO 开销可忽略）
+    #   "garnet" / "redis" - Garnet 服务器（跨进程共享，原生 TTL，生产推荐）
+    cache_backend: str = "memory"  # 默认 memory；生产环境建议 garnet（需启动 Garnet 服务）
+    cache_ttl_seconds: int = 86400  # 默认 24h；LLM/embedding 对相同输入稳定输出
+    cache_db_path: str = "data/cache.db"  # 仅 sqlite 后端使用（保留扩展点）
     cache_file_dir: str = "data/cache"  # file 后端的缓存目录
     cache_query_rewrite_enabled: bool = True  # 单独开关：是否缓存 query rewrite 结果
+    cache_llm_namespace: str = "llm"  # LLM 响应缓存的 key 前缀
+    cache_embedding_namespace: str = "emb"  # embedding 缓存的 key 前缀
 
-    # LLM response cache（对所有 LLM 调用统一缓存，相同输入直接返回）
-    llm_cache_enabled: bool = True  # 全局开关：关闭后所有 LLM 调用走真实请求
-    llm_cache_backend: str = "file"  # "file" | "garnet" | "memory"（独立于 cache_backend，便于单独配置）
-    llm_cache_ttl_seconds: int = 86400  # 默认 24h；temperature=0 时输出稳定
-    llm_cache_namespace: str = "llm"  # Redis key 前缀，避免与 query rewrite 等冲突
-
-    # Garnet / Redis（LLM 缓存的 garnet 后端配置）
+    # Garnet / Redis 服务器地址（garnet/redis 后端使用，协议相同）
     garnet_url: str = "redis://127.0.0.1:16389/0"  # Garnet 服务器地址
 
     # Auth / User system
