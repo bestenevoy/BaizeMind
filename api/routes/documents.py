@@ -239,6 +239,41 @@ async def get_document_content(doc_id: str):
                 pass
             break
 
+    # Excel 文件：没有 mineru/paddleocr 输出，将 Sheet 元数据拼成 markdown
+    # 让前端 Markdown tab 能展示 Sheet 结构（表名/摘要/列/行数）作为检索 chunk 的来源
+    if not parsed and file_ext == ".xlsx":
+        try:
+            from src.excel_rag import store as excel_store
+            sheets = excel_store.list_sheets_by_doc(doc_id)
+            if sheets:
+                md_parts = ["# Excel 文件预览", ""]
+                md_parts.append(f"共 {len(sheets)} 个 Sheet，下方依次列出每个 Sheet 的摘要与列结构。")
+                md_parts.append("")
+                for i, s in enumerate(sheets):
+                    md_parts.append(f"## Sheet {i + 1}: {s['sheet_name']}")
+                    md_parts.append("")
+                    md_parts.append(f"- **meta_id**: `{s['meta_id']}`")
+                    md_parts.append(f"- **行数**: {s.get('row_count', 0)} · **列数**: {len(s.get('columns', []))}")
+                    summary = (s.get("summary") or "").strip()
+                    if summary:
+                        md_parts.append(f"- **摘要**: {summary}")
+                    cols = s.get("columns", []) or []
+                    if cols:
+                        md_parts.append("")
+                        md_parts.append("**列结构**:")
+                        md_parts.append("")
+                        md_parts.append("| 中文 | 英文 | 类型 |")
+                        md_parts.append("|------|------|------|")
+                        for c in cols:
+                            cn = (c.get("cn") or "").replace("|", "\\|")
+                            en = (c.get("en") or "").replace("|", "\\|")
+                            t = (c.get("type") or "").replace("|", "\\|")
+                            md_parts.append(f"| {cn} | {en} | {t} |")
+                    md_parts.append("")
+                parsed = "\n".join(md_parts)
+        except Exception as e:
+            logger.warning("Build excel sheet markdown failed for doc %s: %s", doc_id, e)
+
     raw_url = f"/api/v1/documents/{doc_id}/raw" if is_binary else ""
 
     return DocumentContentResponse(
@@ -259,6 +294,40 @@ async def get_document_chunks(doc_id: str):
     doc = doc_store.get_document(doc_id)
     if not doc:
         raise HTTPException(404, f"Document {doc_id} not found")
+
+    # Excel 文件：以每个 Sheet 摘要作为一个"chunk"（检索实际命中的最小单元）
+    filename = doc.get("filename", "")
+    if filename.lower().endswith(".xlsx"):
+        try:
+            from src.excel_rag import store as excel_store
+            sheets = excel_store.list_sheets_by_doc(doc_id)
+            chunks = []
+            for i, s in enumerate(sheets):
+                # 把列结构拼到 text 里，便于在 chunk 预览中直接看到表结构
+                cols = s.get("columns", []) or []
+                col_lines = [f"  - {c.get('en', '')} ({c.get('type', '')}) → {c.get('cn', '')}" for c in cols]
+                text = "Sheet: {name}\n行数: {rc}\n摘要: {summary}\n列结构:\n{cols}".format(
+                    name=s.get("sheet_name", ""),
+                    rc=s.get("row_count", 0),
+                    summary=(s.get("summary") or "").strip(),
+                    cols="\n".join(col_lines) if col_lines else "  (无)",
+                )
+                chunks.append(ChunkInfo(
+                    chunk_id=s.get("meta_id", f"sheet_{i}"),
+                    text=text,
+                    heading=s.get("sheet_name", ""),
+                    metadata={
+                        "source_type": "sql",
+                        "meta_id": s.get("meta_id", ""),
+                        "sheet_index": s.get("sheet_index", i),
+                        "row_count": s.get("row_count", 0),
+                        "column_count": len(cols),
+                    },
+                ))
+            return DocumentChunksResponse(doc_id=doc_id, chunks=chunks, total=len(chunks))
+        except Exception as e:
+            logger.warning("List excel sheets as chunks failed for doc %s: %s", doc_id, e)
+            return DocumentChunksResponse(doc_id=doc_id, chunks=[], total=0)
 
     from src.retrieval.vector_retriever import MilvusVectorRetriever
     vr = MilvusVectorRetriever()

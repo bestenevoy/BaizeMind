@@ -463,6 +463,7 @@ export interface SqlDebugSelectedSheet {
   score: number
   columns: Array<{ cn?: string; en: string; type: string }>
   row_count: number
+  summary: string
 }
 
 export interface SqlDebugAttempt {

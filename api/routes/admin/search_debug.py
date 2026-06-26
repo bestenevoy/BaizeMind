@@ -105,6 +105,7 @@ def _run_sql_debug(query: str, folder, tags) -> dict:
                     "score": selected.get("score", 0.0) if selected else 0.0,
                     "columns": sheet_meta.get("columns", []),
                     "row_count": sheet_meta.get("row_count", 0),
+                    "summary": (sheet_meta.get("summary") or "")[:500],
                 } if sheet_meta else None,
                 "sql": r.get("sql", ""),
                 "sql_result_columns": sql_result.get("columns", []) if isinstance(sql_result, dict) else [],

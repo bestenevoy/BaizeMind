@@ -231,64 +231,115 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                 {editingKey && saving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
               </div>
 
-              {/* 第二行：检索流程对照（配置值 → 实际产出条数） */}
+              {/* 第二行：检索流程对照（按 query_type 区分 doc / sql 路径） */}
               <div className="flex items-center gap-2 text-xs flex-none px-1 flex-wrap">
                 <span className="text-muted-foreground font-medium">流程对照:</span>
 
-                {/* 阶段1: 预取 */}
-                <span className="text-muted-foreground">
-                  预取
-                  <span className="font-mono text-foreground"> {result.over_fetch_multiplier}×{result.top_k}={result.over_fetch_multiplier * result.top_k} </span>
-                  /源 (预取倍数×RRF Top-K)
-                </span>
-                <span className="text-muted-foreground">→</span>
+                {result.query_type === 'sql_query' && result.sql_debug ? (
+                  <>
+                    {/* SQL 路径：向量召回 → 多表选择 → NL2SQL → 执行 */}
+                    <span className="text-muted-foreground">
+                      向量召回
+                      <span className="font-mono font-semibold text-foreground"> {result.sql_debug.recalled_sheets.length} </span>
+                      Sheet
+                    </span>
+                    <span className="text-muted-foreground">→</span>
+                    <span className="text-muted-foreground">
+                      多表选择
+                      {result.sql_debug.selected_sheet ? (
+                        <> 命中 <span className="font-mono text-foreground">{result.sql_debug.selected_sheet.sheet_name}</span></>
+                      ) : (
+                        <span className="font-mono font-semibold text-red-500"> 未命中 </span>
+                      )}
+                    </span>
+                    <span className="text-muted-foreground">→</span>
+                    <span className="text-muted-foreground">
+                      NL2SQL
+                      {result.sql_debug.sql ? (
+                        <span className="font-mono font-semibold text-foreground"> 已生成 </span>
+                      ) : (
+                        <span className="font-mono font-semibold text-red-500"> 失败 </span>
+                      )}
+                    </span>
+                    <span className="text-muted-foreground">→</span>
+                    <span className="text-muted-foreground">
+                      执行结果
+                      {result.sql_debug.error ? (
+                        <span className="font-mono font-semibold text-red-500"> 报错 </span>
+                      ) : (
+                        <span className={`font-mono font-semibold ${result.sql_debug.sql_result_row_count === 0 ? 'text-red-500' : 'text-primary'}`}> {result.sql_debug.sql_result_row_count} </span>
+                      )}
+                      行
+                    </span>
+                    {result.sql_debug.attempts.length > 0 && (
+                      <span className="text-amber-500">(重试 {result.sql_debug.attempts.length} 次)</span>
+                    )}
+                    {result.sql_debug.fallback_reason && (
+                      <span className="text-red-400">— {result.sql_debug.fallback_reason}</span>
+                    )}
+                    {result.sql_debug.error && (
+                      <span className="text-red-400">— {result.sql_debug.error}</span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {/* 文档 RAG 路径：预取 → RRF → Rerank → 最终 */}
+                    {/* 阶段1: 预取 */}
+                    <span className="text-muted-foreground">
+                      预取
+                      <span className="font-mono text-foreground"> {result.over_fetch_multiplier}×{result.top_k}={result.over_fetch_multiplier * result.top_k} </span>
+                      /源 (预取倍数×RRF Top-K)
+                    </span>
+                    <span className="text-muted-foreground">→</span>
 
-                {/* 阶段2: RRF 融合后 */}
-                <span className="text-muted-foreground">
-                  RRF融合后
-                  <span className="font-mono font-semibold text-foreground"> {result.stages.rrf.length} </span>
-                  条
-                </span>
-                <span className="text-muted-foreground">→</span>
+                    {/* 阶段2: RRF 融合后 */}
+                    <span className="text-muted-foreground">
+                      RRF融合后
+                      <span className="font-mono font-semibold text-foreground"> {result.stages.rrf.length} </span>
+                      条
+                    </span>
+                    <span className="text-muted-foreground">→</span>
 
-                {/* 阶段3: 送入 Reranker（受 检索返回数 限制） */}
-                <span className="text-muted-foreground">
-                  送入Rerank
-                  <span className="font-mono text-foreground"> ≤{result.top_k} </span>
-                  (RRF Top-K)
-                </span>
-                <span className="text-muted-foreground">→</span>
+                    {/* 阶段3: 送入 Reranker（受 检索返回数 限制） */}
+                    <span className="text-muted-foreground">
+                      送入Rerank
+                      <span className="font-mono text-foreground"> ≤{result.top_k} </span>
+                      (RRF Top-K)
+                    </span>
+                    <span className="text-muted-foreground">→</span>
 
-                {/* 阶段4: Rerank 输出（受 Rerank 输出数 限制） */}
-                <span className="text-muted-foreground">
-                  Rerank输出
-                  <span className="font-mono font-semibold text-foreground"> {result.stages.rerank.length} </span>
-                  条
-                  <span className="text-muted-foreground/70"> (≤{result.rerank_top_k})</span>
-                </span>
-                <span className="text-muted-foreground">→</span>
+                    {/* 阶段4: Rerank 输出（受 Rerank 输出数 限制） */}
+                    <span className="text-muted-foreground">
+                      Rerank输出
+                      <span className="font-mono font-semibold text-foreground"> {result.stages.rerank.length} </span>
+                      条
+                      <span className="text-muted-foreground/70"> (≤{result.rerank_top_k})</span>
+                    </span>
+                    <span className="text-muted-foreground">→</span>
 
-                {/* 阶段5: 最终（受 Rerank 阈值过滤） */}
-                <span className="text-muted-foreground">
-                  最终
-                  <span className={`font-mono font-semibold ${result.final_count === 0 ? 'text-red-500' : 'text-primary'}`}> {result.final_count} </span>
-                  条
-                </span>
+                    {/* 阶段5: 最终（受 Rerank 阈值过滤） */}
+                    <span className="text-muted-foreground">
+                      最终
+                      <span className={`font-mono font-semibold ${result.final_count === 0 ? 'text-red-500' : 'text-primary'}`}> {result.final_count} </span>
+                      条
+                    </span>
 
-                {result.filtered_out_by_rerank_threshold > 0 && (
-                  <span className="text-red-400">(Rerank阈值过滤 {result.filtered_out_by_rerank_threshold} 条)</span>
+                    {result.filtered_out_by_rerank_threshold > 0 && (
+                      <span className="text-red-400">(Rerank阈值过滤 {result.filtered_out_by_rerank_threshold} 条)</span>
+                    )}
+                    {result.final_count === 0 && (
+                      <span className="text-red-400">— 所有结果被阈值过滤！点击上方数值修改</span>
+                    )}
+                    <div className="flex-1" />
+                    <button
+                      onClick={() => setShowAll(!showAll)}
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                    >
+                      {showAll ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                      {showAll ? '仅通过阈值' : '显示全部'}
+                    </button>
+                  </>
                 )}
-                {result.final_count === 0 && (
-                  <span className="text-red-400">— 所有结果被阈值过滤！点击上方数值修改</span>
-                )}
-                <div className="flex-1" />
-                <button
-                  onClick={() => setShowAll(!showAll)}
-                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
-                >
-                  {showAll ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                  {showAll ? '仅通过阈值' : '显示全部'}
-                </button>
               </div>
 
               <div className="flex-1 min-h-0 flex flex-col">
@@ -621,7 +672,7 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
         {err && <span className="text-xs text-destructive">错误: {err}</span>}
       </div>
 
-      {/* 召回 Sheet 列表 */}
+      {/* 召回 Sheet 列表（含每个 Sheet 的摘要作为 chunk 内容） */}
       <div className="border rounded">
         <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30">
           召回 Sheet ({sqlDebug.recalled_sheets.length})
@@ -637,21 +688,38 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
                   <span className="text-xs font-mono">{s.sheet_name}</span>
                   <Badge variant="secondary" className="text-[10px] font-mono">{s.score.toFixed(3)}</Badge>
                   {s.selected && <Badge variant="default" className="text-[10px]">已选</Badge>}
-                  <button
-                    onClick={() => setExpandedSheet(expandedSheet === s.meta_id ? null : s.meta_id)}
-                    className="ml-auto text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    {expandedSheet === s.meta_id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                  </button>
+                  {s.summary && (
+                    <button
+                      onClick={() => setExpandedSheet(expandedSheet === s.meta_id ? null : s.meta_id)}
+                      className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      {expandedSheet === s.meta_id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    </button>
+                  )}
                 </div>
-                {expandedSheet === s.meta_id && s.summary && (
-                  <p className="text-xs text-muted-foreground mt-1 pl-6">{s.summary}</p>
+                {/* 默认展示摘要前 1 行，点击按钮展开完整内容 */}
+                {s.summary && (
+                  <p className={`text-xs text-muted-foreground mt-1 pl-6 ${expandedSheet === s.meta_id ? '' : 'line-clamp-1'}`}>
+                    {s.summary}
+                  </p>
                 )}
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* 选中 Sheet 的摘要（检索命中的 chunk 内容） */}
+      {sel && sel.summary && (
+        <div className="border rounded">
+          <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30">
+            Sheet 摘要（检索命中的 chunk 内容）
+          </div>
+          <p className="text-xs text-foreground/80 p-2 whitespace-pre-wrap break-all">
+            {sel.summary}
+          </p>
+        </div>
+      )}
 
       {/* 选中的表结构 */}
       {sel && sel.columns.length > 0 && (
