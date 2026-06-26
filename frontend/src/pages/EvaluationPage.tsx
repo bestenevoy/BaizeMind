@@ -713,12 +713,12 @@ function ResultsTab() {
                   <YAxis domain={[0, 1]} tick={{ fontSize: 10 }} />
                   <Tooltip />
                   <Legend wrapperStyle={{ fontSize: 10 }} />
-                  <Line type="monotone" dataKey="context_relevancy" name="context_relevancy" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="context_relevancy" name="context_relevancy" stroke="#06b6d4" strokeWidth={2} dot={{ r: 3 }} />
                   <Line type="monotone" dataKey="context_recall" name="context_recall" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} />
                   <Line type="monotone" dataKey="answer_relevancy" name="answer_relevancy" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
                   <Line type="monotone" dataKey="faithfulness" name="faithfulness" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} />
                   <Line type="monotone" dataKey="ndcg_at_5" name="ndcg@5" stroke="#8b5cf6" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 2" />
-                  <Line type="monotone" dataKey="answer_completeness" name="completeness" stroke="#06b6d4" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 2" />
+                  <Line type="monotone" dataKey="answer_completeness" name="completeness" stroke="#14b8a6" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 2" />
                 </LineChart>
               </ResponsiveContainer>
             </CardContent>
@@ -745,7 +745,7 @@ function ResultsTab() {
                         <p className="text-sm font-medium font-mono">{r.filename}</p>
                         <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
                           <span>{r.num_samples} 样本</span>
-                          <span className="text-blue-500 font-medium">CR: {r.context_relevancy.toFixed(3)}</span>
+                          <span className="text-cyan-600 dark:text-cyan-400 font-medium">CR: {r.context_relevancy.toFixed(3)}</span>
                           <span className="text-green-500 font-medium">CRe: {r.context_recall.toFixed(3)}</span>
                           <span className="text-amber-500 font-medium">AR: {r.answer_relevancy.toFixed(3)}</span>
                           <span className="text-red-500 font-medium">F: {r.faithfulness.toFixed(3)}</span>
@@ -869,24 +869,25 @@ export function EvaluationPage() {
   return (
     <div className="container mx-auto py-6 px-4 max-w-5xl">
       <div className="space-y-6">
-        <Card>
-          <CardContent className="py-3">
-            <div className="flex items-center gap-1">
-              {tabs.map(({ id, label, icon: Icon }) => (
-                <Button
-                  key={id}
-                  variant={tab === id ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => setTab(id)}
-                  className="gap-1.5"
-                >
-                  <Icon className="h-4 w-4" />
-                  {label}
-                </Button>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        <div className="flex items-center gap-1 border-b">
+          {tabs.map(({ id, label, icon: Icon }) => {
+            const active = tab === id
+            return (
+              <button
+                key={id}
+                onClick={() => setTab(id)}
+                className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                  active
+                    ? 'border-primary text-foreground'
+                    : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </button>
+            )
+          })}
+        </div>
 
         {tab === 'dataset' && <DatasetTab />}
         {tab === 'run' && <RunTab />}

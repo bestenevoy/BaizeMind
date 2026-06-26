@@ -116,8 +116,9 @@ export function TestsPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-1">
-              <div className="px-3 py-1.5 rounded-md bg-muted/50 text-xs text-muted-foreground font-mono">
-                uv run -m pytest {safeModules.map(m => m.file).join(' ')} -v
+              <div className="relative px-3 py-2 rounded-md bg-muted/50 text-xs text-muted-foreground font-mono overflow-hidden">
+                <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-green-500/60" />
+                <span className="pl-1">uv run -m pytest {safeModules.map(m => m.file).join(' ')} -v</span>
               </div>
             </div>
             <Separator className="my-3" />
@@ -125,7 +126,7 @@ export function TestsPage() {
               <div key={mod.file} className="mb-4 last:mb-0">
                 <div className="flex items-center gap-2 mb-2">
                   <mod.icon className="h-4 w-4 text-primary" />
-                  <h4 className="text-sm font-medium font-mono">{mod.file}</h4>
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground font-mono">{mod.file}</h4>
                   <Badge variant="secondary" className="text-xs">{mod.description}</Badge>
                 </div>
                 <div className="grid grid-cols-1 gap-1.5 pl-6">
@@ -157,8 +158,9 @@ export function TestsPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-1">
-              <div className="px-3 py-1.5 rounded-md bg-muted/50 text-xs text-muted-foreground font-mono">
-                uv run -m pytest {serviceModules.map(m => m.file).join(' ')} -v
+              <div className="relative px-3 py-2 rounded-md bg-muted/50 text-xs text-muted-foreground font-mono overflow-hidden">
+                <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-yellow-500/60" />
+                <span className="pl-1">uv run -m pytest {serviceModules.map(m => m.file).join(' ')} -v</span>
               </div>
             </div>
             <Separator className="my-3" />
@@ -166,7 +168,7 @@ export function TestsPage() {
               <div key={mod.file} className="mb-4 last:mb-0">
                 <div className="flex items-center gap-2 mb-2">
                   <mod.icon className="h-4 w-4 text-yellow-500" />
-                  <h4 className="text-sm font-medium font-mono">{mod.file}</h4>
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground font-mono">{mod.file}</h4>
                   <Badge variant="secondary" className="text-xs">{mod.description}</Badge>
                 </div>
                 <div className="grid grid-cols-1 gap-1.5 pl-6">

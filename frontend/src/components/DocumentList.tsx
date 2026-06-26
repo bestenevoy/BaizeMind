@@ -305,7 +305,7 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
                             <span className="text-xs font-mono text-muted-foreground">{chunk.chunk_id}</span>
                           </div>
                           {chunk.heading && (
-                            <span className="text-xs text-muted-foreground bg-blue-50 dark:bg-blue-950 px-1.5 py-0.5 rounded">
+                            <span className="text-xs text-muted-foreground bg-cyan-50 dark:bg-cyan-950/40 px-1.5 py-0.5 rounded">
                               {chunk.heading}
                             </span>
                           )}

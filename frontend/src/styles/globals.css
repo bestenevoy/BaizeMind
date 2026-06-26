@@ -5,50 +5,76 @@
 @layer base {
   :root {
     --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --foreground: 210 30% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
+    --card-foreground: 210 30% 12%;
+    --primary: 222 30% 8%;
+    --primary-foreground: 210 20% 98%;
+    --secondary: 200 20% 96%;
+    --secondary-foreground: 210 30% 18%;
+    --muted: 200 20% 96%;
+    --muted-foreground: 205 12% 46%;
+    --accent: 200 30% 94%;
+    --accent-foreground: 199 80% 30%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 20% 98%;
+    --border: 200 20% 90%;
+    --input: 200 20% 90%;
+    --ring: 222 30% 8%;
     --radius: 0.625rem;
 
-    /* Gradients */
-    --gradient-brand: linear-gradient(135deg, hsl(221.2 83.2% 53.3%), hsl(245 83% 60%));
-    --gradient-stat-1: linear-gradient(135deg, #3b82f6, #6366f1);
-    --gradient-stat-2: linear-gradient(135deg, #8b5cf6, #ec4899);
-    --gradient-stat-3: linear-gradient(135deg, #06b6d4, #3b82f6);
-    --gradient-stat-4: linear-gradient(135deg, #10b981, #06b6d4);
+    /* Gradients — 发亮黑（近黑 → 微亮深石墨，金属反光感）*/
+    --gradient-brand: linear-gradient(135deg, hsl(222 30% 8%), hsl(215 28% 18%));
+    --gradient-stat-1: linear-gradient(135deg, #1e293b, #475569);
+    --gradient-stat-2: linear-gradient(135deg, #0f172a, #334155);
+    --gradient-stat-3: linear-gradient(135deg, #1e293b, #64748b);
+    --gradient-stat-4: linear-gradient(135deg, #020617, #1e293b);
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 47% 8%;
-    --card-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 33% 15%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 18%;
-    --input: 217.2 32.6% 18%;
-    --ring: 224.3 76.3% 48%;
+    --background: 215 28% 9%;
+    --foreground: 200 20% 98%;
+    --card: 215 26% 12%;
+    --card-foreground: 200 20% 98%;
+    --primary: 215 22% 20%;
+    --primary-foreground: 200 20% 98%;
+    --secondary: 215 20% 18%;
+    --secondary-foreground: 200 20% 98%;
+    --muted: 215 20% 16%;
+    --muted-foreground: 200 12% 68%;
+    --accent: 215 25% 22%;
+    --accent-foreground: 200 20% 90%;
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 200 20% 98%;
+    --border: 215 20% 22%;
+    --input: 215 20% 22%;
+    --ring: 215 22% 30%;
+  }
+
+  /* Chat 页面局部主题：翡翠绿 */
+  .chat-theme {
+    --primary: 160 84% 32%;
+    --primary-foreground: 160 50% 98%;
+    --ring: 160 84% 32%;
+    --accent: 152 50% 92%;
+    --accent-foreground: 160 80% 22%;
+    --gradient-brand: linear-gradient(135deg, hsl(160 84% 32%), hsl(168 80% 26%));
+    /* 系统状态图标：四色协调搭配（绿/青/蓝/紫，冷调渐变）*/
+    --gradient-stat-1: linear-gradient(135deg, #059669, #10b981);
+    --gradient-stat-2: linear-gradient(135deg, #0891b2, #06b6d4);
+    --gradient-stat-3: linear-gradient(135deg, #2563eb, #3b82f6);
+    --gradient-stat-4: linear-gradient(135deg, #7c3aed, #8b5cf6);
+  }
+  .dark .chat-theme {
+    --primary: 160 70% 42%;
+    --primary-foreground: 160 50% 98%;
+    --ring: 160 70% 42%;
+    --accent: 160 40% 18%;
+    --accent-foreground: 160 70% 55%;
+    --gradient-stat-1: linear-gradient(135deg, #10b981, #34d399);
+    --gradient-stat-2: linear-gradient(135deg, #06b6d4, #22d3ee);
+    --gradient-stat-3: linear-gradient(135deg, #3b82f6, #60a5fa);
+    --gradient-stat-4: linear-gradient(135deg, #8b5cf6, #a78bfa);
   }
 }
 

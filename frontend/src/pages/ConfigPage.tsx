@@ -117,52 +117,30 @@ export function ConfigPage() {
 
   return (
     <div className="container mx-auto pt-4 px-4 flex flex-col min-h-0 flex-1 max-w-4xl">
-      <div className="flex items-end gap-3 flex-none pb-3 border-b mb-4">
-        <button
-          onClick={() => setActiveTab('status')}
-          className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-md border border-b-0 transition-colors ${
-            activeTab === 'status'
-              ? 'bg-background text-foreground border-border font-medium'
-              : 'text-muted-foreground hover:text-foreground border-transparent'
-          }`}
-        >
-          <Activity className="h-4 w-4" />
-          系统状态
-        </button>
-        <button
-          onClick={() => setActiveTab('info')}
-          className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-md border border-b-0 transition-colors ${
-            activeTab === 'info'
-              ? 'bg-background text-foreground border-border font-medium'
-              : 'text-muted-foreground hover:text-foreground border-transparent'
-          }`}
-        >
-          <Settings className="h-4 w-4" />
-          配置信息
-        </button>
-        <button
-          onClick={() => setActiveTab('runtime')}
-          className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-md border border-b-0 transition-colors ${
-            activeTab === 'runtime'
-              ? 'bg-background text-foreground border-border font-medium'
-              : 'text-muted-foreground hover:text-foreground border-transparent'
-          }`}
-        >
-          <Pencil className="h-4 w-4" />
-          运行时配置
-        </button>
-        <button
-          onClick={() => setActiveTab('cache')}
-          className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-md border border-b-0 transition-colors ${
-            activeTab === 'cache'
-              ? 'bg-background text-foreground border-border font-medium'
-              : 'text-muted-foreground hover:text-foreground border-transparent'
-          }`}
-        >
-          <Database className="h-4 w-4" />
-          缓存
-        </button>
-        <div className="flex-1 border-b" />
+      <div className="flex items-center gap-1 flex-none border-b mb-4">
+        {([
+          { id: 'status', label: '系统状态', icon: Activity },
+          { id: 'info', label: '配置信息', icon: Settings },
+          { id: 'runtime', label: '运行时配置', icon: Pencil },
+          { id: 'cache', label: '缓存', icon: Database },
+        ] as const).map((tab) => {
+          const Icon = tab.icon
+          const active = activeTab === tab.id
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                active
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {tab.label}
+            </button>
+          )
+        })}
       </div>
       {activeTab === 'status' ? (
       <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
@@ -221,26 +199,22 @@ export function ConfigPage() {
               </div>
             ) : stats ? (
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                <div className="p-3 rounded-lg border text-center">
-                  <p className="text-2xl font-bold">{stats.document_count}</p>
-                  <p className="text-xs text-muted-foreground">文档数</p>
-                </div>
-                <div className="p-3 rounded-lg border text-center">
-                  <p className="text-2xl font-bold">{stats.chunk_count}</p>
-                  <p className="text-xs text-muted-foreground">分块数</p>
-                </div>
-                <div className="p-3 rounded-lg border text-center">
-                  <p className="text-2xl font-bold">{stats.milvus_vector_count}</p>
-                  <p className="text-xs text-muted-foreground">向量数</p>
-                </div>
-                <div className="p-3 rounded-lg border text-center">
-                  <p className="text-2xl font-bold">{stats.neo4j_entity_count}</p>
-                  <p className="text-xs text-muted-foreground">实体数</p>
-                </div>
-                <div className="p-3 rounded-lg border text-center">
-                  <p className="text-2xl font-bold">{stats.neo4j_relation_count}</p>
-                  <p className="text-xs text-muted-foreground">关系数</p>
-                </div>
+                {([
+                  { value: stats.document_count, label: '文档数' },
+                  { value: stats.chunk_count, label: '分块数' },
+                  { value: stats.milvus_vector_count, label: '向量数' },
+                  { value: stats.neo4j_entity_count, label: '实体数' },
+                  { value: stats.neo4j_relation_count, label: '关系数' },
+                ]).map((s) => (
+                  <div
+                    key={s.label}
+                    className="relative p-3 rounded-lg border bg-card text-center overflow-hidden transition-colors hover:border-primary/40"
+                  >
+                    <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-primary/60" />
+                    <p className="text-2xl font-bold tabular-nums">{s.value}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{s.label}</p>
+                  </div>
+                ))}
               </div>
             ) : null}
             <div className="flex justify-end gap-2 mt-3">
@@ -405,7 +379,7 @@ export function ConfigPage() {
               <div className="space-y-4">
                 {/* API Keys (masked) */}
                 <div>
-                  <h4 className="text-sm font-medium mb-2">API 密钥 (已脱敏)</h4>
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">API 密钥 (已脱敏)</h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div className="flex justify-between items-center p-2 rounded border text-sm">
                       <span className="text-muted-foreground">DeepSeek API Key</span>
@@ -423,7 +397,7 @@ export function ConfigPage() {
                 {/* Settings categories */}
                 {config.categories.map((cat) => (
                   <div key={cat.category}>
-                    <h4 className="text-sm font-medium mb-2">{cat.category}</h4>
+                    <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">{cat.category}</h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
                       {cat.items.map((item) => (
                         <div
@@ -458,111 +432,139 @@ export function ConfigPage() {
               <Pencil className="h-5 w-5" />
               运行时配置 (可编辑)
             </CardTitle>
+            <Button variant="outline" size="sm" onClick={loadEditableConfig}>
+              <RefreshCw className="h-4 w-4 mr-1" />
+              刷新
+            </Button>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2">
-              {editableItems.map((item) => {
+            {(() => {
+              const groups: { title: string; keys: string[] }[] = [
+                { title: '分块', keys: ['chunk_size', 'chunk_overlap'] },
+                { title: '混合检索', keys: ['hybrid_top_k', 'hybrid_dense_weight', 'hybrid_bm25_weight', 'hybrid_rrf_k', 'dense_vector_threshold'] },
+                { title: 'Rerank', keys: ['reranker_method', 'reranker_score_threshold', 'retrieval_over_fetch_multiplier', 'rerank_top_k'] },
+                { title: '查询改写', keys: ['query_rewrite_enabled', 'query_rewrite_language', 'query_rewrite_count'] },
+                { title: 'Agent', keys: ['agent_max_iterations', 'agent_temperature'] },
+              ]
+              const grouped = groups
+                .map(g => ({ title: g.title, items: g.keys.map(k => editableItems.find(it => it.key === k)).filter(Boolean) as EditableConfigItem[] }))
+                .filter(g => g.items.length > 0)
+              const rest = editableItems.filter(it => !groups.some(g => g.keys.includes(it.key)))
+              const allGroups = rest.length > 0 ? [...grouped, { title: '其他', items: rest }] : grouped
+
+              const renderItem = (item: EditableConfigItem) => {
                 const schema = CONFIG_SCHEMA[item.key]
                 const label = schema?.label || item.key
                 const isEditing = editingKey === item.key
-
                 return (
-                <div
-                  key={item.key}
-                  className="flex items-center gap-3 p-2 rounded border hover:bg-muted/30 text-sm"
-                >
-                  <span className="w-48 shrink-0 text-muted-foreground font-mono text-xs">
-                    {label}
-                  </span>
-                  {isEditing ? (
-                    <>
-                      {schema?.type === 'bool' ? (
-                        <div className="flex items-center gap-2 flex-1">
-                          <Button
-                            size="sm"
-                            variant={editValue.toLowerCase() === 'true' ? 'default' : 'outline'}
-                            onClick={() => setEditValue('true')}
-                          >开启</Button>
-                          <Button
-                            size="sm"
-                            variant={editValue.toLowerCase() === 'false' ? 'default' : 'outline'}
-                            onClick={() => setEditValue('false')}
-                          >关闭</Button>
-                          <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
-                            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>取消</Button>
-                        </div>
-                      ) : schema?.type === 'enum' && schema.options ? (
-                        <div className="flex items-center gap-2 flex-1">
-                          <select
-                            className="flex-1 h-8 text-xs rounded-md border bg-background px-2"
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                            autoFocus
-                          >
-                            {schema.options.map(o => (
-                              <option key={o} value={o}>{o}</option>
-                            ))}
-                          </select>
-                          <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
-                            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>取消</Button>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col gap-1 flex-1">
-                          <div className="flex items-center gap-2">
-                            <Input
-                              className="flex-1 h-8 text-xs"
-                              type={schema?.type === 'int' || schema?.type === 'float' ? 'number' : 'text'}
-                              min={schema?.min}
-                              max={schema?.max}
-                              step={schema?.type === 'float' ? '0.01' : '1'}
-                              value={editValue}
-                              onChange={(e) => { setEditValue(e.target.value); setEditError('') }}
-                              onKeyDown={(e) => { if (e.key === 'Enter') handleSaveOverride() }}
-                              autoFocus
-                            />
+                  <div
+                    key={item.key}
+                    className={`flex items-center gap-3 p-2.5 rounded-lg border text-sm transition-colors ${
+                      isEditing ? 'border-primary/50 bg-primary/5' : 'hover:bg-muted/30'
+                    }`}
+                  >
+                    <div className="w-44 shrink-0 flex flex-col">
+                      <span className="text-sm font-medium">{label}</span>
+                      {(schema?.type === 'int' || schema?.type === 'float') && schema.min !== undefined && schema.max !== undefined && (
+                        <span className="text-[10px] text-muted-foreground">{schema.min}–{schema.max}</span>
+                      )}
+                    </div>
+                    {isEditing ? (
+                      <>
+                        {schema?.type === 'bool' ? (
+                          <div className="flex items-center gap-2 flex-1">
+                            <Button
+                              size="sm"
+                              variant={editValue.toLowerCase() === 'true' ? 'default' : 'outline'}
+                              onClick={() => setEditValue('true')}
+                            >开启</Button>
+                            <Button
+                              size="sm"
+                              variant={editValue.toLowerCase() === 'false' ? 'default' : 'outline'}
+                              onClick={() => setEditValue('false')}
+                            >关闭</Button>
                             <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
                               {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                             </Button>
                             <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>取消</Button>
                           </div>
-                          {editError && <p className="text-xs text-red-500">{editError}</p>}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="flex items-center gap-2 flex-1">
-                      <code className="text-xs bg-muted px-1.5 py-0.5 rounded min-w-[80px] text-center">
-                        {friendlyValue(item) || '-'}
-                      </code>
-                      {schema?.type === 'int' || schema?.type === 'float' ? (
-                        <span className="text-[10px] text-muted-foreground">
-                          {schema.min !== undefined && schema.max !== undefined
-                            ? `${schema.min}–${schema.max}`
-                            : ''}
-                        </span>
-                      ) : null}
-                      {item.overridden && (
-                        <Badge variant="secondary" className="text-[10px]">已修改</Badge>
-                      )}
-                      <div className="ml-auto flex items-center gap-1">
-                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => startEdit(item)} title="编辑">
-                          <Pencil className="h-3 w-3" />
-                        </Button>
-                        {item.overridden && (
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleResetOverride(item.key)} title="恢复默认">
-                            <RotateCcw className="h-3 w-3" />
-                          </Button>
+                        ) : schema?.type === 'enum' && schema.options ? (
+                          <div className="flex items-center gap-2 flex-1">
+                            <select
+                              className="flex-1 h-8 text-xs rounded-md border bg-background px-2"
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              autoFocus
+                            >
+                              {schema.options.map(o => (
+                                <option key={o} value={o}>{o}</option>
+                              ))}
+                            </select>
+                            <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
+                              {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>取消</Button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-1 flex-1">
+                            <div className="flex items-center gap-2">
+                              <Input
+                                className="flex-1 h-8 text-xs"
+                                type={schema?.type === 'int' || schema?.type === 'float' ? 'number' : 'text'}
+                                min={schema?.min}
+                                max={schema?.max}
+                                step={schema?.type === 'float' ? '0.01' : '1'}
+                                value={editValue}
+                                onChange={(e) => { setEditValue(e.target.value); setEditError('') }}
+                                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveOverride() }}
+                                autoFocus
+                              />
+                              <Button size="sm" onClick={handleSaveOverride} disabled={saving}>
+                                {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                              </Button>
+                              <Button size="sm" variant="ghost" onClick={() => setEditingKey(null)}>取消</Button>
+                            </div>
+                            {editError && <p className="text-xs text-red-500">{editError}</p>}
+                          </div>
                         )}
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-2 flex-1">
+                        <code className="text-xs bg-muted px-1.5 py-0.5 rounded min-w-[80px] text-center">
+                          {friendlyValue(item) || '-'}
+                        </code>
+                        {item.overridden && (
+                          <Badge variant="secondary" className="text-[10px]">已修改</Badge>
+                        )}
+                        <div className="ml-auto flex items-center gap-1">
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => startEdit(item)} title="编辑">
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                          {item.overridden && (
+                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleResetOverride(item.key)} title="恢复默认">
+                              <RotateCcw className="h-3 w-3" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              }
+
+              return (
+                <div className="space-y-5">
+                  {allGroups.map(g => (
+                    <div key={g.title}>
+                      <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">{g.title}</h4>
+                      <div className="space-y-2">
+                        {g.items.map(renderItem)}
                       </div>
                     </div>
-                  )}
+                  ))}
                 </div>
-              )})}
-            </div>
+              )
+            })()}
           </CardContent>
         </Card>
       </div>

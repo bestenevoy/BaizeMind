@@ -70,7 +70,7 @@ export function GraphPage() {
               {/* Related Documents */}
               {detail.documents.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium mb-2 flex items-center gap-1">
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1">
                     <FileText className="h-3.5 w-3.5" />
                     相关文档 ({detail.documents.length})
                   </h4>
@@ -100,7 +100,7 @@ export function GraphPage() {
               {/* Related Chunks */}
               {detail.related_chunks.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium mb-2 flex items-center gap-1">
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1">
                     <Layers className="h-3.5 w-3.5" />
                     相关 Chunks ({detail.related_chunks.length})
                   </h4>

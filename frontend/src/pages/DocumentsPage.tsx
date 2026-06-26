@@ -22,32 +22,30 @@ export function DocumentsPage() {
 
   return (
     <div className="container mx-auto pt-4 px-4 flex flex-col min-h-0 flex-1">
-      <div className="flex items-end gap-3 flex-none pb-3 border-b">
+      <div className="flex items-center gap-1 flex-none border-b mb-4">
+        {([
+          { id: 'docs', label: '文档列表', icon: FileText },
+          { id: 'search', label: '检索测试', icon: BeakerIcon },
+        ] as const).map((tab) => {
+          const Icon = tab.icon
+          const active = activeTab === tab.id
+          return (
             <button
-              onClick={() => setActiveTab('docs')}
-              className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-md border border-b-0 transition-colors ${
-                activeTab === 'docs'
-                  ? 'bg-background text-foreground border-border font-medium'
-                  : 'text-muted-foreground hover:text-foreground border-transparent'
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                active
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
               }`}
             >
-              <FileText className="h-4 w-4" />
-              文档列表
+              <Icon className="h-4 w-4" />
+              {tab.label}
             </button>
-            <button
-              onClick={() => setActiveTab('search')}
-              className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-t-md border border-b-0 transition-colors ${
-                activeTab === 'search'
-                  ? 'bg-background text-foreground border-border font-medium'
-                  : 'text-muted-foreground hover:text-foreground border-transparent'
-              }`}
-            >
-              <BeakerIcon className="h-4 w-4" />
-              检索测试
-            </button>
-            <div className="flex-1 border-b" />
-          </div>
-          <div className={activeTab === 'search' ? 'flex-1 min-h-0 pt-3' : 'hidden'}>
+          )
+        })}
+      </div>
+          <div className={activeTab === 'search' ? 'flex-1 min-h-0' : 'hidden'}>
             <SearchDebugPanel
               folder={selectedFolder}
               docId={selectedDocId}
@@ -65,7 +63,7 @@ export function DocumentsPage() {
             />
           </div>
 
-          <div className={activeTab === 'docs' ? 'grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0 pt-3' : 'hidden'}>
+          <div className={activeTab === 'docs' ? 'grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0' : 'hidden'}>
             <div className="lg:col-span-2 space-y-4 overflow-y-auto">
               <FolderTree
                 selectedFolder={selectedFolder}

@@ -296,11 +296,11 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                                     )}
                                     <span className="text-xs text-muted-foreground">{isOrig ? '原始查询（参与召回兜底）' : `Dense 改写 #${p.index}`}</span>
                                   </div>
-                                  <div className="bg-blue-50 dark:bg-blue-950/20 rounded p-2 space-y-1">
+                                  <div className="bg-cyan-50 dark:bg-cyan-950/30 rounded p-2 space-y-1">
                                     <pre className="text-sm whitespace-pre-wrap break-all">{p.dense_query}</pre>
                                     <div className="flex flex-wrap gap-1">
                                       {p.dense_tokens.map((t, i) => (
-                                        <Badge key={i} variant="outline" className="text-xs font-mono bg-blue-50 dark:bg-blue-950/30">{t}</Badge>
+                                        <Badge key={i} variant="outline" className="text-xs font-mono bg-cyan-50 dark:bg-cyan-950/30">{t}</Badge>
                                       ))}
                                     </div>
                                   </div>
@@ -319,12 +319,12 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                             </>
                           ) : (
                             <>
-                              <div className="bg-blue-50 dark:bg-blue-950/20 rounded p-3 space-y-1">
-                                <div className="text-xs font-medium text-blue-600 dark:text-blue-400 mb-2">Dense 查询（语义检索用）</div>
+                              <div className="bg-cyan-50 dark:bg-cyan-950/30 rounded p-3 space-y-1">
+                                <div className="text-xs font-medium text-cyan-700 dark:text-cyan-300 mb-2">Dense 查询（语义检索用）</div>
                                 <pre className="text-sm whitespace-pre-wrap break-all">{result.rewrite.dense_query}</pre>
                                 <div className="flex flex-wrap gap-1 mt-1">
                                   {result.rewrite.dense_tokens.map((t, i) => (
-                                    <Badge key={i} variant="outline" className="text-xs font-mono bg-blue-50 dark:bg-blue-950/30">{t}</Badge>
+                                    <Badge key={i} variant="outline" className="text-xs font-mono bg-cyan-50 dark:bg-cyan-950/30">{t}</Badge>
                                   ))}
                                 </div>
                               </div>

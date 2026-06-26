@@ -8,7 +8,7 @@ export function Home() {
   const { selectedFolder, selectedDocId, selectedTags, toggleTag, selectFolder, selectDoc } = useFolderFilter()
 
   return (
-    <div className="container mx-auto py-6 px-4 flex flex-col min-h-0 flex-1">
+    <div className="chat-theme container mx-auto py-6 px-4 flex flex-col min-h-0 flex-1">
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 min-h-0">
         <div className="lg:col-span-3 space-y-4 overflow-y-auto">
           <FolderTree

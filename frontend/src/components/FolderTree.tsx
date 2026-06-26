@@ -347,7 +347,7 @@ interface RenderCtx {
 }
 
 function renderFolderRow(node: TreeNode, depth: number, pad: number, isExpanded: boolean, isSelected: boolean, hasChildren: boolean, isRoot: boolean, ctx: RenderCtx): ReactNode {
-  const depthColors = ['text-blue-400', 'text-emerald-400', 'text-amber-400', 'text-purple-400', 'text-rose-400']
+  const depthColors = ['text-cyan-500', 'text-emerald-400', 'text-amber-400', 'text-purple-400', 'text-rose-400']
   return (
     <div key={node.path || '__root__'}
       className={`group flex items-center w-full rounded text-sm relative cursor-pointer transition-colors ${
