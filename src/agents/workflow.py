@@ -239,53 +239,53 @@ def _has_excel_sheet_chunk(documents: list[dict]) -> bool:
     return False
 
 
-def _route_after_validation(state: AgentState) -> str:
-    validation = state.get("validation", {})
+def _route_after_generation(state: AgentState) -> str:
+    """answer_generator 之后路由：合并了原 answer_validator 的职责。
+
+    现在只有一个 LLM 节点（answer_generator）负责生成 + 自检，
+    重判信号不再依赖 validator 的 LLM 标记，而是用：
+    - _answer_indicates_insufficient(answer)：正则匹配回答文本中的"信息不足"短语
+    - _has_excel_sheet_chunk(documents)：检测是否检索到 excel_sheet chunk
+
+    路由规则：
+    1. rerouted_to_sql=True + answer 仍"信息不足" → END（防死循环）
+    2. 未重判 + excel_chunk + answer 信息不足 + iteration < max_iter → sql_agent
+    3. 其他 → END（合并后无 missing_citation 重试，依赖 prompt 自检）
+    """
     iteration = state.get("iteration", 0)
     max_iter = state.get("max_iterations", settings.agent_max_iterations)
-    is_valid = validation.get("is_valid", True)
-    failure_reasons = validation.get("failure_reasons", [])
     docs = state.get("documents", [])
     has_excel_chunk = _has_excel_sheet_chunk(docs)
+    answer = state.get("final_answer") or state.get("draft_answer") or ""
+    answer_insufficient = _answer_indicates_insufficient(answer)
 
     # 重判场景的最终保护：已经重判到 sql_agent 跑过了（rerouted_to_sql=True），
-    # validator 还说不通过 → 直接 END，避免 retrieval↔sql_agent 死循环。
-    # 因为此时已经穷尽了 doc rag + nl2sql 两条路径：
-    #   - doc rag: context_insufficient 触发了重判
-    #   - sql_agent: 跑了 NL2SQL（或 fallback 到 retrieval）
-    #   - 再走 retrieval_agent / answer_generator 重试不会带来新信息
-    # 同一份文档库检索结果一样，继续烧 token 无意义。
-    if state.get("rerouted_to_sql", False) and not is_valid:
+    # answer 仍信息不足 → 直接 END，避免 retrieval↔sql_agent 死循环。
+    # 此时已穷尽 doc rag + nl2sql 两条路径，再走 retrieval 也不会有新信息。
+    if state.get("rerouted_to_sql", False) and answer_insufficient:
         logger.info(
-            "rerouted_to_sql=True + still invalid → END "
+            "rerouted_to_sql=True + still insufficient → END "
             "(avoid retrieval↔sql_agent loop, iteration=%d/%d)",
             iteration, max_iter,
         )
         return END
 
-    # 自动重判触发条件（优先于正常 END/重试路径）：
+    # 自动重判触发条件：
     # 1. 尚未重判过（防死循环）
-    # 2. 检索到了 excel_sheet 类型的 chunk（之前 doc rag 检索到了 sheet 摘要 chunk）
-    # 3. validator 标 context_insufficient，OR 回答文本本身含"信息不足"标识
-    #    （后者用于 validator 误判 is_valid=true 的兜底场景）
+    # 2. 检索到了 excel_sheet 类型的 chunk（doc rag 检索到了 sheet 摘要）
+    # 3. answer 文本含"信息不足"短语（正则匹配，非 LLM 判定）
+    # 4. iteration < max_iter
     if (
         not state.get("rerouted_to_sql", False)
         and has_excel_chunk
+        and answer_insufficient
         and iteration < max_iter
     ):
-        answer = state.get("final_answer") or state.get("draft_answer") or ""
-        if "context_insufficient" in failure_reasons or _answer_indicates_insufficient(answer):
-            logger.info(
-                "Rerouting to sql_agent: excel_sheet chunk + %s detected",
-                "context_insufficient" if "context_insufficient" in failure_reasons
-                else "answer indicates insufficiency",
-            )
-            return "sql_agent"
+        logger.info(
+            "Rerouting to sql_agent: excel_sheet chunk + answer indicates insufficiency"
+        )
+        return "sql_agent"
 
-    if not is_valid and iteration < max_iter:
-        if "context_insufficient" in failure_reasons:
-            return "retrieval_agent"
-        return "answer_generator"
     return END
 
 
@@ -416,7 +416,9 @@ class AgenticRAGWorkflow:
         # [DISABLED] GraphRAG node — retained for graph compilation, unreachable via routing
         builder.add_node("graphrag_search", self._node_graphrag_search)
         builder.add_node("answer_generator", self._node_answer_generator)
-        builder.add_node("answer_validator", self._node_answer_validator)
+        # [MERGED] answer_validator 已合并到 answer_generator：单次 LLM 调用同时生成 + 自检，
+        # 重判信号改用正则匹配 _answer_indicates_insufficient + _has_excel_sheet_chunk，
+        # 不再依赖独立的 validator LLM 调用。
 
         builder.add_edge(START, "query_router")
         builder.add_conditional_edges("query_router", _route_by_query_type)
@@ -428,8 +430,8 @@ class AgenticRAGWorkflow:
         builder.add_conditional_edges("graphrag_search", _route_after_graphrag)
         builder.add_edge("retrieval_agent", "answer_generator")
         builder.add_edge("lightrag_agent", "answer_generator")
-        builder.add_edge("answer_generator", "answer_validator")
-        builder.add_conditional_edges("answer_validator", _route_after_validation)
+        # answer_generator 单次 LLM 生成 + 自检后路由（合并了原 answer_validator 的职责）
+        builder.add_conditional_edges("answer_generator", _route_after_generation)
 
         return builder.compile()
 
@@ -929,19 +931,30 @@ class AgenticRAGWorkflow:
                     language=settings.query_rewrite_language,
                 )
 
-            # Incorporate validation feedback on retry
+            # [MERGED] 原 validation_feedback 路径已废弃（validator 节点已合并），
+            # 重判场景下 answer_generator 会基于 sql_agent 的 documents 重新生成。
             feedback = state.get("validation_feedback", "")
             if feedback:
                 prompt += f"\n\n[Previous answer was rejected. Fix the following issues:]\n{feedback}"
 
             resp = llm.invoke(prompt)
 
+            # [MERGED] 原 answer_validator 节点的职责合并到此处：
+            # - 直接输出 final_answer（不再有 draft_answer → validator 改善 → final_answer 两步）
+            # - iteration 递增（兼容死循环防护的路由检查）
             return {
                 "draft_answer": resp.content,
+                "final_answer": resp.content,
                 "citations": citations,
+                "iteration": state.get("iteration", 0) + 1,
             }
         except Exception as e:
-            return {"draft_answer": f"Answer generation failed: {e}", "error": str(e)}
+            return {
+                "draft_answer": f"Answer generation failed: {e}",
+                "final_answer": f"Answer generation failed: {e}",
+                "error": str(e),
+                "iteration": state.get("iteration", 0) + 1,
+            }
 
     def _node_answer_validator(self, state: AgentState) -> dict:
         try:

@@ -220,18 +220,14 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                 elif node_name == "graphrag_search":
                     payload["result"] = {"context": node_output.get("graphrag_context", "")[:1000]}
                 elif node_name == "answer_generator":
+                    # [MERGED] 原 answer_validator 节点已合并：直接输出 final_answer
                     payload["result"] = {
-                        "answer": node_output.get("draft_answer", ""),
+                        "answer": node_output.get("final_answer", node_output.get("draft_answer", "")),
+                        "final_answer": node_output.get("final_answer", node_output.get("draft_answer", "")),
                         "citations": node_output.get("citations", []),
                     }
                 elif node_name == "chitchat":
                     payload["result"] = {"answer": node_output.get("final_answer", "")}
-                elif node_name == "answer_validator":
-                    validation = node_output.get("validation", {})
-                    payload["result"] = {
-                        "is_valid": validation.get("is_valid", True),
-                        "final_answer": node_output.get("final_answer", ""),
-                    }
 
                 yield f"data: {json.dumps(payload, default=str)}\n\n"
 

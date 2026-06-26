@@ -93,12 +93,11 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
         (step) => {
           steps.push(step)
           if (step.node === 'answer_generator' && step.result?.answer) {
+            // [MERGED] answer_validator 已合并到 answer_generator：直接取最终答案
             answer = step.result.answer as string
             citations = step.result.citations as string[] || []
           } else if (step.node === 'chitchat' && step.result?.answer) {
             answer = step.result.answer as string
-          } else if (step.node === 'answer_validator' && step.result?.final_answer) {
-            answer = step.result.final_answer as string
           }
           if (step.node === 'query_router' && step.result?.query_type) {
             queryType = step.result.query_type as string
