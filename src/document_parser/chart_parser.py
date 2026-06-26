@@ -12,8 +12,8 @@ class ChartParser:
 
     def describe_chart(self, image_path: str | Path, output_dir: str = "/tmp/charts") -> str:
         if self._ocr:
-            self._ocr.parse(str(image_path), output_dir)
-            md = self._ocr.load_markdown(Path(output_dir))
+            result = self._ocr.parse(str(image_path), doc_id=Path(image_path).stem)
+            md = result.get("markdown", "")
             if md:
                 return md
         return self._describe_with_llm(image_path)

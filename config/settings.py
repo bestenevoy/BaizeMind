@@ -42,8 +42,11 @@ class Settings(BaseSettings):
     neo4j_password: str = ""
 
     # PaddleOCR-VL
-    paddleocr_vl_model_dir: str = "./PaddleOCR-VL-1.5/PaddlePaddle/PaddleOCR-VL-1.5"
-    layout_detection_model_dir: str = "./PP-DocLayoutV3/PaddlePaddle/PP-DocLayoutV3"
+    paddleocr_pipeline_version: str = "v1.6"  # "v1.5" | "v1.6"
+    paddle_cache_dir: str = "models"  # PaddleX model cache root (relative to project_root)
+    paddleocr_vl_model_dir: str = ""  # empty = auto-resolve from paddle_cache_dir; or set explicit path
+    layout_detection_model_dir: str = ""  # empty = auto-resolve from paddle_cache_dir; or set explicit path
+    paddleocr_device: str = "auto"  # "auto" | "gpu:0" | "cpu" | "gpu" etc.
     cuda_visible_devices: str = "0"
 
     # Knowledge Graph
@@ -58,6 +61,12 @@ class Settings(BaseSettings):
     # MinerU
     mineru_model_source: str = "modelscope"
     mineru_output_dir: str = "./data/processed"
+
+    # Document parser backend selection
+    # "mineru" -> MinerU CLI (default)
+    # "paddleocr_vl" -> PaddleOCR-VL pipeline
+    parser_backend: str = "mineru"
+    paddleocr_output_dir: str = "./data/processed_paddleocr"
 
     # Chunking
     chunk_size: int = 512

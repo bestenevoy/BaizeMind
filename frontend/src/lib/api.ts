@@ -491,6 +491,7 @@ export const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
   query_rewrite_enabled: { type: 'bool', label: '查询改写开关' },
   query_rewrite_language: { type: 'string', label: '改写语言' },
   query_rewrite_count: { type: 'int', label: '改写 Query 数量', min: 1, max: 8 },
+  parser_backend: { type: 'enum', label: '默认解析器', options: ['mineru', 'paddleocr_vl'] },
 }
 
 export function validateConfigValue(key: string, value: string): string | null {

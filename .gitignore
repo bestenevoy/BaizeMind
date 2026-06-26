@@ -16,8 +16,7 @@ uv.lock
 data/
 
 # Models (downloaded)
-PaddleOCR-VL-1.5/
-PP-DocLayoutV3/
+models/
 
 # Node
 frontend/node_modules/

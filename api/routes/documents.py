@@ -203,7 +203,10 @@ async def get_document_content(doc_id: str):
                     original = f"二进制文件 ({file_ext})"
 
     parsed = ""
+    # 优先 mineru_output_dir，若不存在则尝试 paddleocr_output_dir
     processed_dir = Path(settings.mineru_output_dir) / doc_id
+    if not processed_dir.exists():
+        processed_dir = Path(settings.paddleocr_output_dir) / doc_id
     if processed_dir.exists():
         for f in processed_dir.rglob("*.md"):
             try:
@@ -315,9 +318,8 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
 
     try:
         doc_store.update_document(doc_id, processing_stage="解析文档")
-        from src.document_parser.mineru_parser import MinerUParser
-        parser = MinerUParser()
-        result = parser.parse(file_path, doc_id)
+        from src.document_parser import parse_document
+        result = parse_document(file_path, doc_id)
         markdown = result.get("markdown", "")
 
         doc_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()[:32]

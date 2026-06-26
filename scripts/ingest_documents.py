@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.logging_config import setup_logging
 setup_logging()
 
-from src.document_parser.mineru_parser import MinerUParser
+from src.document_parser import parse_document
 from src.chunker.hierarchical_chunker import HierarchicalChunker
 from src.chunker.table_chunker import TableChunker
 from src.document_parser.table_parser import TableParser
@@ -36,9 +36,8 @@ def ingest(file_path: str, skip_evidence: bool = False):
     print(f"[Ingest] Processing: {path} (doc_id={doc_id})")
 
     # 1. Parse
-    print(f"  [1/{total_steps}] Parsing with MinerU...")
-    parser = MinerUParser()
-    result = parser.parse(path, doc_id)
+    print(f"  [1/{total_steps}] Parsing with {settings.parser_backend}...")
+    result = parse_document(path, doc_id)
     markdown = result.get("markdown", "")
     print(f"  -> Parsed {len(markdown)} chars of markdown")
 

@@ -108,6 +108,13 @@ export function ConfigPage() {
       }
       return m[item.value] || item.value
     }
+    if (item.key === 'parser_backend') {
+      const m: Record<string, string> = {
+        mineru: 'MinerU',
+        paddleocr_vl: 'PaddleOCR-VL',
+      }
+      return m[item.value] || item.value
+    }
     return item.value
   }
 
@@ -440,6 +447,7 @@ export function ConfigPage() {
           <CardContent>
             {(() => {
               const groups: { title: string; keys: string[] }[] = [
+                { title: '文档解析', keys: ['parser_backend'] },
                 { title: '分块', keys: ['chunk_size', 'chunk_overlap'] },
                 { title: '混合检索', keys: ['hybrid_top_k', 'hybrid_dense_weight', 'hybrid_bm25_weight', 'hybrid_rrf_k', 'dense_vector_threshold'] },
                 { title: 'Rerank', keys: ['reranker_method', 'reranker_score_threshold', 'retrieval_over_fetch_multiplier', 'rerank_top_k'] },

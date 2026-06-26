@@ -51,9 +51,15 @@ SETTING_CATEGORIES = [
         ("mineru_output_dir", "输出目录"),
     ]),
     ("PaddleOCR-VL", [
-        ("paddleocr_vl_model_dir", "模型目录"),
+        ("paddleocr_pipeline_version", "Pipeline 版本"),
+        ("paddleocr_vl_model_dir", "VL 模型目录"),
         ("layout_detection_model_dir", "版面检测模型"),
+        ("paddleocr_device", "运行设备"),
+        ("paddleocr_output_dir", "输出目录"),
         ("cuda_visible_devices", "CUDA 设备"),
+    ]),
+    ("文档解析后端", [
+        ("parser_backend", "默认解析器"),
     ]),
     ("分块参数", [
         ("chunk_size", "块大小"),
@@ -111,6 +117,8 @@ async def get_config():
                 val = _mask_secret(str(val))
             if key == "reranker_method":
                 val = {"embedding": "硅基流动 Cross-Encoder", "llm": "LLM 排序", "hybrid": "混合 (Cross-Encoder + LLM)"}.get(str(val), str(val))
+            if key == "parser_backend":
+                val = {"mineru": "MinerU", "paddleocr_vl": "PaddleOCR-VL"}.get(str(val), str(val))
             items.append({"key": key, "label": label, "value": str(val)})
         categories.append({"category": cat_name, "items": items})
 

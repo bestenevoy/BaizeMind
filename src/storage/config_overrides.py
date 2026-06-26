@@ -23,6 +23,7 @@ _EDITABLE_KEYS = {
     "query_rewrite_enabled",
     "query_rewrite_language",
     "query_rewrite_count",
+    "parser_backend",
 }
 
 
