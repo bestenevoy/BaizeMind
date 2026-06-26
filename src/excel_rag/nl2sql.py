@@ -117,6 +117,7 @@ def generate_sql(
             columns=cols_text,
             sample_rows=sample_text,
             max_rows=settings.excel_sql_max_rows,
+            question=question,
         )
         resp = llm.invoke([("system", system), ("human", question)])
 
