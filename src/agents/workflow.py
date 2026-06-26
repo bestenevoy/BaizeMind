@@ -1,4 +1,5 @@
 import operator
+import uuid
 from typing import Annotated, Any, Optional, TypedDict
 
 from langgraph.graph import StateGraph, START, END
@@ -7,6 +8,7 @@ from src.agents.query_router import QueryRouter
 from src.agents.retrieval_agent import RetrievalAgent
 from src.agents.graph_agent import GraphAgent
 from src.agents.answer_validator import AnswerValidator
+from src.logging_config import get_request_id, set_request_id, reset_request_id
 from src.retrieval.lightrag_retriever import LightRAGRetriever
 from src.llm.deepseek import get_chat_llm
 from config.prompts import ANSWER_GENERATION_SYSTEM, CHITCHAT_SYSTEM, QUERY_REWRITE_SYSTEM, SQL_ANSWER_GENERATION_SYSTEM
@@ -15,6 +17,16 @@ from config.settings import settings
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_request_id() -> Optional[Any]:
+    """workflow 入口兜底设置 request_id（脚本/测试调用无 HTTP middleware 场景）。
+
+    返回 Token 用于还原；若已设置（HTTP middleware 路径）则返回 None 不动。
+    """
+    if get_request_id() != "-":
+        return None
+    return set_request_id(uuid.uuid4().hex[:8])
 
 
 
@@ -469,7 +481,14 @@ class AgenticRAGWorkflow:
             "force_sql": force_sql,
             "rerouted_to_sql": False,
         }
-        return self._graph.invoke(state)
+        token = _ensure_request_id()
+        logger.info("workflow.invoke start: query=%r folder=%r tags=%r doc_ids=%r force_sql=%s",
+                    query, folder, tags, doc_ids, force_sql)
+        try:
+            return self._graph.invoke(state)
+        finally:
+            if token is not None:
+                reset_request_id(token)
 
     async def astream(
         self,
@@ -505,8 +524,15 @@ class AgenticRAGWorkflow:
             "force_sql": force_sql,
             "rerouted_to_sql": False,
         }
-        async for event in self._graph.astream(state):
-            yield event
+        token = _ensure_request_id()
+        logger.info("workflow.astream start: query=%r folder=%r tags=%r doc_ids=%r force_sql=%s",
+                    query, folder, tags, doc_ids, force_sql)
+        try:
+            async for event in self._graph.astream(state):
+                yield event
+        finally:
+            if token is not None:
+                reset_request_id(token)
 
     def _node_chitchat(self, state: AgentState) -> dict:
         try:
