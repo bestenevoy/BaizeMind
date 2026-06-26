@@ -650,6 +650,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
 
 function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) {
   const [expandedSheet, setExpandedSheet] = useState<string | null>(null)
+  const [showSchema, setShowSchema] = useState(false)
   const sel = sqlDebug.selected_sheet
   const cols = sqlDebug.sql_result_columns
   const rows = sqlDebug.sql_result_rows
@@ -672,7 +673,8 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
         {err && <span className="text-xs text-destructive">错误: {err}</span>}
       </div>
 
-      {/* 召回 Sheet 列表（含每个 Sheet 的摘要作为 chunk 内容） */}
+      {/* 召回 Sheet 列表（每个 Sheet 含可展开的摘要作为 chunk 内容；
+          selected_sheet 与 recalled 中 selected=true 的条目是同一个，不再重复展示） */}
       <div className="border rounded">
         <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30">
           召回 Sheet ({sqlDebug.recalled_sheets.length})
@@ -692,6 +694,7 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
                     <button
                       onClick={() => setExpandedSheet(expandedSheet === s.meta_id ? null : s.meta_id)}
                       className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+                      title={expandedSheet === s.meta_id ? '收起摘要' : '展开完整摘要'}
                     >
                       {expandedSheet === s.meta_id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                     </button>
@@ -699,7 +702,7 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
                 </div>
                 {/* 默认展示摘要前 1 行，点击按钮展开完整内容 */}
                 {s.summary && (
-                  <p className={`text-xs text-muted-foreground mt-1 pl-6 ${expandedSheet === s.meta_id ? '' : 'line-clamp-1'}`}>
+                  <p className={`text-xs text-muted-foreground mt-1 pl-6 ${expandedSheet === s.meta_id ? 'whitespace-pre-wrap break-all' : 'line-clamp-1'}`}>
                     {s.summary}
                   </p>
                 )}
@@ -709,33 +712,27 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
         )}
       </div>
 
-      {/* 选中 Sheet 的摘要（检索命中的 chunk 内容） */}
-      {sel && sel.summary && (
-        <div className="border rounded">
-          <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30">
-            Sheet 摘要（检索命中的 chunk 内容）
-          </div>
-          <p className="text-xs text-foreground/80 p-2 whitespace-pre-wrap break-all">
-            {sel.summary}
-          </p>
-        </div>
-      )}
-
-      {/* 选中的表结构 */}
+      {/* 选中的表结构（默认折叠，避免占用过多空间；summary 已在召回列表中展示，不重复） */}
       {sel && sel.columns.length > 0 && (
         <div className="border rounded">
-          <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30">
-            表结构 ({sel.columns.length} 列, {sel.row_count} 行)
-          </div>
-          <div className="p-2 space-y-1">
-            {sel.columns.map((c, i) => (
-              <div key={i} className="flex items-center gap-2 text-xs">
-                <span className="font-mono text-foreground">{c.en}</span>
-                <span className="text-muted-foreground">({c.type})</span>
-                {c.cn && <span className="text-muted-foreground">→ {c.cn}</span>}
-              </div>
-            ))}
-          </div>
+          <button
+            onClick={() => setShowSchema(!showSchema)}
+            className="w-full px-2 py-1.5 text-xs font-medium border-b bg-muted/30 flex items-center gap-2 hover:bg-muted/50 transition-colors"
+          >
+            {showSchema ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            <span>表结构 ({sel.columns.length} 列, {sel.row_count} 行)</span>
+          </button>
+          {showSchema && (
+            <div className="p-2 space-y-1">
+              {sel.columns.map((c, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs">
+                  <span className="font-mono text-foreground">{c.en}</span>
+                  <span className="text-muted-foreground">({c.type})</span>
+                  {c.cn && <span className="text-muted-foreground">→ {c.cn}</span>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
