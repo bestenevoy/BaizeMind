@@ -44,6 +44,6 @@ dataset.json
 data/evaluation/dataset.json
 data/evaluation/results/
 data/config_overrides.json
-
+!frontend/src/data
 # Milvus installer
 *.deb
