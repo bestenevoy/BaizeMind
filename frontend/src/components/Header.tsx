@@ -1,4 +1,4 @@
-import { Brain, Home, FileText, Settings, FlaskConical, BarChart3, Network } from 'lucide-react'
+import { Brain, Home, FileText, Settings, FlaskConical, BarChart3, Network, Workflow } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { healthCheck } from '@/lib/api'
@@ -20,6 +20,7 @@ export function Header() {
     { to: '/', label: '主页', icon: Home },
     { to: '/documents', label: '文档', icon: FileText },
     { to: '/graph', label: '图谱', icon: Network },
+    { to: '/workflow', label: '编排', icon: Workflow },
     { to: '/evaluation', label: '评估', icon: BarChart3 },
     { to: '/config', label: '配置', icon: Settings },
     { to: '/tests', label: '测试', icon: FlaskConical },
