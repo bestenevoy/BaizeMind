@@ -74,6 +74,7 @@ async def ask(request: QARequest, current: User = Depends(get_current_user_optio
 NODE_LABELS = {
     "query_router": ("分析问题类型", "问题分类"),
     "chitchat": ("直接对话", "闲聊"),
+    "sql_agent": ("SQL 检索 (NL2SQL)", "SQL 结果"),
     "retrieval_agent": ("RAG 向量/BM25检索", "检索结果"),
     "lightrag_agent": ("LightRAG 图谱导航检索", "检索结果"),
     "graph_agent": ("知识图谱查询", "图谱上下文"),
@@ -169,6 +170,45 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                         "documents": doc_items,
                         "retrieval_path": node_output.get("retrieval_path", ""),
                     }
+                elif node_name == "sql_agent":
+                    # SQL 检索节点：正常路径输出 SQL 结果文档；
+                    # fallback 路径（sql_fallback/sql_fallback_error）输出文本检索结果。
+                    docs = node_output.get("documents", [])
+                    retrieval_path = node_output.get("retrieval_path", "")
+                    retrieval_debug = node_output.get("retrieval_debug", {}) or {}
+                    doc_name_cache: dict[str, str] = {}
+                    doc_items = []
+                    for d in docs[:5]:
+                        did = d.get("doc_id", "?")
+                        if did not in doc_name_cache:
+                            doc = get_document(did)
+                            doc_name_cache[did] = doc["filename"] if doc else did
+                        doc_items.append({
+                            "doc_id": did,
+                            "chunk_id": d.get("chunk_id", "?"),
+                            "text": d.get("text", "")[:300],
+                            "score": d.get("score", 0.0) if isinstance(d.get("score"), (int, float)) else 0.0,
+                            "filename": doc_name_cache[did],
+                            "source_type": d.get("source_type", ""),
+                        })
+                    result = {
+                        "count": len(docs),
+                        "documents": doc_items,
+                        "retrieval_path": retrieval_path,
+                        "search_debug_data": node_output.get("search_debug_data"),
+                    }
+                    # 正常 SQL 路径：补充 SQL 专属字段供前端展示
+                    if retrieval_path == "sql_nl2sql":
+                        result.update({
+                            "sql_query": retrieval_debug.get("sql_query", ""),
+                            "sql_sheet_name": retrieval_debug.get("sql_sheet_name", ""),
+                            "sql_result_row_count": retrieval_debug.get("sql_result_row_count", 0),
+                            "sql_recalled_count": len(retrieval_debug.get("sql_recalled_sheets", [])),
+                            "sql_error": retrieval_debug.get("sql_error", ""),
+                        })
+                    elif retrieval_path.startswith("sql_fallback"):
+                        result["sql_fallback_reason"] = retrieval_debug.get("sql_fallback_reason", "")
+                    payload["result"] = result
                 elif node_name == "graph_agent":
                     graph_context = node_output.get("graph_context", "")
                     payload["result"] = {
