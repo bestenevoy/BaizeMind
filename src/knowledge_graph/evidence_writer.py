@@ -35,11 +35,6 @@ def deactivate_chunk_evidence(chunk_hash: str) -> list[dict]:
     return doc_store.deactivate_evidence_by_chunk(chunk_hash)
 
 
-def reactivate_chunk_evidence(chunk_hash: str) -> list[dict]:
-    """Reactivate evidence when chunk ref_count goes 0→1."""
-    return doc_store.reactivate_evidence_by_chunk(chunk_hash)
-
-
 def get_support_count(
     affected_type: str,
     entity_key: Optional[str] = None,

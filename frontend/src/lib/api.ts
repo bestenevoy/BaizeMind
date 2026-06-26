@@ -68,6 +68,7 @@ export interface DocumentInfo {
   error?: string
   created_at: string
   updated_at: string
+  file_type: string
 }
 
 export interface FolderInfo {
@@ -149,11 +150,12 @@ export async function getDocumentStatus(docId: string): Promise<DocumentStatus> 
   return res.json()
 }
 
-export async function listDocuments(folder?: string, tags?: string[], status?: string): Promise<DocumentInfo[]> {
+export async function listDocuments(folder?: string, tags?: string[], status?: string, fileType?: string): Promise<DocumentInfo[]> {
   const params = new URLSearchParams()
   if (folder) params.set('folder', folder)
   if (tags?.length) params.set('tags', tags.join(','))
   if (status) params.set('status', status)
+  if (fileType) params.set('file_type', fileType)
   const res = await authFetch(`${API_BASE}/documents/list?${params}`)
   if (!res.ok) throw new Error(`List failed: ${res.statusText}`)
   return res.json()
@@ -445,8 +447,47 @@ export interface PerQueryStage {
   dense_count: number
 }
 
+export interface SqlRecalledSheet {
+  meta_id: string
+  doc_id: string
+  sheet_name: string
+  score: number
+  summary: string
+  selected: boolean
+}
+
+export interface SqlDebugSelectedSheet {
+  meta_id: string
+  doc_id: string
+  sheet_name: string
+  score: number
+  columns: Array<{ cn?: string; en: string; type: string }>
+  row_count: number
+}
+
+export interface SqlDebugAttempt {
+  attempt: number
+  sql?: string
+  error?: string
+  valid?: boolean
+  row_count?: number
+}
+
+export interface SqlDebug {
+  recalled_sheets: SqlRecalledSheet[]
+  selected_sheet: SqlDebugSelectedSheet | null
+  sql: string
+  sql_result_columns: string[]
+  sql_result_rows: unknown[][]
+  sql_result_row_count: number
+  attempts: SqlDebugAttempt[]
+  error: string
+  fallback_reason: string
+}
+
 export interface SearchDebugResponse {
   query: string
+  query_type?: string  // "sql_query" | "simple_fact" | "multi_hop" | ...
   multi_query?: boolean
   query_count?: number
   dense_union_count?: number
@@ -478,14 +519,29 @@ export interface SearchDebugResponse {
   final_count: number
   filtered_out_by_rerank_threshold: number
   message?: string
+  sql_debug?: SqlDebug  // 仅 query_type == "sql_query" 时存在
 }
 
-export async function searchDebug(query: string, folder?: string | null, tags?: string[], docId?: string | null, topK?: number): Promise<SearchDebugResponse> {
+export async function searchDebug(
+  query: string,
+  folder?: string | null,
+  tags?: string[],
+  docId?: string | null,
+  topK?: number,
+  forcePath?: 'auto' | 'doc' | 'sql',
+): Promise<SearchDebugResponse> {
   const res = await authFetch(`${API_BASE}/system/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     // top_k 不传时后端用 settings.hybrid_top_k（可被 runtime 页编辑覆盖）
-    body: JSON.stringify({ query, folder: folder || undefined, tags: tags?.length ? tags : undefined, doc_id: docId || undefined, ...(topK ? { top_k: topK } : {}) }),
+    body: JSON.stringify({
+      query,
+      folder: folder || undefined,
+      tags: tags?.length ? tags : undefined,
+      doc_id: docId || undefined,
+      ...(topK ? { top_k: topK } : {}),
+      force_path: forcePath || 'auto',
+    }),
   })
   if (!res.ok) throw new Error(`Search debug failed: ${res.statusText}`)
   return res.json()

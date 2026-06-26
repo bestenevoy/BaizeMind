@@ -28,6 +28,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   const [saving, setSaving] = useState(false)
   const [showAll, setShowAll] = useState(true)
   const [queryFilter, setQueryFilter] = useState<number>(-1) // -1=汇总, 0..N-1=按改写 query 筛选
+  const [forcePath, setForcePath] = useState<'auto' | 'doc' | 'sql'>('auto')
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Check for pre-fetched data from chat (sessionStorage)
@@ -76,8 +77,12 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
     setResultTab('rewrite')
     setQueryFilter(-1)
     try {
-      const res = await searchDebug(searchQuery, folder, tags, docId)
+      const res = await searchDebug(searchQuery, folder, tags, docId, undefined, forcePath)
       setResult(res)
+      // 切到 SQL 路径时重置 tab
+      if (res.query_type === 'sql_query') {
+        setResultTab('sql')
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
@@ -183,6 +188,16 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
               className="flex-1"
               maxLength={maxLength}
             />
+            <select
+              value={forcePath}
+              onChange={(e) => setForcePath(e.target.value as 'auto' | 'doc' | 'sql')}
+              className="text-xs border rounded px-1.5 py-1 bg-background"
+              title="强制检索路径：auto=按 query_type 自动判断；doc=文本 RAG；sql=NL2SQL"
+            >
+              <option value="auto">自动</option>
+              <option value="doc">文本RAG</option>
+              <option value="sql">NL2SQL</option>
+            </select>
             <Button
               onClick={() => handleSearch()}
               disabled={loading || !query.trim() || (!!maxLength && query.length > maxLength)}
@@ -278,13 +293,15 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
 
               <div className="flex-1 min-h-0 flex flex-col">
                 <div className="flex gap-0 border-b flex-none">
-                  {[
+                  {(result.query_type === 'sql_query' ? [
+                    { key: 'sql', label: `NL2SQL ${result.sql_debug ? `(${result.sql_debug.sql_result_row_count}行)` : ''}` },
+                  ] : [
                     { key: 'rewrite', label: '查询改写' },
                     { key: 'rrf', label: `RRF融合 (${result.stages.rrf.length})` },
                     { key: 'rerank', label: `Reranker (${result.stages.rerank.length})` },
                     { key: 'dense', label: `Dense向量 (${denseUnionCount})` },
                     { key: 'bm25', label: `BM25 (${result.stages.bm25_top5.length})` },
-                  ].map(t => (
+                  ]).map(t => (
                     <button
                       key={t.key}
                       onClick={() => setResultTab(t.key)}
@@ -567,6 +584,9 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
                       <StageMini label="" items={result.stages.bm25_top5} scoreField="score" expandedPreviews={expandedPreviews} onTogglePreview={togglePreview} prefix="bm25" />
                     </div>
                   )}
+                  {resultTab === 'sql' && result.query_type === 'sql_query' && result.sql_debug && (
+                    <SqlDebugView sqlDebug={result.sql_debug} />
+                  )}
                 </div>
               </div>
             </div>
@@ -574,6 +594,160 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
         </div>
       </div>
     </Card>
+  )
+}
+
+function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) {
+  const [expandedSheet, setExpandedSheet] = useState<string | null>(null)
+  const sel = sqlDebug.selected_sheet
+  const cols = sqlDebug.sql_result_columns
+  const rows = sqlDebug.sql_result_rows
+  const err = sqlDebug.error
+
+  return (
+    <div className="space-y-3 text-sm">
+      {/* 检索路径标识 */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge variant="outline" className="text-xs bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300 border-violet-300">
+          NL2SQL 检索路径
+        </Badge>
+        {sel ? (
+          <span className="text-xs text-muted-foreground">
+            命中 Sheet: <span className="font-mono text-foreground">{sel.sheet_name}</span> · score={sel.score.toFixed(3)}
+          </span>
+        ) : (
+          <span className="text-xs text-destructive">未命中 Sheet（fallback）</span>
+        )}
+        {err && <span className="text-xs text-destructive">错误: {err}</span>}
+      </div>
+
+      {/* 召回 Sheet 列表 */}
+      <div className="border rounded">
+        <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30">
+          召回 Sheet ({sqlDebug.recalled_sheets.length})
+        </div>
+        {sqlDebug.recalled_sheets.length === 0 ? (
+          <p className="text-xs text-muted-foreground p-2">无召回（库中无 Excel 或主题不匹配）</p>
+        ) : (
+          <div className="divide-y">
+            {sqlDebug.recalled_sheets.map((s, i) => (
+              <div key={s.meta_id || i} className="p-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono">#{i + 1}</span>
+                  <span className="text-xs font-mono">{s.sheet_name}</span>
+                  <Badge variant="secondary" className="text-[10px] font-mono">{s.score.toFixed(3)}</Badge>
+                  {s.selected && <Badge variant="default" className="text-[10px]">已选</Badge>}
+                  <button
+                    onClick={() => setExpandedSheet(expandedSheet === s.meta_id ? null : s.meta_id)}
+                    className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    {expandedSheet === s.meta_id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                  </button>
+                </div>
+                {expandedSheet === s.meta_id && s.summary && (
+                  <p className="text-xs text-muted-foreground mt-1 pl-6">{s.summary}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 选中的表结构 */}
+      {sel && sel.columns.length > 0 && (
+        <div className="border rounded">
+          <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30">
+            表结构 ({sel.columns.length} 列, {sel.row_count} 行)
+          </div>
+          <div className="p-2 space-y-1">
+            {sel.columns.map((c, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs">
+                <span className="font-mono text-foreground">{c.en}</span>
+                <span className="text-muted-foreground">({c.type})</span>
+                {c.cn && <span className="text-muted-foreground">→ {c.cn}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 生成的 SQL */}
+      {sqlDebug.sql && (
+        <div className="border rounded">
+          <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30 flex items-center gap-2">
+            <span>执行的 SQL</span>
+            {sqlDebug.attempts.length > 1 && (
+              <Badge variant="outline" className="text-[10px]">重试 {sqlDebug.attempts.length} 次</Badge>
+            )}
+          </div>
+          <pre className="text-xs font-mono p-2 overflow-x-auto whitespace-pre-wrap break-all bg-muted/20">
+            {sqlDebug.sql}
+          </pre>
+        </div>
+      )}
+
+      {/* 重试历史 */}
+      {sqlDebug.attempts.length > 1 && (
+        <div className="border rounded">
+          <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30">重试历史</div>
+          <div className="p-2 space-y-1">
+            {sqlDebug.attempts.map((a, i) => (
+              <div key={i} className="text-xs">
+                <span className="font-mono">第 {a.attempt} 次:</span>
+                {a.error ? <span className="text-destructive ml-1">{a.error}</span> : <span className="text-green-600 ml-1">成功 (row_count={a.row_count ?? 0})</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 执行结果 */}
+      {sqlDebug.sql && (
+        <div className="border rounded">
+          <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30">
+            执行结果 ({sqlDebug.sql_result_row_count} 行)
+          </div>
+          {rows.length === 0 ? (
+            <p className="text-xs text-muted-foreground p-2">空结果</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/30">
+                  <tr>
+                    <th className="px-2 py-1 text-left font-mono">#</th>
+                    {cols.map((c, i) => (
+                      <th key={i} className="px-2 py-1 text-left font-mono">{c}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, 50).map((row, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="px-2 py-1 text-muted-foreground font-mono">{i + 1}</td>
+                      {Array.isArray(row) ? row.map((cell, j) => (
+                        <td key={j} className="px-2 py-1 font-mono">{String(cell ?? '')}</td>
+                      )) : <td className="px-2 py-1">{String(row ?? '')}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {sqlDebug.sql_result_row_count > 50 && (
+                <p className="text-xs text-muted-foreground p-2">
+                  ... 共 {sqlDebug.sql_result_row_count} 行，仅显示前 50 行
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* SQL 生成失败提示 */}
+      {!sqlDebug.sql && err && (
+        <div className="border border-destructive/30 rounded p-2 text-xs text-destructive">
+          SQL 生成失败: {err}
+        </div>
+      )}
+    </div>
   )
 }
 

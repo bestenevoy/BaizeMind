@@ -15,14 +15,18 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Run evaluation on the QA dataset")
     parser.add_argument("--max-samples", type=int, default=None, help="Maximum number of samples to evaluate")
-    parser.add_argument("--dataset", type=str, default=None, help="Path to custom dataset JSON")
+    parser.add_argument("--dataset", type=str, default=None, help="Path to custom doc dataset JSON (overrides default dataset.json)")
+    parser.add_argument(
+        "--scope", choices=["all", "doc", "sql"], default="all",
+        help="评测范围: all=合并文档+SQL评测集; doc=仅文档RAG; sql=仅SQL/Excel",
+    )
     args = parser.parse_args()
 
     runner = EvalRunner()
     if args.dataset:
         runner.dataset.dataset_path = Path(args.dataset)
 
-    runner.run(max_samples=args.max_samples)
+    runner.run(max_samples=args.max_samples, scope=args.scope)
 
 
 if __name__ == "__main__":

@@ -1,117 +1,56 @@
-"""Chunk Manager — ChunkContent deduplication, DocChunkRef management, Mark-And-Sweep updates."""
+"""Chunk Manager — chunk creation and evidence sync task building.
+
+复用/dedup/ref_count 逻辑已移除：每个文档拥有独立的 chunk，删除文档时直接清理，
+不再跨文档共享 ChunkContent，也不再做 mark-and-sweep 引用计数。
+chunk_hash 由 (text, doc_id) 共同决定，保证文档间不冲突。
+"""
 
 import hashlib
-from typing import Optional
 
 from src.storage import doc_store
 
 
-def compute_chunk_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+def compute_chunk_hash(text: str, doc_id: str = "") -> str:
+    """计算 chunk_hash。包含 doc_id 以保证文档间唯一（不再跨文档复用）。
 
-
-def create_or_reuse_chunk(text: str, milvus_id: str = "") -> tuple[str, bool]:
-    """Get or create a ChunkContent entry.
-
-    Returns: (chunk_hash, is_new)
+    旧数据（doc_id 为空）的 hash 与历史一致；新数据强制传入 doc_id。
     """
-    chunk_hash = compute_chunk_hash(text)
-    existing = doc_store.get_chunk_content(chunk_hash)
-
-    if existing:
-        is_new = bool(not existing.get("milvus_id"))
-        return chunk_hash, is_new
-
-    doc_store.create_chunk_content(chunk_hash, text, milvus_id)
-    return chunk_hash, True
+    payload = f"{doc_id}\x1f{text}" if doc_id else text
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
-def update_document_refs(
-    doc_id: str,
-    doc_version: int,
-    chunks: list[dict],
-) -> dict:
-    """Update DocChunkRef entries for a document using Mark-And-Sweep.
+def create_chunk(text: str, doc_id: str, milvus_id: str = "") -> str:
+    """创建一个新的 ChunkContent（不再查重复用）。
 
-    Each chunk dict must have: text, chunk_index.
-    Returns: {new_chunk_hashes, stale_chunk_hashes, zero_ref_hashes, restored_hashes}
+    返回 chunk_hash。每次调用都 INSERT OR REPLACE。
     """
-    # Step 1: Mark all current refs as stale
-    doc_store.mark_doc_chunk_refs_stale(doc_id)
-
-    new_chunk_hashes = []
-    restored_hashes = []
-
-    # Step 2: Process each chunk
-    for chunk in chunks:
-        text = chunk["text"]
-        chunk_hash = compute_chunk_hash(text)
-        chunk_index = chunk.get("chunk_index", chunk.get("index", 0))
-
-        # Check if already referenced by this doc (Case 1)
-        existing_refs = doc_store.get_doc_chunk_refs(doc_id, doc_version)
-        already_refd = any(r["chunk_hash"] == chunk_hash for r in existing_refs)
-
-        if already_refd:
-            doc_store.unmark_doc_chunk_ref(doc_id, chunk_hash, chunk_index)
-        else:
-            content = doc_store.get_chunk_content(chunk_hash)
-            if content:
-                ref_info = doc_store.update_chunk_ref_count(chunk_hash)
-                if ref_info.get("was_zero"):
-                    restored_hashes.append(chunk_hash)
-                doc_store.create_doc_chunk_ref(doc_id, doc_version, chunk_hash, chunk_index)
-            else:
-                doc_store.create_doc_chunk_ref(doc_id, doc_version, chunk_hash, chunk_index)
-                new_chunk_hashes.append(chunk_hash)
-
-    # Step 3: Deactivate stale refs
-    stale_hashes = doc_store.deactivate_stale_doc_chunk_refs(doc_id)
-
-    # Step 4: Sync ref_count for all affected chunks
-    for sh in stale_hashes:
-        doc_store.update_chunk_ref_count(sh)
-    for ch in chunks:
-        chunk_hash = compute_chunk_hash(ch["text"])
-        doc_store.update_chunk_ref_count(chunk_hash)
-
-    # Step 5: Detect zero-ref chunks among stale hashes
-    zero_ref_hashes = []
-    for sh in stale_hashes:
-        content = doc_store.get_chunk_content(sh)
-        if content and content.get("ref_count", 0) == 0:
-            zero_ref_hashes.append(sh)
-
-    return {
-        "new_chunk_hashes": new_chunk_hashes,
-        "stale_chunk_hashes": stale_hashes,
-        "zero_ref_hashes": zero_ref_hashes,
-        "restored_hashes": restored_hashes,
-    }
+    chunk_hash = compute_chunk_hash(text, doc_id)
+    doc_store.create_chunk_content(chunk_hash, text, doc_id=doc_id, milvus_id=milvus_id)
+    return chunk_hash
 
 
-def process_chunk_ref_zero_to_one(chunk_hash: str) -> list[dict]:
-    """Handle a chunk whose ref_count is >= 1. Reactivates evidence if ref_count > 0.
-    Safe to call even if already > 0 (idempotent).
+def delete_document_chunks(doc_id: str) -> dict:
+    """删除文档的所有 chunk 及其关联 evidence，返回受影响的 evidence keys 供 Neo4j 同步。
+
+    流程：
+      1. 查出该文档所有 chunk_hash
+      2. 逐个 deactivate 关联 evidence（收集 affected_keys）
+      3. 物理删除 chunk_content 记录
     """
-    ref_info = doc_store.update_chunk_ref_count(chunk_hash)
-    if ref_info.get("ref_count", 0) <= 0:
-        return []
-    return doc_store.reactivate_evidence_by_chunk(chunk_hash)
+    chunk_hashes = doc_store.get_chunk_hashes_by_doc(doc_id)
+    all_affected: dict[str, set[str]] = {}
 
+    for ch in chunk_hashes:
+        affected = doc_store.deactivate_evidence_by_chunk(ch)
+        for item in affected:
+            t = item["affected_type"]
+            k = item["affected_key"]
+            if t not in all_affected:
+                all_affected[t] = set()
+            all_affected[t].add(k)
 
-def process_chunk_ref_one_to_zero(chunk_hash: str) -> list[dict]:
-    """Handle a chunk whose ref_count is 0. Deactivates evidence and ChunkContent.
-    Safe to call even if already zero (idempotent on evidence deactivation).
-    Returns affected keys for Neo4j sync.
-    """
-    ref_info = doc_store.update_chunk_ref_count(chunk_hash)
-    # Only deactivate if ref_count is actually 0 (not just "became zero" — handles double-call)
-    if ref_info.get("ref_count", 1) > 0:
-        return []
-    affected = doc_store.deactivate_evidence_by_chunk(chunk_hash)
-    doc_store.deactivate_chunk_content(chunk_hash)
-    return affected
+    doc_store.delete_chunk_content_by_doc(doc_id)
+    return {"deleted_count": len(chunk_hashes), "affected_keys": all_affected}
 
 
 def build_sync_tasks(

@@ -52,7 +52,6 @@ class Settings(BaseSettings):
     # Knowledge Graph
     graph_sync_max_retries: int = 3
     graph_sync_batch_size: int = 50
-    chunk_gc_ttl_days: int = 30  # days before inactive chunks are physically deleted
 
     # Microsoft GraphRAG
     graphrag_root_dir: str = "./data/graphrag"
@@ -112,6 +111,15 @@ class Settings(BaseSettings):
 
     # Ingest control
     ingest_skip_evidence: bool = False  # Skip evidence extraction + KG sync for fast chunk/index testing
+
+    # Excel RAG (RAG + NL2SQL hybrid for standardized Excel reports)
+    excel_rag_enabled: bool = True  # Detect .xlsx and route to Excel pipeline
+    excel_milvus_collection: str = "excel_sheets"  # Milvus collection for sheet summary vectors
+    excel_recall_top_k: int = 3  # Top-K sheets recalled for multi-table selection
+    excel_sql_max_rows: int = 500  # Row cap injected into generated SQL
+    excel_sql_timeout_ms: int = 5000  # SQLite query execution timeout
+    excel_sql_max_retries: int = 2  # Auto-correction rounds on SQL execution failure
+    excel_sample_rows_for_inference: int = 200  # Rows scanned for type/stat inference
 
     # Cache (generic LLM-result cache, e.g. query rewrite)
     cache_enabled: bool = True

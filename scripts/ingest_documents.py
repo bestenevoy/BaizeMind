@@ -18,7 +18,7 @@ from src.embeddings.bge_m3 import BGEM3Embedding
 from src.retrieval.vector_retriever import MilvusVectorRetriever
 from src.retrieval.bm25_retriever import BM25Retriever
 from src.knowledge_graph.entity_extractor import EntityExtractor
-from src.knowledge_graph.chunk_manager import create_or_reuse_chunk, build_sync_tasks
+from src.knowledge_graph.chunk_manager import create_chunk, build_sync_tasks
 from src.knowledge_graph.evidence_writer import write_evidence
 from src.knowledge_graph.graph_sync_worker import process_pending_tasks
 from src.storage import doc_store
@@ -53,19 +53,17 @@ def ingest(file_path: str, skip_evidence: bool = False):
     chunks = [c for c in chunks if c["text"].strip()]
     print(f"  -> Created {len(chunks)} chunks ({len(table_chunks)} table chunks)")
 
-    # 3. Chunk dedup & ref management
-    print(f"  [3/{total_steps}] Chunk dedup & ref management...")
+    # 3. Chunk creation (no dedup/reuse — each doc owns its chunks)
+    print(f"  [3/{total_steps}] Creating chunks...")
     new_chunks = []
 
     for i, chunk in enumerate(chunks):
-        ch, is_new = create_or_reuse_chunk(chunk["text"])
+        ch = create_chunk(chunk["text"], doc_id=doc_id)
         chunk["chunk_hash"] = ch
-        doc_store.create_doc_chunk_ref(doc_id, doc_version, ch, i)
-        doc_store.update_chunk_ref_count(ch)
-        if is_new:
-            new_chunks.append(chunk)
+        chunk["chunk_id"] = chunk.get("chunk_id") or f"{doc_id}_{i:04d}_{ch[:8]}"
+        new_chunks.append(chunk)
 
-    print(f"  -> {len(new_chunks)} new chunks need embedding")
+    print(f"  -> {len(new_chunks)} chunks created (need embedding)")
 
     # 4. Embed & Index in Milvus + BM25
     if new_chunks:
@@ -79,14 +77,8 @@ def ingest(file_path: str, skip_evidence: bool = False):
         vector_retriever.insert(new_chunks, embeddings)
         print(f"  -> Inserted {len(new_chunks)} vectors")
 
-        conn = doc_store._get_conn()
         for nc in new_chunks:
-            conn.execute(
-                "UPDATE chunk_content SET milvus_id = ? WHERE chunk_hash = ?",
-                (nc.get("chunk_id", ""), nc["chunk_hash"]),
-            )
-        conn.commit()
-        conn.close()
+            doc_store.update_chunk_milvus_id(nc["chunk_hash"], nc.get("chunk_id", ""))
 
         bm25 = BM25Retriever()
         bm25.load()
@@ -94,7 +86,7 @@ def ingest(file_path: str, skip_evidence: bool = False):
         bm25.save()
         print("  -> BM25 index saved")
     else:
-        print(f"  [4/{total_steps}] No new chunks — skipped embedding")
+        print(f"  [4/{total_steps}] No chunks — skipped embedding")
 
     if skip_evidence:
         print("  [SKIP] Evidence extraction + KG sync disabled (--skip-evidence)")

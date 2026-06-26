@@ -9,7 +9,7 @@ from src.agents.graph_agent import GraphAgent
 from src.agents.answer_validator import AnswerValidator
 from src.retrieval.lightrag_retriever import LightRAGRetriever
 from src.llm.deepseek import get_chat_llm
-from config.prompts import ANSWER_GENERATION_SYSTEM, CHITCHAT_SYSTEM, QUERY_REWRITE_SYSTEM
+from config.prompts import ANSWER_GENERATION_SYSTEM, CHITCHAT_SYSTEM, QUERY_REWRITE_SYSTEM, SQL_ANSWER_GENERATION_SYSTEM
 from config.settings import settings
 
 import logging
@@ -86,12 +86,74 @@ class AgentState(TypedDict):
 # Original routing: "holistic" → "graphrag_search"
 # The graphrag_search node and _route_after_graphrag edge remain in the graph
 # for compilation integrity but are unreachable.
+def _format_sql_result_as_document(
+    sheet_meta: dict,
+    sql: str,
+    sql_result: dict,
+    err: str,
+    score: float,
+) -> dict:
+    """把 SQL 检索结果格式化为一个 document，注入 documents 列表。
+
+    answer_generator / validator 拿到这个 document 的 text 字段即可生成回答，
+    与文本 RAG 的 chunk document 同构，便于统一评估与引用溯源。
+    """
+    columns = sheet_meta.get("columns", []) or []
+    schema_lines = []
+    for c in columns:
+        if isinstance(c, dict):
+            cn = c.get("cn", "")
+            en = c.get("en", "")
+            ctype = c.get("type", "TEXT")
+            schema_lines.append(f"- {en} ({ctype}): {cn}")
+    schema_text = "\n".join(schema_lines) if schema_lines else "(no schema)"
+
+    # 结果行格式化
+    result_cols = sql_result.get("columns", []) if isinstance(sql_result, dict) else []
+    result_rows = sql_result.get("rows", []) if isinstance(sql_result, dict) else []
+    row_count = sql_result.get("row_count", len(result_rows)) if isinstance(sql_result, dict) else 0
+    if result_rows:
+        preview = []
+        for i, row in enumerate(result_rows[:50], 1):
+            parts = [f"{col}={val}" for col, val in zip(result_cols, row)]
+            preview.append(f"  {i}. {', '.join(parts)}")
+        result_text = "\n".join(preview)
+        if row_count > 50:
+            result_text += f"\n  ... ({row_count} rows total, showing first 50)"
+    else:
+        result_text = "(empty result)"
+
+    err_note = f"\n[SQL 执行告警] {err}" if err else ""
+
+    text = (
+        f"[数据源: Excel Sheet \"{sheet_meta.get('sheet_name', '')}\"]\n"
+        f"[表结构]\n{schema_text}\n\n"
+        f"[执行的 SQL]\n{sql}\n\n"
+        f"[查询结果] ({row_count} 行)\n{result_text}{err_note}"
+    )
+
+    return {
+        "doc_id": sheet_meta.get("doc_id", ""),
+        "chunk_id": sheet_meta.get("meta_id", ""),  # 用 sheet meta_id 作为检索单元标识
+        "text": text,
+        "score": score,
+        "source_type": "sql",  # 标记来源类型，便于评估/前端区分
+        "sheet_meta_id": sheet_meta.get("meta_id", ""),
+        "sheet_name": sheet_meta.get("sheet_name", ""),
+        "sql": sql,
+        "sql_result_columns": result_cols,
+        "sql_result_row_count": row_count,
+    }
+
+
 def _route_by_query_type(state: AgentState) -> str:
     query_type = state.get("query_type", "simple_fact")
     graph_eligible = state.get("graph_eligible", False)
 
     if query_type == "chitchat":
         return "chitchat"
+    if query_type == "sql_query":
+        return "sql_agent"
     if query_type == "holistic":
         return "retrieval_agent"  # DISABLED: was "graphrag_search"
 
@@ -246,6 +308,7 @@ class AgenticRAGWorkflow:
 
         builder.add_node("query_router", self._node_query_router)
         builder.add_node("chitchat", self._node_chitchat)
+        builder.add_node("sql_agent", self._node_sql_agent)
         builder.add_node("retrieval_agent", self._node_retrieval_agent)
         builder.add_node("graph_agent", self._node_graph_agent)
         builder.add_node("lightrag_agent", self._node_lightrag_agent)
@@ -257,6 +320,8 @@ class AgenticRAGWorkflow:
         builder.add_edge(START, "query_router")
         builder.add_conditional_edges("query_router", _route_by_query_type)
         builder.add_edge("chitchat", END)
+        # sql_agent 是纯检索节点（NL2SQL+执行），结果转 documents 后交给统一生成链路
+        builder.add_edge("sql_agent", "answer_generator")
         builder.add_conditional_edges("graph_agent", _route_for_multi_hop)
         # [DISABLED] GraphRAG edge — retained for graph compilation
         builder.add_conditional_edges("graphrag_search", _route_after_graphrag)
@@ -328,6 +393,74 @@ class AgenticRAGWorkflow:
             return {"final_answer": resp.content, "draft_answer": resp.content}
         except Exception as e:
             return {"final_answer": f"Chat failed: {e}", "error": str(e)}
+
+    def _node_sql_agent(self, state: AgentState) -> dict:
+        """SQL 检索节点（纯检索阶段）：向量召回 Sheet → 多表选择 → NL2SQL → 执行（含重试）。
+
+        不生成最终回答。把执行结果格式化为 documents 注入 state，
+        交给 answer_generator → validator 统一生成链路。
+        若未召回任何结构化数据，自动 fallback 到 retrieval_agent（文本 RAG）。
+        """
+        try:
+            from src.excel_rag.qa import ExcelQA
+            qa = ExcelQA()
+            r = qa.retrieve(
+                state["query"],
+                folder=state.get("folder") or None,
+                tags=state.get("tags") or None,
+            )
+
+            # 没有任何结构化数据或召回失败 → 降级到文本检索路径
+            if r.get("error") in ("no_sheets", "no_relevant_sheet"):
+                logger.info("sql_agent fallback to retrieval_agent: %s", r["error"])
+                retrieval_result = self._node_retrieval_agent(state)
+                retrieval_result["retrieval_path"] = "sql_fallback"
+                # 补充检索调试信息，便于评估分析 fallback 情况
+                retrieval_result["retrieval_debug"] = {
+                    **retrieval_result.get("retrieval_debug", {}),
+                    "sql_fallback_reason": r["error"],
+                    "sql_recalled_sheets": r.get("recalled_sheets", []),
+                }
+                return retrieval_result
+
+            selected = r["selected_sheet"]
+            sheet_meta = selected["sheet_meta"]
+            sql = r["sql"]
+            sql_result = r["sql_result"] or {}
+            recalled = r["recalled_sheets"]
+            attempts = r["attempts"]
+            err = r["error"]
+
+            # 把 SQL 执行结果格式化为一个 document，注入 documents
+            documents = [_format_sql_result_as_document(
+                sheet_meta=sheet_meta,
+                sql=sql,
+                sql_result=sql_result,
+                err=err,
+                score=selected.get("score", 0.0),
+            )]
+
+            return {
+                "documents": documents,
+                "retrieval_path": "sql_nl2sql",
+                "retrieval_debug": {
+                    "sql_query": sql,
+                    "sql_sheet_meta_id": selected["meta_id"],
+                    "sql_sheet_name": sheet_meta["sheet_name"],
+                    "sql_recalled_sheets": recalled,
+                    "sql_attempts": attempts,
+                    "sql_error": err,
+                    "sql_result_columns": sql_result.get("columns", []) if isinstance(sql_result, dict) else [],
+                    "sql_result_row_count": sql_result.get("row_count", 0) if isinstance(sql_result, dict) else 0,
+                },
+            }
+        except Exception as e:
+            logger.error("sql_agent failed: %s", e, exc_info=True)
+            # 任何异常都降级到文本检索，保证不阻断主流程
+            retrieval_result = self._node_retrieval_agent(state)
+            retrieval_result["retrieval_path"] = "sql_fallback_error"
+            retrieval_result["error"] = str(e)
+            return retrieval_result
 
     def _node_query_router(self, state: AgentState) -> dict:
         result = self.query_router.classify(state["query"])
@@ -581,6 +714,7 @@ class AgenticRAGWorkflow:
         try:
             context = ""
             citations = []
+            retrieval_path = state.get("retrieval_path", "")
 
             if state.get("graphrag_context"):
                 context = state["graphrag_context"]
@@ -603,7 +737,6 @@ class AgenticRAGWorkflow:
                 }
 
             # Append retrieval path for observability (not visible to LLM but stored in state)
-            retrieval_path = state.get("retrieval_path", "")
             if retrieval_path:
                 context = f"[Retrieval: {retrieval_path}]\n\n{context}"
 
@@ -614,10 +747,20 @@ class AgenticRAGWorkflow:
             if len(context) > max_ctx:
                 cut = context.rfind("\n\n---\n\n", 0, max_ctx)
                 context = context[:cut] if cut > 0 else context[:max_ctx]
-            prompt = ANSWER_GENERATION_SYSTEM.format(
-                context=context, question=state["query"],
-                language=settings.query_rewrite_language,
-            )
+
+            # 按 retrieval_path 分支选择 prompt：
+            # - sql_nl2sql: SQL 执行结果，用表格化 prompt
+            # - 其他: 文本 RAG 默认 prompt
+            if retrieval_path == "sql_nl2sql":
+                prompt = SQL_ANSWER_GENERATION_SYSTEM.format(
+                    context=context, question=state["query"],
+                    language=settings.query_rewrite_language,
+                )
+            else:
+                prompt = ANSWER_GENERATION_SYSTEM.format(
+                    context=context, question=state["query"],
+                    language=settings.query_rewrite_language,
+                )
 
             # Incorporate validation feedback on retry
             feedback = state.get("validation_feedback", "")

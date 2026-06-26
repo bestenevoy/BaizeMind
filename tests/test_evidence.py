@@ -8,7 +8,7 @@ from src.knowledge_graph.evidence import (
     collect_affected_keys,
 )
 from src.knowledge_graph.chunk_manager import (
-    compute_chunk_hash, create_or_reuse_chunk, build_sync_tasks,
+    compute_chunk_hash, build_sync_tasks,
 )
 
 

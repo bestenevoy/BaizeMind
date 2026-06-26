@@ -4,8 +4,8 @@ import pytest
 from datetime import datetime
 
 from src.knowledge_graph.chunk_manager import (
-    compute_chunk_hash, create_or_reuse_chunk, update_document_refs,
-    build_sync_tasks, process_chunk_ref_one_to_zero, process_chunk_ref_zero_to_one,
+    compute_chunk_hash, create_chunk, delete_document_chunks,
+    build_sync_tasks,
 )
 from src.knowledge_graph.evidence import (
     EntityEvidence, FactEvidence, EntityAttributeEvidence,
@@ -20,7 +20,6 @@ from src.storage import doc_store
 def clean_evidence_tables():
     conn = doc_store._get_conn()
     conn.execute("DELETE FROM evidence")
-    conn.execute("DELETE FROM doc_chunk_ref")
     conn.execute("DELETE FROM chunk_content")
     conn.execute("DELETE FROM graph_sync_task")
     conn.commit()
@@ -28,92 +27,70 @@ def clean_evidence_tables():
     yield
 
 
-class TestChunkContentDedup:
+class TestChunkContentPerDoc:
+    """每个文档独立拥有 chunk，不再跨文档 dedup。"""
+
     def test_create_new_chunk(self):
         text = "马云于1999年在杭州创立阿里巴巴。"
-        chunk_hash, is_new = create_or_reuse_chunk(text)
-        assert is_new is True
+        doc_id = "doc_001"
+        chunk_hash = create_chunk(text, doc_id=doc_id)
         content = doc_store.get_chunk_content(chunk_hash)
         assert content is not None
         assert content["text"] == text
         assert content["active"] == 1
+        assert content["doc_id"] == doc_id
 
-    def test_reuse_existing_chunk(self):
+    def test_same_text_different_doc(self):
+        """相同文本在不同文档中各自创建独立的 chunk。"""
         text = "阿里巴巴是中国最大的电商平台。"
-        h1, is_new1 = create_or_reuse_chunk(text)
-        h2, is_new2 = create_or_reuse_chunk(text)
-        assert is_new1 is True
-        assert is_new2 is False
-        assert h1 == h2
+        h1 = create_chunk(text, doc_id="doc_a")
+        h2 = create_chunk(text, doc_id="doc_b")
+        assert h1 != h2  # doc_id 参与 hash，文档间不冲突
+
+    def test_same_doc_recreate_replaces(self):
+        """同一文档同一文本重复 create —— INSERT OR REPLACE 覆盖。"""
+        text = "阿里巴巴是中国最大的电商平台。"
+        h1 = create_chunk(text, doc_id="doc_a")
+        h2 = create_chunk(text, doc_id="doc_a")
+        assert h1 == h2  # 同 doc + 同 text → 同 hash，覆盖
 
     def test_different_text_different_hash(self):
-        h1, _ = create_or_reuse_chunk("hello world")
-        h2, _ = create_or_reuse_chunk("hello world!")
+        h1 = create_chunk("hello world", doc_id="doc_x")
+        h2 = create_chunk("hello world!", doc_id="doc_x")
         assert h1 != h2
 
+    def test_delete_document_chunks(self):
+        """删除文档时清理所有 chunk + 关联 evidence。"""
+        doc_id = "doc_del"
+        ch1 = create_chunk("Chunk A", doc_id=doc_id)
+        ch2 = create_chunk("Chunk B", doc_id=doc_id)
 
-class TestDocChunkRefManagement:
-    def test_mark_and_sweep_new_doc(self):
-        """New document ingestion: caller detects new chunks, creates ChunkContent, then calls update_document_refs."""
-        doc_id = "test_doc_001"
-        chunks = [
-            {"text": "Chunk A: 杭州是浙江省省会。", "chunk_index": 0},
-            {"text": "Chunk B: 阿里巴巴总部位于杭州。", "chunk_index": 1},
-        ]
-        # Real flow: check which chunks already exist
-        new_count = 0
-        for c in chunks:
-            ch = compute_chunk_hash(c["text"])
-            if not doc_store.get_chunk_content(ch):
-                doc_store.create_chunk_content(ch, c["text"], milvus_id="")
-                new_count += 1
+        items = [EntityEvidence(ch1, "阿里巴巴", "Organization", 0.99)]
+        write_evidence(ch1, items)
 
-        result = update_document_refs(doc_id, 1, chunks)
-        # Both are new from the perspective of this doc
-        assert new_count == 2
-        assert result["stale_chunk_hashes"] == []
-        assert result["zero_ref_hashes"] == []
+        assert get_support_count("ENTITY", entity_key="organization:阿里巴巴") == 1
 
-        refs = doc_store.get_doc_chunk_refs(doc_id)
-        assert len(refs) == 2
+        result = delete_document_chunks(doc_id)
+        assert result["deleted_count"] == 2
+        assert doc_store.get_chunk_content(ch1) is None
+        assert doc_store.get_chunk_content(ch2) is None
+        # evidence 被 deactivate
+        assert get_support_count("ENTITY", entity_key="organization:阿里巴巴") == 0
 
-    def test_mark_and_sweep_update(self):
-        """Document update: v1 has 2 chunks, v2 replaces chunk B with chunk C."""
-        doc_id = "test_doc_002"
-        version1_chunks = [
-            {"text": "Chunk A: original content v1", "chunk_index": 0},
-            {"text": "Chunk B: also original v1", "chunk_index": 1},
-        ]
-        for c in version1_chunks:
-            ch = compute_chunk_hash(c["text"])
-            if not doc_store.get_chunk_content(ch):
-                doc_store.create_chunk_content(ch, c["text"], milvus_id="")
-        result1 = update_document_refs(doc_id, 1, version1_chunks)
-        assert len(doc_store.get_doc_chunk_refs(doc_id)) == 2
+    def test_delete_does_not_affect_other_docs(self):
+        """删除文档不影响其他文档的 chunk。"""
+        doc1, doc2 = "doc_keep", "doc_del"
+        ch_keep = create_chunk("保留的chunk", doc_id=doc1)
+        ch_del = create_chunk("待删除的chunk", doc_id=doc2)
 
-        version2_chunks = [
-            {"text": "Chunk A: original content v1", "chunk_index": 0},
-            {"text": "Chunk C: new updated content v2", "chunk_index": 1},
-        ]
-        new_count = 0
-        for c in version2_chunks:
-            ch = compute_chunk_hash(c["text"])
-            if not doc_store.get_chunk_content(ch):
-                doc_store.create_chunk_content(ch, c["text"], milvus_id="")
-                new_count += 1
-
-        result2 = update_document_refs(doc_id, 2, version2_chunks)
-
-        assert new_count == 1  # Chunk C is new
-        assert len(result2["stale_chunk_hashes"]) == 2  # both v1 refs deactivated
-
-        refs = doc_store.get_doc_chunk_refs(doc_id, 2)
-        assert len(refs) == 2
+        delete_document_chunks(doc2)
+        assert doc_store.get_chunk_content(ch_keep) is not None
+        assert doc_store.get_chunk_content(ch_del) is None
 
 
 class TestEvidenceWrite:
     def test_write_entity_evidence(self):
-        chunk_hash, _ = create_or_reuse_chunk("马云是阿里巴巴的创始人。")
+        chunk_hash = create_chunk("马云是阿里巴巴的创始人。", doc_id="doc_e1")
         items = [
             EntityEvidence(chunk_hash, "马云", "Person", 0.99),
             EntityEvidence(chunk_hash, "阿里巴巴", "Organization", 0.99),
@@ -126,7 +103,7 @@ class TestEvidenceWrite:
         assert count == 1
 
     def test_write_fact_evidence(self):
-        chunk_hash, _ = create_or_reuse_chunk("马云创立了阿里巴巴。")
+        chunk_hash = create_chunk("马云创立了阿里巴巴。", doc_id="doc_e2")
         items = [
             EntityEvidence(chunk_hash, "马云", "Person", 0.99),
             EntityEvidence(chunk_hash, "阿里巴巴", "Organization", 0.99),
@@ -139,7 +116,7 @@ class TestEvidenceWrite:
         assert count == 1
 
     def test_entity_attribute_evidence(self):
-        chunk_hash, _ = create_or_reuse_chunk("阿里巴巴总部位于杭州。")
+        chunk_hash = create_chunk("阿里巴巴总部位于杭州。", doc_id="doc_e3")
         items = [
             EntityEvidence(chunk_hash, "阿里巴巴", "Organization", 0.99),
             EntityAttributeEvidence(chunk_hash, "organization:阿里巴巴", "headquarter", "杭州", 0.95),
@@ -153,12 +130,13 @@ class TestEvidenceWrite:
         assert count == 1
 
     def test_support_count_multiple_evidence(self):
+        """不同文档的多个 chunk 各自贡献 evidence，support_count 累加。"""
         for i, text in enumerate([
             "阿里巴巴总部在杭州。",
             "阿里巴巴总部设在杭州。",
             "阿里巴巴总部位于杭州。",
         ]):
-            ch, _ = create_or_reuse_chunk(text)
+            ch = create_chunk(text, doc_id=f"doc_multi_{i}")
             items = [
                 EntityAttributeEvidence(ch, "organization:阿里巴巴", "headquarter", "杭州", 0.9),
             ]
@@ -172,7 +150,7 @@ class TestEvidenceWrite:
 
 class TestEvidenceDeactivate:
     def test_deactivate_and_recount(self):
-        chunk_hash, _ = create_or_reuse_chunk("阿里巴巴总部位于杭州。")
+        chunk_hash = create_chunk("阿里巴巴总部位于杭州。", doc_id="doc_d1")
         items = [
             EntityEvidence(chunk_hash, "阿里巴巴", "Organization", 0.99),
             EntityAttributeEvidence(chunk_hash, "organization:阿里巴巴", "headquarter", "杭州", 0.95),
@@ -187,45 +165,6 @@ class TestEvidenceDeactivate:
 
         assert get_support_count("ENTITY", entity_key="organization:阿里巴巴") == 0
         assert get_support_count("ENTITY_ATTRIBUTE", entity_key="organization:阿里巴巴", attr_key="headquarter", attr_value="杭州") == 0
-
-
-class TestProcessRefCountChanges:
-    def test_one_to_zero_deactivates_evidence(self):
-        chunk_hash, _ = create_or_reuse_chunk("阿里巴巴总部位于杭州。")
-        items = [EntityEvidence(chunk_hash, "阿里巴巴", "Organization", 0.99)]
-        write_evidence(chunk_hash, items)
-
-        assert get_support_count("ENTITY", entity_key="organization:阿里巴巴") == 1
-
-        # Create a DocChunkRef so ref_count is 1, then deactivate it to trigger 1→0
-        doc_store.create_doc_chunk_ref("test_doc_del", 1, chunk_hash, 0)
-        doc_store.update_chunk_ref_count(chunk_hash)
-
-        # Directly deactivate the ref to make ref_count go 1→0
-        conn = doc_store._get_conn()
-        conn.execute("UPDATE doc_chunk_ref SET active = 0 WHERE doc_id = ? AND chunk_hash = ?",
-                     ("test_doc_del", chunk_hash))
-        conn.commit()
-        conn.close()
-
-        affected = process_chunk_ref_one_to_zero(chunk_hash)
-        assert len(affected) >= 1
-        assert get_support_count("ENTITY", entity_key="organization:阿里巴巴") == 0
-
-    def test_zero_to_one_reactivates_evidence(self):
-        chunk_hash, _ = create_or_reuse_chunk("阿里巴巴总部位于杭州。")
-        items = [EntityEvidence(chunk_hash, "阿里巴巴", "Organization", 0.99)]
-        write_evidence(chunk_hash, items)
-        deactivate_chunk_evidence(chunk_hash)
-        assert get_support_count("ENTITY", entity_key="organization:阿里巴巴") == 0
-
-        # Create a DocChunkRef to simulate chunk being referenced (ref_count > 0)
-        doc_store.create_doc_chunk_ref("test_doc_react", 1, chunk_hash, 0)
-        doc_store.update_chunk_ref_count(chunk_hash)
-
-        affected = process_chunk_ref_zero_to_one(chunk_hash)
-        assert len(affected) >= 1
-        assert get_support_count("ENTITY", entity_key="organization:阿里巴巴") == 1
 
 
 class TestSyncTasks:

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import admin, auth, documents, evaluation, qa
+from api.routes import admin, auth, documents, evaluation, excel, qa
 from config.settings import settings
 from src.logging_config import setup_logging
 from src.retrieval.bm25_retriever import BM25Retriever
@@ -41,6 +41,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(qa.router)
+app.include_router(excel.router)
 app.include_router(admin.router)
 app.include_router(evaluation.router)
 

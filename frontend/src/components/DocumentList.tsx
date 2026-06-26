@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { FileText, Trash2, CheckCircle2, Loader2, AlertCircle, Tag, RotateCcw, Eye, X, ExternalLink, FileImage, FolderInput, Layers } from 'lucide-react'
+import { FileText, Trash2, CheckCircle2, Loader2, AlertCircle, Tag, RotateCcw, Eye, X, ExternalLink, FileImage, FolderInput, Layers, Sheet, FileSpreadsheet } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -29,18 +29,24 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
   const [moveTarget, setMoveTarget] = useState<DocumentInfo | null>(null)
   const [moveToFolder, setMoveToFolder] = useState('')
   const [folderOptions, setFolderOptions] = useState<FolderInfo[]>([])
+  const [fileTypeFilter, setFileTypeFilter] = useState<string>('')
 
   const fetchDocs = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await listDocuments(folder || undefined, tags.length ? tags : undefined)
+      const result = await listDocuments(
+        folder || undefined,
+        tags.length ? tags : undefined,
+        undefined,
+        fileTypeFilter || undefined,
+      )
       setDocs(result)
     } catch {
       setDocs([])
     } finally {
       setLoading(false)
     }
-  }, [folder, tags.join(',')])
+  }, [folder, tags.join(','), fileTypeFilter])
 
   useEffect(() => {
     fetchDocs()
@@ -124,6 +130,25 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
     }
   }
 
+  const fileTypeIcon = (fileType: string) => {
+    const cls = 'h-4 w-4 mt-0.5 shrink-0 text-muted-foreground'
+    switch ((fileType || '').toLowerCase()) {
+      case 'xlsx':
+      case 'xls':
+        return <Sheet className={cls} />
+      case 'csv':
+        return <FileSpreadsheet className={cls} />
+      case 'png':
+      case 'jpg':
+      case 'jpeg':
+      case 'gif':
+      case 'bmp':
+        return <FileImage className={cls} />
+      default:
+        return <FileText className={cls} />
+    }
+  }
+
   return (
     <Card className="flex flex-col">
       <CardHeader className="pb-2">
@@ -133,6 +158,20 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
             文档列表
             <span className="text-muted-foreground font-normal">({docs.length})</span>
           </CardTitle>
+          <select
+            value={fileTypeFilter}
+            onChange={(e) => setFileTypeFilter(e.target.value)}
+            className="text-xs border rounded px-1.5 py-0.5 bg-background max-w-[110px]"
+            title="按文件类型筛选"
+          >
+            <option value="">全部类型</option>
+            <option value="xlsx">Excel</option>
+            <option value="csv">CSV</option>
+            <option value="pdf">PDF</option>
+            <option value="docx">Word</option>
+            <option value="md">Markdown</option>
+            <option value="txt">TXT</option>
+          </select>
         </div>
       </CardHeader>
       <ScrollArea className="max-h-[300px]">
@@ -142,10 +181,15 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
           )}
           {docs.map((doc) => (
             <div key={doc.doc_id} className="flex items-start gap-2 p-2 rounded-md hover:bg-muted/50 group">
-              <FileText className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+              {fileTypeIcon(doc.file_type)}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5">
                   <span className="text-sm truncate">{doc.filename}</span>
+                  {doc.file_type && (
+                    <span className="text-[10px] uppercase text-muted-foreground/70 px-1 rounded bg-muted shrink-0">
+                      {doc.file_type}
+                    </span>
+                  )}
                   {statusIcon(doc.status)}
                 </div>
                 <div className="flex items-center gap-1 mt-0.5">

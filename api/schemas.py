@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class DocumentUploadResponse(BaseModel):
@@ -23,6 +23,15 @@ class DocumentInfo(BaseModel):
     error: Optional[str] = None
     created_at: str = ""
     updated_at: str = ""
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def file_type(self) -> str:
+        """从 filename 推导文件类型（扩展名小写，无点）。如 xlsx/pdf/docx/md。"""
+        fn = self.filename or ""
+        if "." not in fn:
+            return ""
+        return fn.rsplit(".", 1)[-1].lower()
 
 
 class DocumentStatusResponse(BaseModel):

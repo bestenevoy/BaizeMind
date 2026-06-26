@@ -115,6 +115,200 @@ class EvalMetrics:
             pass
         return {"has_intrinsic": False, "has_extrinsic": False, "intrinsic_count": 0, "extrinsic_count": 0, "total_claims": 0}
 
+    # ═══════════ SQL Retrieval Metrics ═══════════
+    # 用于 query_type == "sql_query" 的样本（Excel/CSV/database tables）。
+    # 与文本 RAG 的 chunk_id 指标完全分离，按 query_type 分组计算。
+
+    def sheet_recall_at_k(
+        self, recalled_sheet_ids: list[str], ground_truth_sheet_ids: list[str], k: int
+    ) -> float:
+        """召回 Sheet 是否覆盖目标 Sheet（按 sheet meta_id 比对）。"""
+        if not ground_truth_sheet_ids:
+            return -1.0
+        recalled = recalled_sheet_ids[:k]
+        matched = sum(1 for gt_id in ground_truth_sheet_ids if gt_id in recalled)
+        return matched / len(ground_truth_sheet_ids)
+
+    def table_selection_accuracy(
+        self, selected_sheet_id: str | None, ground_truth_sheet_id: str
+    ) -> float:
+        """多表选择是否命中目标表（二值 0/1）。"""
+        if not ground_truth_sheet_id:
+            return -1.0
+        return 1.0 if selected_sheet_id == ground_truth_sheet_id else 0.0
+
+    def sql_correctness(
+        self, predicted_sql: str, ground_truth_sql: str, query: str = ""
+    ) -> float:
+        """生成的 SQL 与 ground-truth SQL 语义是否等价（LLM judge, 0/1）。
+
+        不做字符串精确匹配（同一查询有多种合法 SQL 写法），通过 LLM 判断语义等价。
+        """
+        if not ground_truth_sql:
+            return -1.0
+        if not predicted_sql:
+            return 0.0
+        # 快速路径：归一化后字符串相等
+        def _norm(s: str) -> str:
+            return " ".join(s.lower().split())
+        if _norm(predicted_sql) == _norm(ground_truth_sql):
+            return 1.0
+        # LLM judge
+        llm = self._get_judge_llm()
+        prompt = (
+            "判断以下两条 SQL 查询在语义上是否等价（对同一表 schema 会产生相同结果）。\n"
+            f"用户问题: {query}\n"
+            f"Ground-truth SQL:\n{ground_truth_sql}\n\n"
+            f"Predicted SQL:\n{predicted_sql}\n\n"
+            '只回答 JSON: {{"equivalent": true/false, "reason": "简要说明"}}'
+        )
+        try:
+            resp = llm.invoke(prompt)
+            match = re.search(r"\{[\s\S]*\}", resp.content)
+            if match:
+                data = json.loads(match.group())
+                return 1.0 if data.get("equivalent") else 0.0
+        except Exception:
+            pass
+        return 0.0
+
+    def execution_accuracy(
+        self, predicted_result: dict, ground_truth_result: dict
+    ) -> float:
+        """SQL 执行结果与 ground-truth 结果的匹配度（行数 + 值集合）。
+
+        返回 0.0-1.0 之间的分数：
+        - 行数匹配 +0.3
+        - 列名集合匹配 +0.2
+        - 值集合（Jaccard 相似度）+0.5
+        """
+        if not ground_truth_result:
+            return -1.0
+        if not predicted_result:
+            return 0.0
+
+        pred_rows = predicted_result.get("rows", []) or []
+        gt_rows = ground_truth_result.get("rows", []) or []
+        pred_cols = set(predicted_result.get("columns", []) or [])
+        gt_cols = set(ground_truth_result.get("columns", []) or [])
+
+        score = 0.0
+        # 行数匹配
+        if len(pred_rows) == len(gt_rows) and len(gt_rows) > 0:
+            score += 0.3
+        elif len(gt_rows) == 0 and len(pred_rows) == 0:
+            score += 0.3
+        # 列名集合匹配
+        if gt_cols and pred_cols == gt_cols:
+            score += 0.2
+        elif not gt_cols:
+            score += 0.2
+        # 值集合 Jaccard 相似度
+        gt_values = set()
+        for r in gt_rows:
+            if isinstance(r, (list, tuple)):
+                for v in r:
+                    gt_values.add(str(v))
+            else:
+                gt_values.add(str(r))
+        pred_values = set()
+        for r in pred_rows:
+            if isinstance(r, (list, tuple)):
+                for v in r:
+                    pred_values.add(str(v))
+            else:
+                pred_values.add(str(r))
+        if gt_values or pred_values:
+            union = gt_values | pred_values
+            inter = gt_values & pred_values
+            score += 0.5 * (len(inter) / len(union)) if union else 0.0
+        else:
+            score += 0.5
+        return min(score, 1.0)
+
+    def compute_sql_metrics(
+        self, samples: list[dict], results: list[dict]
+    ) -> dict[str, Any]:
+        """聚合 SQL 检索指标（仅对 query_type == 'sql_query' 的样本有效）。
+
+        样本字段约定（Excel 评测集）：
+          - query_type: "sql_query"
+          - ground_truth_sheet_ids: list[str]  目标 sheet meta_id
+          - ground_truth_sheet_id: str  最终应选中的 sheet（用于 table_selection_accuracy）
+          - ground_truth_sql: str  参考 SQL
+          - ground_truth_result: {columns, rows, row_count}  参考执行结果
+        结果字段（runner 填充）：
+          - recalled_sheet_ids: list[str]
+          - selected_sheet_id: str | None
+          - predicted_sql: str
+          - predicted_result: dict
+        """
+        p_sheet_recall_1, p_sheet_recall_3, p_sheet_recall_5 = [], [], []
+        p_table_selection = []
+        p_sql_correct = []
+        p_exec_accuracy = []
+        p_sql_timings = []
+        sql_errors = 0
+
+        for sample, result in zip(samples, results):
+            if sample.get("query_type") != "sql_query":
+                continue
+            gt_sheet_ids = sample.get("ground_truth_sheet_ids", [])
+            recalled = result.get("recalled_sheet_ids", [])
+            selected = result.get("selected_sheet_id")
+            pred_sql = result.get("predicted_sql", "")
+            pred_result = result.get("predicted_result", {}) or {}
+            gt_sql = sample.get("ground_truth_sql", "")
+            gt_result = sample.get("ground_truth_result", {}) or {}
+
+            if gt_sheet_ids:
+                p_sheet_recall_1.append(self.sheet_recall_at_k(recalled, gt_sheet_ids, 1))
+                p_sheet_recall_3.append(self.sheet_recall_at_k(recalled, gt_sheet_ids, 3))
+                p_sheet_recall_5.append(self.sheet_recall_at_k(recalled, gt_sheet_ids, 5))
+
+            gt_sheet_id = sample.get("ground_truth_sheet_id", "")
+            if gt_sheet_id:
+                p_table_selection.append(
+                    self.table_selection_accuracy(selected, gt_sheet_id)
+                )
+
+            if gt_sql:
+                c = self.sql_correctness(pred_sql, gt_sql, sample.get("query", ""))
+                p_sql_correct.append(c)
+
+            if gt_result:
+                p_exec_accuracy.append(self.execution_accuracy(pred_result, gt_result))
+
+            t = result.get("processing_time_ms", 0)
+            if t > 0:
+                p_sql_timings.append(t)
+            if result.get("sql_error"):
+                sql_errors += 1
+
+        n_sql = sum(1 for s in samples if s.get("query_type") == "sql_query")
+        if n_sql == 0:
+            return {}
+
+        def _mean_or_none(lst):
+            valid = [v for v in lst if v is not None and v >= 0]
+            return float(np.mean(valid)) if valid else None
+
+        timing = self.timing_stats(p_sql_timings)
+
+        return {
+            "sql_num_samples": n_sql,
+            "sql_error_count": sql_errors,
+            "sheet_recall_at_1": _mean_or_none(p_sheet_recall_1),
+            "sheet_recall_at_3": _mean_or_none(p_sheet_recall_3),
+            "sheet_recall_at_5": _mean_or_none(p_sheet_recall_5),
+            "table_selection_accuracy": _mean_or_none(p_table_selection),
+            "sql_correctness": _mean_or_none(p_sql_correct),
+            "execution_accuracy": _mean_or_none(p_exec_accuracy),
+            "sql_timing_mean_ms": timing["mean_ms"],
+            "sql_timing_p50_ms": timing["p50_ms"],
+            "sql_timing_p95_ms": timing["p95_ms"],
+        }
+
     # ═══════════ P2 Advanced Metrics ═══════════
 
     def correct_refusal_rate(self, results: list[dict]) -> float:

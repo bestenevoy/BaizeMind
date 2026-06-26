@@ -85,11 +85,12 @@ async def list_documents(
     folder: Optional[str] = None,
     tags: Optional[str] = None,
     status: Optional[str] = None,
+    file_type: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
 ):
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
-    docs = doc_store.list_documents(folder=folder, tags=tag_list, status=status, limit=limit, offset=offset)
+    docs = doc_store.list_documents(folder=folder, tags=tag_list, status=status, file_type=file_type, limit=limit, offset=offset)
     return [DocumentInfo(**d) for d in docs]
 
 
@@ -129,24 +130,23 @@ async def delete_document(doc_id: str, current: User = Depends(require_user)):
 
 
 async def _delete_document_evidence(doc_id: str, doc: dict):
-    from src.knowledge_graph.chunk_manager import (
-        build_sync_tasks, process_chunk_ref_one_to_zero,
-    )
+    from src.knowledge_graph.chunk_manager import delete_document_chunks, build_sync_tasks
     from src.knowledge_graph.graph_sync_worker import process_pending_tasks
 
-    all_affected: dict[str, set[str]] = {}
+    # Excel 文档：走独立的清理路径（Sheet 元数据 + 动态数据表 + 向量）
+    filename = doc.get("filename", "")
+    if filename.lower().endswith(".xlsx"):
+        try:
+            from src.excel_rag.pipeline import delete_excel
+            delete_excel(doc_id)
+        except Exception:
+            pass
+        doc_store.delete_document(doc_id)
+        return
 
-    doc_store.mark_doc_chunk_refs_stale(doc_id)
-    stale_hashes = doc_store.deactivate_stale_doc_chunk_refs(doc_id)
-
-    for sh in stale_hashes:
-        affected = process_chunk_ref_one_to_zero(sh)
-        for item in affected:
-            t = item["affected_type"]
-            k = item["affected_key"]
-            if t not in all_affected:
-                all_affected[t] = set()
-            all_affected[t].add(k)
+    # 直接删除文档的所有 chunk + 关联 evidence（不再走 mark-and-sweep / ref_count）
+    del_result = delete_document_chunks(doc_id)
+    all_affected = del_result["affected_keys"]
 
     if all_affected:
         tasks = build_sync_tasks(all_affected, doc_id=doc_id)
@@ -327,7 +327,36 @@ async def remove_tag(doc_id: str, tag: str, current: User = Depends(require_user
 
 
 def _process_document(doc_id: str, file_path: str, folder: str, skip_evidence: bool = False):
+    # Excel 文件走独立的 RAG + NL2SQL 流程（按 EXCEL_RAG.md 设计）
+    if settings.excel_rag_enabled and str(file_path).lower().endswith(".xlsx"):
+        _process_excel_document(doc_id, file_path, folder)
+        return
     _process_document_evidence(doc_id, file_path, folder, skip_evidence)
+
+
+def _process_excel_document(doc_id: str, file_path: str, folder: str):
+    """Excel 入库：解析 → 摘要 → 元数据/明细数据 → 向量索引。"""
+    import time
+    start = time.time()
+    try:
+        doc_store.update_document(doc_id, processing_stage="解析Excel")
+        from src.excel_rag.pipeline import ingest_excel
+        result = ingest_excel(doc_id, file_path)
+        sheet_count = result.get("sheet_count", 0)
+
+        elapsed = (time.time() - start) * 1000
+        doc_store.update_document(
+            doc_id,
+            status="completed",
+            processing_stage=f"Excel入库完成（{sheet_count}个Sheet）",
+            chunk_count=sheet_count,  # 复用 chunk_count 字段记录 Sheet 数
+            processing_time_ms=elapsed,
+        )
+    except Exception as e:
+        import traceback as _tb
+        elapsed = (time.time() - start) * 1000
+        full_error = f"{e}\n\nFull traceback:\n{_tb.format_exc()}"
+        doc_store.update_document(doc_id, status="failed", processing_time_ms=elapsed, error=full_error[:2000])
 
 
 def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_evidence: bool = False):
@@ -367,48 +396,25 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
         for chunk in chunks:
             chunk["folder"] = folder
 
-        doc_store.update_document(doc_id, processing_stage="Chunk去重与引用管理")
+        doc_store.update_document(doc_id, processing_stage="Chunk创建")
         from src.knowledge_graph.chunk_manager import (
-            compute_chunk_hash, update_document_refs, build_sync_tasks,
-            process_chunk_ref_zero_to_one, process_chunk_ref_one_to_zero,
+            compute_chunk_hash, create_chunk, delete_document_chunks, build_sync_tasks,
         )
         from src.retrieval.vector_retriever import MilvusVectorRetriever
 
-        vr = MilvusVectorRetriever()
-        force_reembed = not vr.doc_has_vectors(doc_id)
-
-        if not force_reembed:
-            vr.delete_by_doc(doc_id)
-            force_reembed = True
-
-        chunk_hashes = []
-        new_chunk_texts = []
         all_affected_keys: dict[str, set[str]] = {}
 
+        # 重索引：先删除旧 chunk + evidence（收集 affected_keys 供 Neo4j 同步），再重建
+        del_result = delete_document_chunks(doc_id)
+        merge_affected_keys(all_affected_keys, del_result["affected_keys"])
+
+        new_chunk_texts = []
         for i, chunk in enumerate(chunks):
-            ch = compute_chunk_hash(chunk["text"])
-            chunk_hashes.append(ch)
+            ch = compute_chunk_hash(chunk["text"], doc_id=doc_id)
             chunk["chunk_hash"] = ch
             chunk["chunk_id"] = f"{doc_id}_{i:04d}_{ch[:8]}"
-
-            existing = doc_store.get_chunk_content(ch)
-            if not existing:
-                doc_store.create_chunk_content(ch, chunk["text"], milvus_id="")
-                new_chunk_texts.append(chunk)
-            elif not existing.get("milvus_id") or force_reembed:
-                new_chunk_texts.append(chunk)
-
-        ref_result = update_document_refs(doc_id, doc_version, [
-            {"text": c["text"], "chunk_index": i} for i, c in enumerate(chunks)
-        ])
-
-        for ch in ref_result["restored_hashes"]:
-            affected = process_chunk_ref_zero_to_one(ch)
-            merge_affected_keys(all_affected_keys, affected)
-
-        for ch in ref_result["zero_ref_hashes"]:
-            affected = process_chunk_ref_one_to_zero(ch)
-            merge_affected_keys(all_affected_keys, affected)
+            create_chunk(chunk["text"], doc_id=doc_id, milvus_id="")
+            new_chunk_texts.append(chunk)
 
         doc_store.update_document(doc_id, processing_stage="向量嵌入")
         from src.embeddings.bge_m3 import BGEM3Embedding
@@ -423,14 +429,8 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
             vector_retriever.ensure_collection()
             vector_retriever.insert(new_chunk_texts, embeddings)
 
-            conn = doc_store._get_conn()
             for nc in new_chunk_texts:
-                conn.execute(
-                    "UPDATE chunk_content SET milvus_id = ? WHERE chunk_hash = ?",
-                    (nc.get("chunk_id", ""), nc["chunk_hash"]),
-                )
-            conn.commit()
-            conn.close()
+                doc_store.update_chunk_milvus_id(nc["chunk_hash"], nc.get("chunk_id", ""))
 
         doc_store.update_document(doc_id, processing_stage="构建BM25索引")
         from src.retrieval.bm25_retriever import BM25Retriever

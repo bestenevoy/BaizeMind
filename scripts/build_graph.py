@@ -10,7 +10,7 @@ setup_logging()
 
 from src.retrieval.bm25_retriever import BM25Retriever
 from src.knowledge_graph.entity_extractor import EntityExtractor
-from src.knowledge_graph.chunk_manager import compute_chunk_hash, create_or_reuse_chunk, build_sync_tasks
+from src.knowledge_graph.chunk_manager import compute_chunk_hash, create_chunk, build_sync_tasks
 from src.knowledge_graph.evidence_writer import write_evidence
 from src.knowledge_graph.graph_sync_worker import process_pending_tasks
 from src.storage import doc_store
@@ -33,8 +33,9 @@ def build_graph():
     evidence_count = 0
 
     for i, chunk in enumerate(chunks):
-        ch = compute_chunk_hash(chunk["text"])
-        create_or_reuse_chunk(chunk["text"])
+        doc_id = chunk.get("doc_id", "")
+        ch = compute_chunk_hash(chunk["text"], doc_id=doc_id)
+        create_chunk(chunk["text"], doc_id=doc_id)
         items = extractor.extract_evidence(chunk["text"], chunk_hash=ch)
         if items:
             result = write_evidence(ch, items)

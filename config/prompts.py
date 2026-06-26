@@ -12,6 +12,14 @@ Analyze the user's question and classify it into exactly ONE type:
   Examples: "Compare the performance of model X and model Y."
 - definition: Questions asking for definitions, explanations of terms.
   Examples: "What is RAG?", "Explain transformer architecture."
+- sql_query: Questions that require numerical computation, aggregation, ranking, or statistical analysis
+  over structured/tabular data (Excel/CSV/database tables). These should be answered by executing SQL,
+  NOT by reading prose.
+  Signals: mentions of metrics (销售额/销量/收入/利润/成本/数量/金额/占比), aggregations
+  (总和/合计/平均/最高/最低/TopN/排名/排行/同比/环比/增长率), filters over categorical dimensions
+  (某地区/某产品/某客户/某月份), counting (有多少/几个/次数).
+  Examples: "华东地区销量最高的产品是什么？", "2024年总销售额是多少？", "各产品销量排名Top10",
+  "华北地区客户的平均消费金额", "销售额同比去年增长了多少".
 
 Additionally, set "graph_eligible": true if:
 - The query mentions 2+ distinct named entities (companies, people, products, technologies)
@@ -172,3 +180,116 @@ Rules:
 
 Output ONLY a JSON object, no other text:
 {{"dense_queries": ["rephrase 1", "rephrase 2", "rephrase 3"], "bm25_query": "keyword1 keyword2 synonym1 synonym2 entity1 number1"}}"""
+
+# ── Excel RAG: Sheet summary + column mapping (one LLM call per sheet) ──
+EXCEL_SUMMARY_SYSTEM = """You are an Excel data analyst. Given a sheet's headers, inferred column types, and statistical samples, produce TWO things:
+
+1. **summary**: A concise natural-language summary of this sheet (in {language}), describing:
+   - What the sheet is about (e.g. "销售数据统计表")
+   - The fields it contains
+   - The time range / categories covered (if any)
+   - The main analysis dimensions it supports (e.g. 地区销售分析, 产品销售分析)
+   - The kinds of queries it can answer (e.g. 销售额统计, TopN分析, 同比分析)
+   This summary will be embedded for semantic retrieval — make it rich in keywords and descriptive phrases so users can find this sheet by natural-language questions.
+
+2. **columns**: A mapping from each Chinese header to an English SQL column name and a SQLite type.
+   - English names must be snake_case, lowercase, ASCII only (e.g. 日期→date, 销售额→sales_amount, 客户等级→customer_level)
+   - SQLite types must be one of: INTEGER, REAL, TEXT
+   - Preserve the original column order
+
+Output ONLY a JSON object, no other text:
+{{
+  "summary": "...",
+  "columns": [
+    {{"cn": "日期", "en": "date", "type": "TEXT"}},
+    {{"cn": "销售额", "en": "sales_amount", "type": "REAL"}}
+  ]
+}}"""
+
+# ── Excel RAG: NL2SQL generation ──
+EXCEL_NL2SQL_SYSTEM = """You are a SQL generator. Given a SQLite table schema and a natural-language question, generate a SINGLE read-only SELECT query.
+
+Database dialect: SQLite
+Table: `{table_name}`
+
+Columns (cn → en : type):
+{columns}
+
+Sample rows (first 5):
+{sample_rows}
+
+Rules:
+- Generate ONLY a SELECT statement. No INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/ATTACH/PRAGMA.
+- Use ONLY the column English names (en) listed above. Never guess column names.
+- Use SQLite-compatible functions (e.g. `strftime`, `date`, `GROUP BY`, `ORDER BY`, `LIMIT`).
+- Always append `LIMIT {max_rows}` if not already present, to bound result size.
+- For "最高/最低/TopN" questions, use ORDER BY ... DESC/ASC + LIMIT.
+- For "某地区/某产品" filters, use WHERE with exact string match.
+- For date-range queries, use WHERE on date columns.
+- Output ONLY the SQL statement, no explanation, no markdown fences.
+
+Question: {question}
+SQL:"""
+
+# ── Excel RAG: NL2SQL auto-correction (feed error back to LLM) ──
+EXCEL_NL2SQL_CORRECTION_SYSTEM = """The previous SQL failed with this error:
+
+Error: {error}
+
+Previous SQL:
+{previous_sql}
+
+Table: `{table_name}`
+Columns (cn → en : type):
+{columns}
+
+Fix the SQL so it executes successfully against SQLite. Output ONLY the corrected SQL statement, no explanation.
+Corrected SQL:"""
+
+# ── Excel RAG: Multi-table selection ──
+EXCEL_TABLE_SELECTOR_SYSTEM = """You are a table selector. Given a user question and several candidate sheets (with summaries), select the ONE sheet most likely to answer the question.
+
+Candidate sheets:
+{candidates}
+
+Question: {question}
+
+Respond in JSON: {{"selected_meta_id": "meta_id of the best sheet", "reasoning": "brief reason"}}
+If none of the sheets are relevant, respond: {{"selected_meta_id": null, "reasoning": "..."}}"""
+
+# ── Excel RAG: Final answer generation from SQL result (legacy, used by /api/v1/excel/ask) ──
+EXCEL_ANSWER_SYSTEM = """You are a data analyst assistant. Answer the user's question based on the SQL query result.
+
+You MUST respond in {language}.
+
+Question: {question}
+SQL executed: {sql}
+Result (rows): {result}
+
+Rules:
+- Answer based ONLY on the result data. Do not fabricate numbers.
+- If the result is empty, say the data does not contain the answer.
+- Present numbers clearly. For aggregations, state the metric and value.
+- Be concise. Do not repeat the raw SQL unless asked.
+Answer:"""
+
+# ── SQL retrieval path: unified answer generation from SQL execution context ──
+# Used by answer_generator when retrieval_path == "sql_nl2sql".
+# Context is the formatted document (schema + executed SQL + result rows) produced by
+# _format_sql_result_as_document in workflow.py.
+SQL_ANSWER_GENERATION_SYSTEM = """You are a data analyst assistant. Answer the user's question based on the provided SQL query result context.
+
+You MUST respond in {language}.
+
+Question: {question}
+
+Context (SQL query result, formatted as table schema + executed SQL + result rows):
+{context}
+
+Rules:
+- Answer based ONLY on the provided context (the SQL execution result). Do not fabricate numbers.
+- If the result is empty or shows an error, say the data does not contain the answer.
+- Present numbers clearly. For aggregations, state the metric and value.
+- Be concise. Do not repeat the raw SQL unless the user asks for it.
+- If the context contains a [SQL 执行告警] note, acknowledge it briefly.
+Answer:"""

@@ -45,29 +45,18 @@ def init_db():
         );
 
         -- Evidence pipeline tables
+        -- chunk_content: 每个文档独立持有 chunk，不再跨文档复用/dedup。
+        -- doc_id 列用于按文档清理；ref_count/doc_chunk_ref 已废弃移除。
+        -- 注意：CREATE TABLE IF NOT EXISTS 不会为已存在的表添加新列，
+        -- 因此 doc_id 列通过下方的 ALTER TABLE 迁移补充，idx_cc_doc_id 也在迁移后创建。
         CREATE TABLE IF NOT EXISTS chunk_content (
             chunk_hash TEXT PRIMARY KEY,
             text TEXT NOT NULL,
+            doc_id TEXT NOT NULL DEFAULT '',
             milvus_id TEXT,
-            ref_count INTEGER NOT NULL DEFAULT 0,
             active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
         );
-
-        CREATE TABLE IF NOT EXISTS doc_chunk_ref (
-            doc_id TEXT NOT NULL,
-            doc_version INTEGER NOT NULL DEFAULT 1,
-            chunk_hash TEXT NOT NULL,
-            chunk_index INTEGER NOT NULL DEFAULT 0,
-            page_no INTEGER,
-            active INTEGER NOT NULL DEFAULT 1,
-            is_stale INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (doc_id, doc_version, chunk_hash)
-        );
-        CREATE INDEX IF NOT EXISTS idx_dcr_chunk_hash ON doc_chunk_ref(chunk_hash, active);
-        CREATE INDEX IF NOT EXISTS idx_dcr_doc_id ON doc_chunk_ref(doc_id, active, is_stale);
 
         CREATE TABLE IF NOT EXISTS evidence (
             evidence_id TEXT PRIMARY KEY,
@@ -127,6 +116,13 @@ def init_db():
         conn.execute("ALTER TABLE documents ADD COLUMN doc_hash TEXT NOT NULL DEFAULT ''")
     except sqlite3.OperationalError:
         pass
+    # Migration: add doc_id column to chunk_content (existing DBs only)
+    try:
+        conn.execute("ALTER TABLE chunk_content ADD COLUMN doc_id TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    # 创建 doc_id 索引（必须放在 ALTER 之后，确保列已存在）
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cc_doc_id ON chunk_content(doc_id)")
     # Normalize existing folders without leading slash
     conn.execute("UPDATE documents SET folder = '/' || folder WHERE folder != '/' AND folder NOT LIKE '/%'")
     conn.execute("UPDATE folder_markers SET path = '/' || path WHERE path != '/' AND path NOT LIKE '/%'")
@@ -190,6 +186,7 @@ def list_documents(
     folder: Optional[str] = None,
     tags: Optional[list[str]] = None,
     status: Optional[str] = None,
+    file_type: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict]:
@@ -208,6 +205,12 @@ def list_documents(
     if status:
         query += " AND status = ?"
         params.append(status)
+
+    # 文件类型筛选：按扩展名匹配（file_type 形如 "xlsx"/"pdf"/"docx"）
+    if file_type:
+        ext = file_type.lstrip(".").lower()
+        query += " AND LOWER(filename) LIKE ?"
+        params.append(f"%.{ext}")
 
     query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
@@ -420,7 +423,7 @@ def _folder_has_docs(path: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════
-# ChunkContent — unique content deduplication
+# ChunkContent — per-document chunks (no dedup / ref_count)
 # ═══════════════════════════════════════════════════════════════
 
 def get_chunk_content(chunk_hash: str) -> Optional[dict]:
@@ -430,12 +433,13 @@ def get_chunk_content(chunk_hash: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
-def create_chunk_content(chunk_hash: str, text: str, milvus_id: str = "") -> dict:
+def create_chunk_content(chunk_hash: str, text: str, doc_id: str = "", milvus_id: str = "") -> dict:
+    """创建 ChunkContent（每次都写入，不再查重复用）。"""
     conn = _get_conn()
     now = datetime.now().isoformat()
     conn.execute(
-        "INSERT OR IGNORE INTO chunk_content (chunk_hash, text, milvus_id, ref_count, active, created_at) VALUES (?, ?, ?, 0, 1, ?)",
-        (chunk_hash, text, milvus_id, now),
+        "INSERT OR REPLACE INTO chunk_content (chunk_hash, text, doc_id, milvus_id, active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
+        (chunk_hash, text, doc_id, milvus_id, now),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM chunk_content WHERE chunk_hash = ?", (chunk_hash,)).fetchone()
@@ -443,105 +447,30 @@ def create_chunk_content(chunk_hash: str, text: str, milvus_id: str = "") -> dic
     return dict(row) if row else {}
 
 
-def update_chunk_ref_count(chunk_hash: str):
-    """Recalculate ref_count from DocChunkRef. Returns transition info."""
-    conn = _get_conn()
-    old = conn.execute(
-        "SELECT active, ref_count FROM chunk_content WHERE chunk_hash = ?",
-        (chunk_hash,),
-    ).fetchone()
-    old_ref_count = old["ref_count"] if old else 0
-
-    row = conn.execute(
-        "SELECT COUNT(*) as cnt FROM doc_chunk_ref WHERE chunk_hash = ? AND active = 1",
-        (chunk_hash,),
-    ).fetchone()
-    new_count = row["cnt"] if row else 0
-
-    conn.execute(
-        "UPDATE chunk_content SET ref_count = ? WHERE chunk_hash = ?",
-        (new_count, chunk_hash),
-    )
-    was_zero = old_ref_count == 0
-    became_zero = new_count == 0 and old_ref_count > 0
-    conn.commit()
-    conn.close()
-    return {"chunk_hash": chunk_hash, "ref_count": new_count, "was_zero": was_zero, "became_zero": became_zero}
-
-
-def deactivate_chunk_content(chunk_hash: str):
-    conn = _get_conn()
-    conn.execute("UPDATE chunk_content SET active = 0 WHERE chunk_hash = ?", (chunk_hash,))
-    conn.commit()
-    conn.close()
-
-
-# ═══════════════════════════════════════════════════════════════
-# DocChunkRef — Document ↔ Chunk reference
-# ═══════════════════════════════════════════════════════════════
-
-def create_doc_chunk_ref(doc_id: str, doc_version: int, chunk_hash: str, chunk_index: int = 0, page_no: Optional[int] = None):
-    conn = _get_conn()
-    now = datetime.now().isoformat()
-    conn.execute(
-        """INSERT OR REPLACE INTO doc_chunk_ref (doc_id, doc_version, chunk_hash, chunk_index, page_no, active, is_stale, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)""",
-        (doc_id, doc_version, chunk_hash, chunk_index, page_no, now, now),
-    )
-    conn.commit()
-    conn.close()
-
-
-def mark_doc_chunk_refs_stale(doc_id: str):
-    conn = _get_conn()
-    conn.execute("UPDATE doc_chunk_ref SET is_stale = 1 WHERE doc_id = ? AND active = 1", (doc_id,))
-    conn.commit()
-    conn.close()
-
-
-def unmark_doc_chunk_ref(doc_id: str, chunk_hash: str, chunk_index: int = 0):
-    conn = _get_conn()
-    now = datetime.now().isoformat()
-    conn.execute(
-        "UPDATE doc_chunk_ref SET is_stale = 0, chunk_index = ?, updated_at = ? WHERE doc_id = ? AND chunk_hash = ?",
-        (chunk_index, now, doc_id, chunk_hash),
-    )
-    conn.commit()
-    conn.close()
-
-
-def deactivate_stale_doc_chunk_refs(doc_id: str) -> list[str]:
-    """Deactivate stale refs, return list of affected chunk_hashes."""
+def get_chunk_hashes_by_doc(doc_id: str) -> list[str]:
+    """返回某文档的所有 chunk_hash（用于删除/重索引）。"""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT chunk_hash FROM doc_chunk_ref WHERE doc_id = ? AND is_stale = 1 AND active = 1",
-        (doc_id,),
+        "SELECT chunk_hash FROM chunk_content WHERE doc_id = ?", (doc_id,)
     ).fetchall()
-    affected = [r["chunk_hash"] for r in rows]
-    if affected:
-        conn.execute(
-            "UPDATE doc_chunk_ref SET active = 0, is_stale = 0, updated_at = ? WHERE doc_id = ? AND is_stale = 1 AND active = 1",
-            (datetime.now().isoformat(), doc_id),
-        )
+    conn.close()
+    return [r["chunk_hash"] for r in rows]
+
+
+def delete_chunk_content_by_doc(doc_id: str) -> int:
+    """物理删除某文档的所有 ChunkContent 记录。返回删除条数。"""
+    conn = _get_conn()
+    cur = conn.execute("DELETE FROM chunk_content WHERE doc_id = ?", (doc_id,))
     conn.commit()
     conn.close()
-    return affected
+    return cur.rowcount
 
 
-def get_doc_chunk_refs(doc_id: str, doc_version: Optional[int] = None) -> list[dict]:
+def update_chunk_milvus_id(chunk_hash: str, milvus_id: str):
     conn = _get_conn()
-    if doc_version is not None:
-        rows = conn.execute(
-            "SELECT * FROM doc_chunk_ref WHERE doc_id = ? AND doc_version = ? AND active = 1 ORDER BY chunk_index",
-            (doc_id, doc_version),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM doc_chunk_ref WHERE doc_id = ? AND active = 1 ORDER BY chunk_index",
-            (doc_id,),
-        ).fetchall()
+    conn.execute("UPDATE chunk_content SET milvus_id = ? WHERE chunk_hash = ?", (milvus_id, chunk_hash))
+    conn.commit()
     conn.close()
-    return [dict(r) for r in rows]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -609,37 +538,6 @@ def deactivate_evidence_by_chunk(chunk_hash: str) -> list[dict]:
     )
     conn.commit()
     conn.close()
-    return affected
-
-
-def reactivate_evidence_by_chunk(chunk_hash: str) -> list[dict]:
-    """Reactivate evidence when chunk ref_count goes 0→1. Returns affected keys for Neo4j sync."""
-    conn = _get_conn()
-    conn.execute(
-        "UPDATE evidence SET active = 1, updated_at = ? WHERE chunk_hash = ? AND active = 0",
-        (datetime.now().isoformat(), chunk_hash),
-    )
-    rows = conn.execute(
-        "SELECT DISTINCT evidence_type, entity_key, subject_key, predicate, object_key, attr_key, attr_value FROM evidence WHERE chunk_hash = ? AND active = 1",
-        (chunk_hash,),
-    ).fetchall()
-    conn.commit()
-    conn.close()
-    affected = []
-    for r in rows:
-        t = r["evidence_type"]
-        if t == "ENTITY":
-            affected.append({"affected_type": t, "affected_key": r["entity_key"]})
-        elif t == "ENTITY_ATTRIBUTE":
-            key = f"{r['entity_key']}|{r['attr_key']}|{r['attr_value']}"
-            affected.append({"affected_type": t, "affected_key": key})
-        elif t == "FACT":
-            key = f"{r['subject_key']}|{r['predicate']}|{r['object_key']}"
-            affected.append({"affected_type": t, "affected_key": key})
-        elif t == "FACT_ATTRIBUTE":
-            fact_key = f"{r['subject_key']}|{r['predicate']}|{r['object_key']}"
-            key = f"{fact_key}|{r['attr_key']}|{r['attr_value']}"
-            affected.append({"affected_type": t, "affected_key": key})
     return affected
 
 
