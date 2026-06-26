@@ -224,7 +224,7 @@ def generate_dataset(req: EvalDatasetGenerate):
                 continue
 
             try:
-                match = re.search(r"\[[\s\S]*\]", resp)
+                match = re.search(r"\[[\s\S]*\]", str(resp))
                 if not match:
                     yield f"data: {json.dumps({'type': 'progress', 'current': doc_idx, 'total': len(chunks_by_doc), 'doc_id': doc_id, 'warning': f'LLM did not return JSON array. Response: {resp[:200]}'})}\n\n"
                     continue
