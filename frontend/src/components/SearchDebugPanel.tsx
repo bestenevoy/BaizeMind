@@ -683,31 +683,41 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
           <p className="text-xs text-muted-foreground p-2">无召回（库中无 Excel 或主题不匹配）</p>
         ) : (
           <div className="divide-y">
-            {sqlDebug.recalled_sheets.map((s, i) => (
-              <div key={s.meta_id || i} className="p-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono">#{i + 1}</span>
-                  <span className="text-xs font-mono">{s.sheet_name}</span>
-                  <Badge variant="secondary" className="text-[10px] font-mono">{s.score.toFixed(3)}</Badge>
-                  {s.selected && <Badge variant="default" className="text-[10px]">已选</Badge>}
+            {sqlDebug.recalled_sheets.map((s, i) => {
+              const isExpanded = expandedSheet === s.meta_id
+              const hasSummary = !!s.summary
+              const toggle = () => {
+                if (!hasSummary) return
+                setExpandedSheet(isExpanded ? null : s.meta_id)
+              }
+              return (
+                <div
+                  key={s.meta_id || i}
+                  className={`p-2 ${hasSummary ? 'cursor-pointer hover:bg-muted/40 transition-colors' : ''}`}
+                  onClick={toggle}
+                >
+                  <div className="flex items-center gap-2">
+                    {hasSummary ? (
+                      <span className="text-muted-foreground shrink-0" title={isExpanded ? '收起摘要' : '展开完整摘要'}>
+                        {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                      </span>
+                    ) : (
+                      <span className="w-3 shrink-0" />
+                    )}
+                    <span className="text-xs font-mono">#{i + 1}</span>
+                    <span className="text-xs font-mono">{s.sheet_name}</span>
+                    <Badge variant="secondary" className="text-[10px] font-mono">{s.score.toFixed(3)}</Badge>
+                    {s.selected && <Badge variant="default" className="text-[10px]">已选</Badge>}
+                  </div>
+                  {/* 默认展示摘要前 1 行，点击整行切换展开/折叠完整内容 */}
                   {s.summary && (
-                    <button
-                      onClick={() => setExpandedSheet(expandedSheet === s.meta_id ? null : s.meta_id)}
-                      className="ml-auto text-xs text-muted-foreground hover:text-foreground"
-                      title={expandedSheet === s.meta_id ? '收起摘要' : '展开完整摘要'}
-                    >
-                      {expandedSheet === s.meta_id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                    </button>
+                    <p className={`text-xs text-muted-foreground mt-1 pl-5 ${isExpanded ? 'whitespace-pre-wrap break-all' : 'line-clamp-1'}`}>
+                      {s.summary}
+                    </p>
                   )}
                 </div>
-                {/* 默认展示摘要前 1 行，点击按钮展开完整内容 */}
-                {s.summary && (
-                  <p className={`text-xs text-muted-foreground mt-1 pl-6 ${expandedSheet === s.meta_id ? 'whitespace-pre-wrap break-all' : 'line-clamp-1'}`}>
-                    {s.summary}
-                  </p>
-                )}
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>
