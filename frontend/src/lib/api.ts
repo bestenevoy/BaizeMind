@@ -653,8 +653,9 @@ export interface CacheListResponse {
   enabled: boolean
   backend: string
   ttl_seconds: number
-  query_rewrite_enabled: boolean
   total: number
+  filtered_total: number
+  filtered_prefix?: string | null
   namespaces?: Record<string, number>
   entries: CacheEntry[]
   message?: string

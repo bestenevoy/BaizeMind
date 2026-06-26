@@ -29,8 +29,10 @@ async def list_cache(prefix: str | None = None, _: User = Depends(require_login)
             "enabled": False,
             "backend": settings.cache_backend,
             "ttl_seconds": settings.cache_ttl_seconds,
-            "query_rewrite_enabled": settings.cache_query_rewrite_enabled,
             "total": 0,
+            "filtered_total": 0,
+            "filtered_prefix": prefix,
+            "namespaces": {},
             "entries": [],
             "message": "cache_enabled=False, 缓存已全局禁用",
         }
@@ -39,9 +41,12 @@ async def list_cache(prefix: str | None = None, _: User = Depends(require_login)
     cache = get_cache()
     entries = cache.entries(prefix=prefix)
 
-    # 按 namespace 聚合计数
+    # namespaces 与 total 总是按全量计算（不受 prefix 影响），
+    # 这样前端切换筛选时 namespace 按钮列表和"总条目"数字保持稳定。
+    # filtered_total 才反映当前 prefix 过滤后的条目数。
+    all_entries = cache.entries() if prefix is not None else entries
     namespace_counts: dict[str, int] = {}
-    for e in entries:
+    for e in all_entries:
         ns = e.key.split(":", 1)[0] if ":" in e.key else "(no-ns)"
         namespace_counts[ns] = namespace_counts.get(ns, 0) + 1
 
@@ -49,8 +54,9 @@ async def list_cache(prefix: str | None = None, _: User = Depends(require_login)
         "enabled": True,
         "backend": settings.cache_backend,
         "ttl_seconds": settings.cache_ttl_seconds,
-        "query_rewrite_enabled": settings.cache_query_rewrite_enabled,
-        "total": len(entries),
+        "total": len(all_entries),
+        "filtered_total": len(entries),
+        "filtered_prefix": prefix,
         "namespaces": namespace_counts,
         "entries": [
             {

@@ -161,14 +161,6 @@ export function CachePanel() {
                 </div>
               )}
 
-              {/* 子开关 */}
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-muted-foreground">子开关:</span>
-                <Badge variant={data.query_rewrite_enabled ? 'default' : 'secondary'}>
-                  query_rewrite: {data.query_rewrite_enabled ? 'ON' : 'OFF'}
-                </Badge>
-              </div>
-
               {/* 操作区 */}
               <div className="flex flex-wrap items-center gap-2 mt-4 pt-3 border-t">
                 <span className="text-xs text-muted-foreground mr-1">Namespace 过滤:</span>
@@ -224,7 +216,17 @@ export function CachePanel() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-lg">
-            缓存条目 {data ? `(${data.entries.length})` : ''}
+            缓存条目{data ? (
+              filterNs ? (
+                <span className="text-sm font-normal text-muted-foreground ml-2">
+                  {data.filtered_total} / {data.total}（已按 "{filterNs}" 筛选）
+                </span>
+              ) : (
+                <span className="text-sm font-normal text-muted-foreground ml-2">
+                  共 {data.total} 条
+                </span>
+              )
+            ) : ''}
           </CardTitle>
         </CardHeader>
         <CardContent>

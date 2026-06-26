@@ -223,10 +223,13 @@ class AgenticRAGWorkflow:
         ``(dense_queries, bm25_query)``，dense 数量由 LLM 在
         ``[query_rewrite_count-1, query_rewrite_count+1]`` 区间内自行决定。
 
-        相同 query 会命中 :mod:`src.cache` 通用缓存，避免重复 LLM 调用。
-        缓存 key 包含 ``query_rewrite_language`` 与 ``query_rewrite_count``，
-        切换语言/数量会自动失效。LLM 调用失败时回退 ``([query], query)`` 且
-        不写缓存（下次仍会重试）。
+        缓存由 ``CachedLLM`` 自动处理（相同 prompt 字符串命中即返回）。
+        prompt 包含 ``query_rewrite_language`` 和 ``query_rewrite_count``，
+        切换任一参数会让 prompt 字符串变化 → CachedLLM 的 key 自然失效。
+        是否启用缓存由全局 ``settings.cache_enabled`` 决定。
+
+        LLM 调用失败时回退 ``([query], query)``，CachedLLM 失败时不会写入缓存，
+        下次仍会重试。
         """
         import json
 
@@ -234,33 +237,6 @@ class AgenticRAGWorkflow:
         min_n = max(1, n - 1)
         max_n = n + 1
 
-        # ── 缓存读取 ──
-        if settings.cache_enabled and settings.cache_query_rewrite_enabled:
-            from src.cache import get_cache, make_key
-            cache = get_cache()
-            cache_key = make_key(
-                "query_rewrite",
-                settings.query_rewrite_language,
-                f"n{n}",
-                query,
-            )
-            hit = cache.get(cache_key)
-            if hit is not None:
-                try:
-                    logger.info(f"Cache hit for query rewrite: {cache_key}")
-                    cached = json.loads(hit)
-                    if isinstance(cached, dict):
-                        dqs = cached.get("dense_queries", [])
-                        bq = cached.get("bm25_query", query)
-                        if isinstance(dqs, list) and dqs:
-                            return [str(x) for x in dqs], str(bq)
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    pass  # 损坏条目按 miss 处理
-        else:
-            cache = None
-            cache_key = None
-
-        # ── LLM 调用 ──
         try:
             prompt = QUERY_REWRITE_SYSTEM.format(
                 language=settings.query_rewrite_language,
@@ -283,15 +259,6 @@ class AgenticRAGWorkflow:
             while len(dense_queries) < min_n:
                 dense_queries.append(query)
 
-            # 仅在 LLM 成功时写缓存（失败回退值不应被缓存）
-            if cache is not None and cache_key is not None and dense_queries:
-                try:
-                    cache.set(
-                        cache_key,
-                        json.dumps({"dense_queries": dense_queries, "bm25_query": bm25_query}, ensure_ascii=False),
-                    )
-                except (TypeError, ValueError):
-                    pass
             return dense_queries if dense_queries else [query], bm25_query
         except Exception:
             return [query], query

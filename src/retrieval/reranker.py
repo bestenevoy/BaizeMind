@@ -65,9 +65,53 @@ class Reranker:
     def _cross_encoder_rerank(
         self, query: str, results: list[dict], top_k: int
     ) -> list[dict]:
-        """Use SiliconFlow reranker API (BAAI/bge-reranker-v2-m3). Falls back to local embedding cosine sim."""
+        """Use SiliconFlow reranker API (BAAI/bge-reranker-v2-m3). Falls back to local embedding cosine sim.
+
+        相同 (query, texts, top_k) 命中缓存，避免调试/评测时反复消耗 SiliconFlow 配额。
+        """
         api_key = settings.siliconflow_api_key
         if api_key:
+            # ── 缓存读取 ──
+            # key 包含 model + query + 文档内容 hash + top_n，文档变化自然失效
+            cache_hit = None
+            cache_key = None
+            if settings.cache_enabled:
+                from src.cache import get_cache, make_key
+                cache = get_cache()
+                texts_for_key = [r.get("text", "") for r in results]
+                cache_key = make_key(
+                    "rerank",
+                    settings.siliconflow_rerank_model,
+                    query,
+                    f"top_n{min(top_k, len(results))}",
+                    "\n".join(texts_for_key),
+                )
+                cached = cache.get(cache_key)
+                if cached is not None:
+                    try:
+                        import json as _json
+                        cached_items = _json.loads(cached)
+                        # 用缓存的 (index, score) 重建 results，避免 results 引用陈旧
+                        if isinstance(cached_items, list) and len(cached_items) <= len(results):
+                            out = []
+                            for item in cached_items:
+                                idx = item.get("index", -1)
+                                if 0 <= idx < len(results):
+                                    doc = dict(results[idx])
+                                    doc["rerank_score"] = item.get("rerank_score", 0)
+                                    out.append(doc)
+                            if out:
+                                cache_hit = out[:top_k]
+                                logger.info(
+                                    f"reranker: cross-encoder cache hit (key={cache_key[:24]}...)"
+                                )
+                    except (ValueError, TypeError) as e:
+                        logger.debug(f"reranker cache parse failed: {e}")
+
+            if cache_hit is not None:
+                return cache_hit
+
+            # ── 调用 SiliconFlow rerank API ──
             try:
                 texts = [r.get("text", "") for r in results]
                 resp = requests.post(
@@ -90,6 +134,7 @@ class Reranker:
                     reranked = data.get("results", [])
                     if reranked:
                         out = []
+                        cached_items = []
                         for item in reranked:
                             idx = item.get("index", 0)
                             if 0 <= idx < len(results):
@@ -98,7 +143,20 @@ class Reranker:
                                 doc = dict(results[idx])
                                 doc["rerank_score"] = item.get("relevance_score", 0)
                                 out.append(doc)
+                                cached_items.append({"index": idx, "rerank_score": doc["rerank_score"]})
                         logger.info(f"reranker: cross-encoder returned {len(out)} results (top score={out[0].get('rerank_score', 0):.4f})")
+
+                        # ── 写入缓存（仅存 (index, score)，避免存全文） ──
+                        if cache_key is not None and cached_items:
+                            try:
+                                import json as _json
+                                cache.set(
+                                    cache_key,
+                                    _json.dumps(cached_items),
+                                    ttl=settings.cache_ttl_seconds,
+                                )
+                            except (ValueError, TypeError):
+                                pass
                         return out[:top_k]
                     else:
                         logger.warning("reranker: cross-encoder API returned empty results, falling back")
