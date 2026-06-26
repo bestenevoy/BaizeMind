@@ -214,15 +214,18 @@ query_router
 ```
 answer_validator
   │
+  ├─ rerouted_to_sql=True 且 is_valid=false  → END  (★ 死循环防护，见下)
+  │
   ├─ is_valid=true 或 iteration >= max_iterations  → END
   │
-  └─ is_valid=false 且 iteration < max_iterations:
+  └─ is_valid=false 且 iteration < max_iterations 且 rerouted_to_sql=False:
        │
        ├─ failure_reason 含 "context_insufficient":
        │   │
-       │   ├─ 检索到 excel_sheet 类型的 chunk 且 rerouted_to_sql=False
+       │   ├─ 检索到 excel_sheet 类型的 chunk（metadata.source="excel_sheet" 或 chunk_id 前缀 "excel:"）
+       │   │   OR 回答文本含"信息不足"短语（兜底 validator 误判 is_valid=true 的场景）
        │   │   → sql_agent（自动重判走 NL2SQL 拿真实数据）
-       │   │   └─ sql_agent 返回时设置 rerouted_to_sql=True，防止循环
+       │   │   └─ sql_agent 返回时设置 rerouted_to_sql=True，防再次进 sql_agent
        │   │
        │   └─ 其他情况
        │       → retrieval_agent（重新检索）
@@ -232,11 +235,17 @@ answer_validator
 ```
 
 **重判触发条件**（自动从 doc rag 切换到 nl2sql）：
-1. `answer_validator` 标 `context_insufficient`（上下文不足以回答）
+1. `answer_validator` 标 `context_insufficient`，**OR** 回答文本含"信息不足"短语（兜底 validator 误判 is_valid=true 的场景）
 2. 检索 documents 中存在 `metadata.source == "excel_sheet"` 的 chunk（之前 doc rag 检索到了 sheet 摘要 chunk）
 3. `rerouted_to_sql=False`（尚未重判过，防死循环）
+4. `iteration < max_iterations`
 
 重判后 sql_agent 返回的 SQL 执行结果与之前的 sheet 摘要 chunk **累加**（LangGraph `operator.add`），answer_generator 看到"sheet 摘要 + 真实 SQL 结果"双重信息生成更准确的回答。
+
+**★ 死循环防护**（`rerouted_to_sql=True` 的双重作用）：
+- **第一次保护**：阻止 `sql_agent → validator → sql_agent` 循环（rerouted_to_sql=True 时不再触发重判条件）
+- **第二次保护**：阻止 `retrieval_agent → validator → retrieval_agent` 空转循环（rerouted_to_sql=True + is_valid=false 时直接 END，不再走 retrieval_agent）
+- **理由**：此时已穷尽 doc rag + nl2sql 两条路径，同一文档库再走 retrieval 也不会有新信息，继续烧 token 无意义
 
 ### 验证失败原因
 

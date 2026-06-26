@@ -248,6 +248,21 @@ def _route_after_validation(state: AgentState) -> str:
     docs = state.get("documents", [])
     has_excel_chunk = _has_excel_sheet_chunk(docs)
 
+    # 重判场景的最终保护：已经重判到 sql_agent 跑过了（rerouted_to_sql=True），
+    # validator 还说不通过 → 直接 END，避免 retrieval↔sql_agent 死循环。
+    # 因为此时已经穷尽了 doc rag + nl2sql 两条路径：
+    #   - doc rag: context_insufficient 触发了重判
+    #   - sql_agent: 跑了 NL2SQL（或 fallback 到 retrieval）
+    #   - 再走 retrieval_agent / answer_generator 重试不会带来新信息
+    # 同一份文档库检索结果一样，继续烧 token 无意义。
+    if state.get("rerouted_to_sql", False) and not is_valid:
+        logger.info(
+            "rerouted_to_sql=True + still invalid → END "
+            "(avoid retrieval↔sql_agent loop, iteration=%d/%d)",
+            iteration, max_iter,
+        )
+        return END
+
     # 自动重判触发条件（优先于正常 END/重试路径）：
     # 1. 尚未重判过（防死循环）
     # 2. 检索到了 excel_sheet 类型的 chunk（之前 doc rag 检索到了 sheet 摘要 chunk）
