@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { ChatMessage, type Message } from '@/components/ChatMessage'
 import { askQuestionStream, type StreamStep, type RetrievedDoc } from '@/lib/api'
+import { useAuth } from '@/hooks/useAuth'
 
 const STORAGE_KEY = 'agentic_rag_chat_history'
 
@@ -30,10 +31,15 @@ interface ChatPanelProps {
 }
 
 export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
+  const { user, isGuest } = useAuth()
   const [messages, setMessages] = useState<Message[]>(loadHistory)
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // 访客聊天输入长度上限（用于对外展示限制）
+  const guestMax = user?.guest_chat_max_length ?? 200
+  const maxLength = isGuest ? guestMax : undefined
 
   useEffect(() => {
     saveHistory(messages)
@@ -53,6 +59,18 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
   const handleSend = async () => {
     const query = input.trim()
     if (!query || isLoading) return
+    if (isGuest && maxLength && query.length > maxLength) {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', content: query },
+        {
+          role: 'assistant',
+          content: `访客模式下单次提问不能超过 ${maxLength} 字符，请登录后继续使用。`,
+        },
+      ])
+      setInput('')
+      return
+    }
 
     const userMsg: Message = { role: 'user', content: query }
     setMessages((prev) => [...prev, userMsg])
@@ -256,17 +274,31 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
 
         {/* Input */}
         <div className="border-t px-4 py-3 shrink-0">
+          {isGuest && (
+            <div className="flex items-center justify-between mb-1.5 text-[11px] text-muted-foreground">
+              <span>访客模式：仅用于展示</span>
+              <span className={input.length > (maxLength ?? 0) ? 'text-destructive' : ''}>
+                {input.length}/{maxLength}
+              </span>
+            </div>
+          )}
           <div className="flex gap-2">
             <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="输入你的问题..."
+              placeholder={isGuest ? '访客模式：输入问题进行体验（受字数限制）' : '输入你的问题...'}
               className="min-h-[44px] max-h-[120px] resize-none scrollbar-thin"
               rows={1}
               disabled={isLoading}
+              maxLength={maxLength}
             />
-            <Button onClick={handleSend} disabled={isLoading || !input.trim()} className="shrink-0 h-[44px] w-[44px] p-0" style={{ background: 'var(--gradient-brand)' }}>
+            <Button
+              onClick={handleSend}
+              disabled={isLoading || !input.trim() || (!!maxLength && input.length > maxLength)}
+              className="shrink-0 h-[44px] w-[44px] p-0"
+              style={{ background: 'var(--gradient-brand)' }}
+            >
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>
           </div>

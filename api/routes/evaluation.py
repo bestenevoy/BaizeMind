@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from api.schemas import (
@@ -19,6 +19,7 @@ from api.schemas import (
     EvalResultDetail,
 )
 from config.settings import settings
+from src.auth import User, require_admin, require_login
 from src.evaluation.dataset import EvalDataset
 from src.evaluation.runner import EvalRunner
 from src.storage import doc_store
@@ -73,13 +74,13 @@ def _list_results() -> list[dict]:
 # ── Dataset CRUD ──
 
 @router.get("/dataset", response_model=list[EvalSampleResponse])
-def list_dataset():
+def list_dataset(_: User = Depends(require_login)):
     ds = _get_dataset()
     return ds.samples
 
 
 @router.post("/dataset", response_model=EvalSampleResponse)
-def add_sample(sample: EvalSampleCreate):
+def add_sample(sample: EvalSampleCreate, _: User = Depends(require_admin)):
     ds = _get_dataset()
     data = sample.model_dump(exclude_none=True)
     ds.add_sample(data)
@@ -88,7 +89,7 @@ def add_sample(sample: EvalSampleCreate):
 
 
 @router.put("/dataset/{sample_id}", response_model=EvalSampleResponse)
-def update_sample(sample_id: str, update: EvalSampleUpdate):
+def update_sample(sample_id: str, update: EvalSampleUpdate, _: User = Depends(require_admin)):
     ds = _get_dataset()
     for i, s in enumerate(ds.samples):
         if s.get("id") == sample_id:
@@ -100,7 +101,7 @@ def update_sample(sample_id: str, update: EvalSampleUpdate):
 
 
 @router.delete("/dataset/{sample_id}")
-def delete_sample(sample_id: str):
+def delete_sample(sample_id: str, _: User = Depends(require_admin)):
     ds = _get_dataset()
     initial_len = len(ds.samples)
     ds._samples = [s for s in ds.samples if s.get("id") != sample_id]
@@ -111,7 +112,7 @@ def delete_sample(sample_id: str):
 
 
 @router.post("/dataset/import")
-def import_dataset(body: EvalDatasetImport):
+def import_dataset(body: EvalDatasetImport, _: User = Depends(require_admin)):
     ds = _get_dataset()
     if body.mode == "replace":
         ds._samples = body.samples
@@ -122,7 +123,7 @@ def import_dataset(body: EvalDatasetImport):
 
 
 @router.get("/dataset/export")
-def export_dataset():
+def export_dataset(_: User = Depends(require_login)):
     ds = _get_dataset()
     return ds.samples
 
@@ -130,7 +131,7 @@ def export_dataset():
 # ── Dataset Generation from Knowledge Base ──
 
 @router.post("/dataset/generate")
-def generate_dataset(req: EvalDatasetGenerate):
+def generate_dataset(req: EvalDatasetGenerate, _: User = Depends(require_admin)):
     def generate():
         try:
             yield from _generate_inner(req)
@@ -267,7 +268,7 @@ def generate_dataset(req: EvalDatasetGenerate):
 # ── Run Evaluation ──
 
 @router.post("/run")
-def run_evaluation(req: EvalRunRequest):
+def run_evaluation(req: EvalRunRequest, _: User = Depends(require_admin)):
     def generate():
         ds = _get_dataset()
         samples = ds.samples
@@ -353,12 +354,12 @@ def run_evaluation(req: EvalRunRequest):
 # ── Results ──
 
 @router.get("/results", response_model=list[EvalResultSummary])
-def list_results():
+def list_results(_: User = Depends(require_login)):
     return _list_results()
 
 
 @router.get("/results/{filename}", response_model=EvalResultDetail)
-def get_result(filename: str):
+def get_result(filename: str, _: User = Depends(require_login)):
     filepath = _results_dir / filename
     if not filepath.exists():
         raise HTTPException(status_code=404, detail=f"Result {filename} not found")
@@ -367,7 +368,7 @@ def get_result(filename: str):
 
 
 @router.delete("/results/{filename}")
-def delete_result(filename: str):
+def delete_result(filename: str, _: User = Depends(require_admin)):
     filepath = _results_dir / filename
     if not filepath.exists():
         raise HTTPException(status_code=404, detail=f"Result {filename} not found")

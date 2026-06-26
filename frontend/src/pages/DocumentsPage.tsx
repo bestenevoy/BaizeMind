@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Upload, FileText, BeakerIcon } from 'lucide-react'
 import { UploadPanel } from '@/components/UploadPanel'
@@ -8,6 +8,8 @@ import { DocumentList } from '@/components/DocumentList'
 import { SearchDebugPanel } from '@/components/SearchDebugPanel'
 import { Button } from '@/components/ui/button'
 import { useFolderFilter } from '@/hooks/useFolderFilter'
+import { useAuth } from '@/hooks/useAuth'
+import { getUploadQuota, type UploadQuota } from '@/lib/api'
 
 export function DocumentsPage() {
   const { selectedFolder, selectedDocId, selectedTags, toggleTag, selectFolder, selectDoc } = useFolderFilter()
@@ -16,9 +18,27 @@ export function DocumentsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = searchParams.get('tab') || 'docs'
   const setActiveTab = (tab: string) => setSearchParams({ tab })
+  const { canUpload, isGuest, isUser, user } = useAuth()
+  const [quota, setQuota] = useState<UploadQuota | null>(null)
+
+  const refreshQuota = useCallback(async () => {
+    if (!isUser) return
+    try {
+      setQuota(await getUploadQuota())
+    } catch {
+      /* ignore */
+    }
+  }, [isUser])
+
+  useEffect(() => {
+    refreshQuota()
+  }, [refreshQuota, user?.user_id])
 
   const handleFolderChanged = useCallback(() => setRefreshKey(k => k + 1), [])
-  const handleUploadComplete = useCallback(() => setRefreshKey(k => k + 1), [])
+  const handleUploadComplete = useCallback(() => {
+    setRefreshKey(k => k + 1)
+    refreshQuota()
+  }, [refreshQuota])
 
   return (
     <div className="container mx-auto pt-4 px-4 flex flex-col min-h-0 flex-1">
@@ -57,6 +77,7 @@ export function DocumentsPage() {
                   onSelectFolder={selectFolder}
                   onSelectDoc={selectDoc}
                   onChanged={handleFolderChanged}
+                  readonly={!canUpload}
                 />
               }
               tagFilter={<TagFilter selectedTags={selectedTags} onToggle={toggleTag} />}
@@ -72,16 +93,28 @@ export function DocumentsPage() {
                 onSelectDoc={() => {}}
                 onChanged={handleFolderChanged}
                 showDocs={false}
+                readonly={!canUpload}
               />
               <TagFilter selectedTags={selectedTags} onToggle={toggleTag} />
             </div>
 
             <div className="lg:col-span-10 min-h-0 overflow-y-auto">
-              <div className="flex justify-end mb-2">
-                <Button size="sm" onClick={() => setShowUpload(true)}>
-                  <Upload className="h-4 w-4 mr-1" />
-                  上传
-                </Button>
+              <div className="flex items-center justify-end mb-2 gap-2">
+                {isUser && quota && (
+                  <span className="text-xs text-muted-foreground">
+                    今日上传：{quota.used}/{quota.limit}
+                    {quota.remaining <= 0 && <span className="text-destructive ml-1">（已达上限）</span>}
+                  </span>
+                )}
+                {isGuest && (
+                  <span className="text-xs text-muted-foreground">访客模式：仅可查看，不可上传</span>
+                )}
+                {canUpload && (
+                  <Button size="sm" onClick={() => setShowUpload(true)} disabled={!!quota && quota.remaining <= 0}>
+                    <Upload className="h-4 w-4 mr-1" />
+                    上传
+                  </Button>
+                )}
               </div>
               <DocumentList folder={selectedFolder} tags={selectedTags} key={refreshKey} />
             </div>

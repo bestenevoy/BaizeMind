@@ -2,7 +2,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Depends
 from pydantic import BaseModel, Field
 
 from api.schemas import (
@@ -17,6 +17,13 @@ from api.schemas import (
     MoveRequest,
     TagRequest,
 )
+from src.auth import (
+    ROLE_USER,
+    User,
+    get_upload_count_today,
+    record_upload,
+    require_user,
+)
 from src.storage import doc_store
 from config.settings import settings
 
@@ -29,7 +36,17 @@ async def upload_document(
     file: UploadFile = File(...),
     folder: str = Form("/"),
     skip_evidence: bool = Form(False),
+    current: User = Depends(require_user),
 ):
+    # 普通用户每日上传配额检查（管理员不受限）
+    if current.role == ROLE_USER:
+        used = get_upload_count_today(current.user_id)
+        if used >= settings.auth_user_upload_daily_limit:
+            raise HTTPException(
+                429,
+                f"今日上传已达上限 ({settings.auth_user_upload_daily_limit} 篇/天)，请明天再试",
+            )
+
     folder = ("/" + folder.strip("/")) if folder != "/" else "/"
 
     filename = file.filename or "unknown"
@@ -48,6 +65,9 @@ async def upload_document(
     save_path.write_bytes(content)
 
     doc_store.create_document(doc_id, filename, folder, str(save_path))
+
+    # 记录上传日志（user / admin）
+    record_upload(current.user_id, doc_id, filename)
 
     background_tasks.add_task(_process_document, doc_id, str(save_path), folder, skip_evidence)
 
@@ -99,7 +119,7 @@ async def get_document_status(doc_id: str):
 
 
 @router.delete("/{doc_id}")
-async def delete_document(doc_id: str):
+async def delete_document(doc_id: str, current: User = Depends(require_user)):
     doc = doc_store.get_document(doc_id)
     if not doc:
         raise HTTPException(404, f"Document {doc_id} not found")
@@ -156,7 +176,7 @@ async def _delete_document_evidence(doc_id: str, doc: dict):
 
 
 @router.put("/{doc_id}/move", response_model=DocumentInfo)
-async def move_document(doc_id: str, req: MoveRequest):
+async def move_document(doc_id: str, req: MoveRequest, current: User = Depends(require_user)):
     folder = req.folder
     if folder and folder != "/":
         folder = "/" + folder.strip("/")
@@ -167,7 +187,7 @@ async def move_document(doc_id: str, req: MoveRequest):
 
 
 @router.post("/{doc_id}/tags", response_model=DocumentInfo)
-async def add_tag(doc_id: str, req: TagRequest):
+async def add_tag(doc_id: str, req: TagRequest, current: User = Depends(require_user)):
     doc = doc_store.add_tag(doc_id, req.tag)
     if not doc:
         raise HTTPException(404, f"Document {doc_id} not found")
@@ -273,6 +293,7 @@ async def retry_document(
     doc_id: str,
     background_tasks: BackgroundTasks,
     skip_evidence: bool = Form(False),
+    current: User = Depends(require_user),
 ):
     doc = doc_store.get_document(doc_id)
     if not doc:
@@ -298,7 +319,7 @@ async def retry_document(
 
 
 @router.delete("/{doc_id}/tags/{tag}", response_model=DocumentInfo)
-async def remove_tag(doc_id: str, tag: str):
+async def remove_tag(doc_id: str, tag: str, current: User = Depends(require_user)):
     doc = doc_store.remove_tag(doc_id, tag)
     if not doc:
         raise HTTPException(404, f"Document {doc_id} not found")
@@ -508,12 +529,12 @@ class FolderMoveRequest(BaseModel):
 
 
 @router.post("/folders")
-async def create_folder(req: FolderCreateRequest):
+async def create_folder(req: FolderCreateRequest, current: User = Depends(require_user)):
     return doc_store.create_folder(req.path)
 
 
 @router.delete("/folders/{folder_path:path}")
-async def delete_folder(folder_path: str):
+async def delete_folder(folder_path: str, current: User = Depends(require_user)):
     path = "/" + folder_path.lstrip("/")
     has_docs = doc_store._folder_has_docs(path)
 
@@ -545,6 +566,6 @@ async def delete_folder(folder_path: str):
 
 
 @router.put("/folders/move")
-async def move_folder_endpoint(req: FolderMoveRequest):
+async def move_folder_endpoint(req: FolderMoveRequest, current: User = Depends(require_user)):
     count = doc_store.move_folder(req.src, req.dst)
     return {"moved": True, "src": req.src, "dst": req.dst, "doc_count": count}

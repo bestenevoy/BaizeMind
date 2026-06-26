@@ -120,6 +120,18 @@ class Settings(BaseSettings):
     cache_db_path: str = "data/cache.db"  # 仅 sqlite 后端使用
     cache_query_rewrite_enabled: bool = True  # 单独开关：是否缓存 query rewrite 结果
 
+    # Auth / User system
+    auth_enabled: bool = True  # 全局开关：关闭后所有接口无需登录（开发用）
+    auth_admin_username: str = "admin"  # 初始管理员账号
+    auth_admin_password: str = "admin123"  # 初始管理员密码（首次启动自动创建，建议登录后修改）
+    auth_session_expire_hours: int = 24  # 会话有效期（小时）
+    # 访客角色限制
+    auth_guest_chat_max_length: int = 200  # 访客聊天输入最大字符数（对外展示用）
+    # 普通用户上传配额（按自然日计数）
+    auth_user_upload_daily_limit: int = 10  # 普通用户每日上传文档数上限
+    # 是否允许自助注册普通用户账号
+    auth_allow_register: bool = False
+
     # Server
     server_host: str = "0.0.0.0"
     server_port: int = 8000

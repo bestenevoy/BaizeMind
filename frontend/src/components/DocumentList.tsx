@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { listDocuments, deleteDocument, retryDocument, getDocumentContent, getDocumentChunks, moveDocument, listFolders, type DocumentInfo, type DocumentContent, type DocumentChunks, type FolderInfo } from '@/lib/api'
+import { useAuth } from '@/hooks/useAuth'
 
 interface DocumentListProps {
   folder: string | null
@@ -14,6 +15,10 @@ interface DocumentListProps {
 }
 
 export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
+  const { canManage, canUpload } = useAuth()
+  // 写操作（移动/重试/删除）需要至少是普通用户；删除走 canManage（管理员）
+  // 这里采用：普通用户可移动/重试，删除仅管理员可用
+  const canMutate = canUpload
   const [docs, setDocs] = useState<DocumentInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [previewDoc, setPreviewDoc] = useState<DocumentContent | null>(null)
@@ -183,6 +188,7 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
                   className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
                   onClick={() => openMoveDialog(doc)}
                   title="移动文件"
+                  disabled={!canMutate}
                 >
                   <FolderInput className="h-3 w-3" />
                 </Button>
@@ -192,7 +198,7 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
                     size="icon"
                     className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
                     onClick={() => handleRetry(doc.doc_id)}
-                    disabled={retrying === doc.doc_id}
+                    disabled={retrying === doc.doc_id || !canMutate}
                     title="重试"
                   >
                     {retrying === doc.doc_id ? (
@@ -207,6 +213,7 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
                   size="icon"
                   className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
                   onClick={() => handleDelete(doc.doc_id)}
+                  disabled={!canMutate}
                 >
                   <Trash2 className="h-3 w-3 text-destructive" />
                 </Button>

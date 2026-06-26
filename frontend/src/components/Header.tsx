@@ -2,9 +2,12 @@ import { Brain, Home, FileText, Settings, FlaskConical, BarChart3, Network, Work
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { healthCheck } from '@/lib/api'
+import { useAuth } from '@/hooks/useAuth'
+import { UserMenu } from '@/components/UserMenu'
 
 export function Header() {
   const [online, setOnline] = useState<boolean | null>(null)
+  const { isAdmin } = useAuth()
 
   useEffect(() => {
     const check = async () => {
@@ -16,13 +19,19 @@ export function Header() {
     return () => clearInterval(interval)
   }, [])
 
+  // 全部访客可见的导航项；管理员专属项根据角色动态注入
   const navItems = [
     { to: '/', label: '主页', icon: Home },
     { to: '/documents', label: '文档', icon: FileText },
     { to: '/graph', label: '图谱', icon: Network },
     { to: '/workflow', label: '编排', icon: Workflow },
     { to: '/evaluation', label: '评估', icon: BarChart3 },
-    { to: '/config', label: '配置', icon: Settings },
+    ...(isAdmin
+      ? [
+          { to: '/users', label: '用户', icon: FileText },
+          { to: '/config', label: '配置', icon: Settings },
+        ]
+      : []),
     { to: '/tests', label: '测试', icon: FlaskConical },
   ]
 
@@ -64,6 +73,9 @@ export function Header() {
           <span className="text-muted-foreground hidden sm:inline">
             {online === null ? '连接中...' : online ? '在线' : '离线'}
           </span>
+          <div className="ml-2">
+            <UserMenu />
+          </div>
         </div>
       </div>
     </header>

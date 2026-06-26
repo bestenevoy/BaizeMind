@@ -4,20 +4,34 @@ import time
 import traceback
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from api.schemas import QARequest, QAResponse
 from src.agents.workflow import get_workflow
+from src.auth import ROLE_GUEST, User, get_current_user_optional
 from src.storage.doc_store import get_document
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/qa", tags=["qa"])
 
 
+def _enforce_guest_chat_limit(query: str, user: User) -> None:
+    """访客聊天输入长度限制（对外展示用）。"""
+    if user.role == ROLE_GUEST and settings.auth_guest_chat_max_length > 0:
+        if len(query) > settings.auth_guest_chat_max_length:
+            raise HTTPException(
+                400,
+                f"访客模式下单次提问不能超过 {settings.auth_guest_chat_max_length} 字符，"
+                f"当前 {len(query)} 字符。请登录后继续使用。",
+            )
+
+
 @router.post("/ask", response_model=QAResponse)
-async def ask(request: QARequest):
+async def ask(request: QARequest, current: User = Depends(get_current_user_optional)):
+    _enforce_guest_chat_limit(request.query, current)
     start = time.time()
 
     try:
@@ -81,7 +95,8 @@ NODE_LABELS = {
 
 
 @router.post("/stream", response_class=StreamingResponse)
-async def ask_stream(request: QARequest):
+async def ask_stream(request: QARequest, current: User = Depends(get_current_user_optional)):
+    _enforce_guest_chat_limit(request.query, current)
     workflow = get_workflow()
 
     async def event_stream():

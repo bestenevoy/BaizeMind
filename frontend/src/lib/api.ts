@@ -1,5 +1,38 @@
 const API_BASE = '/api/v1'
 
+// ── Auth token 管理 ──
+const AUTH_TOKEN_KEY = 'agentic_rag_auth_token'
+
+export function getAuthToken(): string | null {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function setAuthToken(token: string | null) {
+  try {
+    if (token) localStorage.setItem(AUTH_TOKEN_KEY, token)
+    else localStorage.removeItem(AUTH_TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 统一的 fetch 封装：自动注入 Authorization header，并在 401 时清除 token。 */
+async function authFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const token = getAuthToken()
+  const headers = new Headers(init.headers || {})
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const res = await fetch(input, { ...init, headers })
+  if (res.status === 401) {
+    // 仅清除 token，由调用方/上层决定如何提示用户登录
+    setAuthToken(null)
+  }
+  return res
+}
+
 export interface RetrievedDoc {
   doc_id: string
   chunk_id: string
@@ -105,13 +138,13 @@ export async function uploadDocument(file: File, folder: string = '/', skipEvide
   formData.append('file', file)
   formData.append('folder', folder)
   if (skipEvidence) formData.append('skip_evidence', 'true')
-  const res = await fetch(`${API_BASE}/documents/upload`, { method: 'POST', body: formData })
+  const res = await authFetch(`${API_BASE}/documents/upload`, { method: 'POST', body: formData })
   if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function getDocumentStatus(docId: string): Promise<DocumentStatus> {
-  const res = await fetch(`${API_BASE}/documents/status/${docId}`)
+  const res = await authFetch(`${API_BASE}/documents/status/${docId}`)
   if (!res.ok) throw new Error(`Status check failed: ${res.statusText}`)
   return res.json()
 }
@@ -121,18 +154,18 @@ export async function listDocuments(folder?: string, tags?: string[], status?: s
   if (folder) params.set('folder', folder)
   if (tags?.length) params.set('tags', tags.join(','))
   if (status) params.set('status', status)
-  const res = await fetch(`${API_BASE}/documents/list?${params}`)
+  const res = await authFetch(`${API_BASE}/documents/list?${params}`)
   if (!res.ok) throw new Error(`List failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function deleteDocument(docId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/documents/${docId}`, { method: 'DELETE' })
+  const res = await authFetch(`${API_BASE}/documents/${docId}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`Delete failed: ${res.statusText}`)
 }
 
 export async function moveDocument(docId: string, folder: string): Promise<DocumentInfo> {
-  const res = await fetch(`${API_BASE}/documents/${docId}/move`, {
+  const res = await authFetch(`${API_BASE}/documents/${docId}/move`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ folder }),
@@ -142,7 +175,7 @@ export async function moveDocument(docId: string, folder: string): Promise<Docum
 }
 
 export async function addTag(docId: string, tag: string): Promise<DocumentInfo> {
-  const res = await fetch(`${API_BASE}/documents/${docId}/tags`, {
+  const res = await authFetch(`${API_BASE}/documents/${docId}/tags`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tag }),
@@ -164,25 +197,25 @@ export interface DocumentContent {
 }
 
 export async function getDocumentContent(docId: string): Promise<DocumentContent> {
-  const res = await fetch(`${API_BASE}/documents/${docId}/content`)
+  const res = await authFetch(`${API_BASE}/documents/${docId}/content`)
   if (!res.ok) throw new Error(`Get content failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function getDocumentChunks(docId: string): Promise<DocumentChunks> {
-  const res = await fetch(`${API_BASE}/documents/${docId}/chunks`)
+  const res = await authFetch(`${API_BASE}/documents/${docId}/chunks`)
   if (!res.ok) throw new Error(`Get chunks failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function retryDocument(docId: string): Promise<{ doc_id: string; filename: string; folder: string; status: string }> {
-  const res = await fetch(`${API_BASE}/documents/${docId}/retry`, { method: 'POST' })
+  const res = await authFetch(`${API_BASE}/documents/${docId}/retry`, { method: 'POST' })
   if (!res.ok) throw new Error(`Retry failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function removeTag(docId: string, tag: string): Promise<DocumentInfo> {
-  const res = await fetch(`${API_BASE}/documents/${docId}/tags/${encodeURIComponent(tag)}`, { method: 'DELETE' })
+  const res = await authFetch(`${API_BASE}/documents/${docId}/tags/${encodeURIComponent(tag)}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`Remove tag failed: ${res.statusText}`)
   return res.json()
 }
@@ -190,7 +223,7 @@ export async function removeTag(docId: string, tag: string): Promise<DocumentInf
 // ── Folder Management ──
 
 export async function createFolder(path: string): Promise<{ folder: string; doc_count: number }> {
-  const res = await fetch(`${API_BASE}/documents/folders`, {
+  const res = await authFetch(`${API_BASE}/documents/folders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path }),
@@ -200,13 +233,13 @@ export async function createFolder(path: string): Promise<{ folder: string; doc_
 }
 
 export async function deleteFolder(path: string): Promise<{ deleted: boolean; folder: string; doc_count: number }> {
-  const res = await fetch(`${API_BASE}/documents/folders${path}`, { method: 'DELETE' })
+  const res = await authFetch(`${API_BASE}/documents/folders${path}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`Delete folder failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function moveFolder(src: string, dst: string): Promise<{ moved: boolean; src: string; dst: string; doc_count: number }> {
-  const res = await fetch(`${API_BASE}/documents/folders/move`, {
+  const res = await authFetch(`${API_BASE}/documents/folders/move`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ src, dst }),
@@ -218,13 +251,13 @@ export async function moveFolder(src: string, dst: string): Promise<{ moved: boo
 // ── Folders & Tags ──
 
 export async function listFolders(): Promise<FolderInfo[]> {
-  const res = await fetch(`${API_BASE}/documents/folders`)
+  const res = await authFetch(`${API_BASE}/documents/folders`)
   if (!res.ok) throw new Error(`List folders failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function listTags(): Promise<TagInfo[]> {
-  const res = await fetch(`${API_BASE}/documents/tags`)
+  const res = await authFetch(`${API_BASE}/documents/tags`)
   if (!res.ok) throw new Error(`List tags failed: ${res.statusText}`)
   return res.json()
 }
@@ -232,7 +265,7 @@ export async function listTags(): Promise<TagInfo[]> {
 // ── QA ──
 
 export async function askQuestion(query: string, folder?: string, tags?: string[]): Promise<QAResponse> {
-  const res = await fetch(`${API_BASE}/qa/ask`, {
+  const res = await authFetch(`${API_BASE}/qa/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, stream: false, folder, tags }),
@@ -259,7 +292,7 @@ export async function askQuestionStream(
   folder?: string,
   tags?: string[],
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/qa/stream`, {
+  const res = await authFetch(`${API_BASE}/qa/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, stream: true, folder, tags }),
@@ -309,14 +342,14 @@ export async function askQuestionStream(
 // ── System ──
 
 export async function getSystemStats(): Promise<SystemStats> {
-  const res = await fetch(`${API_BASE}/system/stats`)
+  const res = await authFetch(`${API_BASE}/system/stats`)
   if (!res.ok) throw new Error(`Stats failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function getGraphOverview(docId?: string): Promise<GraphOverview> {
   const params = docId ? `?doc_id=${encodeURIComponent(docId)}` : ''
-  const res = await fetch(`${API_BASE}/system/graph/overview${params}`)
+  const res = await authFetch(`${API_BASE}/system/graph/overview${params}`)
   if (!res.ok) throw new Error(`Graph overview failed: ${res.statusText}`)
   return res.json()
 }
@@ -338,7 +371,7 @@ export interface EntityDetail {
 }
 
 export async function getEntityDetail(entityName: string): Promise<EntityDetail> {
-  const res = await fetch(`${API_BASE}/system/graph/entity/${encodeURIComponent(entityName)}`)
+  const res = await authFetch(`${API_BASE}/system/graph/entity/${encodeURIComponent(entityName)}`)
   if (!res.ok) throw new Error(`Entity detail failed: ${res.statusText}`)
   return res.json()
 }
@@ -354,7 +387,7 @@ export interface ConfigResponse {
 }
 
 export async function getConfig(): Promise<ConfigResponse> {
-  const res = await fetch(`${API_BASE}/system/config`)
+  const res = await authFetch(`${API_BASE}/system/config`)
   if (!res.ok) throw new Error(`Config failed: ${res.statusText}`)
   return res.json()
 }
@@ -367,7 +400,7 @@ export interface ConnectivityResult {
 }
 
 export async function checkConnectivity(): Promise<ConnectivityResult[]> {
-  const res = await fetch(`${API_BASE}/system/connectivity-check`)
+  const res = await authFetch(`${API_BASE}/system/connectivity-check`)
   if (!res.ok) throw new Error(`Connectivity check failed: ${res.statusText}`)
   return res.json()
 }
@@ -448,7 +481,7 @@ export interface SearchDebugResponse {
 }
 
 export async function searchDebug(query: string, folder?: string | null, tags?: string[], docId?: string | null, topK?: number): Promise<SearchDebugResponse> {
-  const res = await fetch(`${API_BASE}/system/search`, {
+  const res = await authFetch(`${API_BASE}/system/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     // top_k 不传时后端用 settings.hybrid_top_k（可被 runtime 页编辑覆盖）
@@ -525,13 +558,13 @@ export function validateConfigValue(key: string, value: string): string | null {
 }
 
 export async function listEditableConfig(): Promise<EditableConfigItem[]> {
-  const res = await fetch(`${API_BASE}/system/config/editable`)
+  const res = await authFetch(`${API_BASE}/system/config/editable`)
   if (!res.ok) throw new Error(`List editable config failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function updateConfigOverride(key: string, value: string): Promise<{ key: string; value: unknown; saved: boolean }> {
-  const res = await fetch(`${API_BASE}/system/config/editable`, {
+  const res = await authFetch(`${API_BASE}/system/config/editable`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ key, value }),
@@ -541,7 +574,7 @@ export async function updateConfigOverride(key: string, value: string): Promise<
 }
 
 export async function resetConfigOverride(key: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/system/config/editable/${encodeURIComponent(key)}`, { method: 'DELETE' })
+  const res = await authFetch(`${API_BASE}/system/config/editable/${encodeURIComponent(key)}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`Reset config failed: ${res.statusText}`)
 }
 
@@ -570,26 +603,26 @@ export interface CacheListResponse {
 
 export async function listCache(prefix?: string): Promise<CacheListResponse> {
   const params = prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''
-  const res = await fetch(`${API_BASE}/system/cache${params}`)
+  const res = await authFetch(`${API_BASE}/system/cache${params}`)
   if (!res.ok) throw new Error(`List cache failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function clearCache(prefix?: string): Promise<{ success: boolean; cleared: number; prefix: string | null; message?: string }> {
   const params = prefix ? `?prefix=${encodeURIComponent(prefix)}` : ''
-  const res = await fetch(`${API_BASE}/system/cache/clear${params}`, { method: 'POST' })
+  const res = await authFetch(`${API_BASE}/system/cache/clear${params}`, { method: 'POST' })
   if (!res.ok) throw new Error(`Clear cache failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function deleteCacheEntry(key: string): Promise<{ success: boolean; existed: boolean; key: string }> {
-  const res = await fetch(`${API_BASE}/system/cache/${encodeURIComponent(key)}`, { method: 'DELETE' })
+  const res = await authFetch(`${API_BASE}/system/cache/${encodeURIComponent(key)}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`Delete cache entry failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function cleanupOrphans(): Promise<{ milvus_deleted: number; neo4j_deleted_entities: number }> {
-  const res = await fetch(`${API_BASE}/system/cleanup-orphans`, { method: 'POST' })
+  const res = await authFetch(`${API_BASE}/system/cleanup-orphans`, { method: 'POST' })
   if (!res.ok) throw new Error(`Cleanup failed: ${res.statusText}`)
   return res.json()
 }
@@ -607,37 +640,37 @@ export interface BuildGraphResult {
 }
 
 export async function buildGraph(): Promise<BuildGraphResult> {
-  const res = await fetch(`${API_BASE}/system/build-graph`, { method: 'POST' })
+  const res = await authFetch(`${API_BASE}/system/build-graph`, { method: 'POST' })
   if (!res.ok) throw new Error(`Build graph failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function buildGraphStatus(): Promise<BuildGraphResult['status'] & { result?: BuildGraphResult; phase?: string }> {
-  const res = await fetch(`${API_BASE}/system/build-graph/status`)
+  const res = await authFetch(`${API_BASE}/system/build-graph/status`)
   if (!res.ok) throw new Error(`Status check failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function deleteAllVectors(): Promise<{ success: boolean; message?: string }> {
-  const res = await fetch(`${API_BASE}/system/delete-all-vectors`, { method: 'POST' })
+  const res = await authFetch(`${API_BASE}/system/delete-all-vectors`, { method: 'POST' })
   if (!res.ok) throw new Error(`Delete vectors failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function rebuildBM25(): Promise<{ success: boolean; message?: string }> {
-  const res = await fetch(`${API_BASE}/system/rebuild-bm25`, { method: 'POST' })
+  const res = await authFetch(`${API_BASE}/system/rebuild-bm25`, { method: 'POST' })
   if (!res.ok) throw new Error(`Rebuild BM25 failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function deleteAllGraph(): Promise<{ success: boolean; message?: string }> {
-  const res = await fetch(`${API_BASE}/system/delete-all-graph`, { method: 'POST' })
+  const res = await authFetch(`${API_BASE}/system/delete-all-graph`, { method: 'POST' })
   if (!res.ok) throw new Error(`Delete graph failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function deleteInactiveGraph(): Promise<{ success: boolean; entities_deleted?: number; facts_deleted?: number; attrs_deleted?: number; message?: string }> {
-  const res = await fetch(`${API_BASE}/system/delete-inactive-graph`, { method: 'POST' })
+  const res = await authFetch(`${API_BASE}/system/delete-inactive-graph`, { method: 'POST' })
   if (!res.ok) throw new Error(`Delete inactive graph failed: ${res.statusText}`)
   return res.json()
 }
@@ -730,13 +763,13 @@ export interface EvalResultDetail {
 }
 
 export async function listDataset(): Promise<EvalSample[]> {
-  const res = await fetch(`${API_BASE}/evaluation/dataset`)
+  const res = await authFetch(`${API_BASE}/evaluation/dataset`)
   if (!res.ok) throw new Error(`List dataset failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function addSample(sample: Omit<EvalSample, 'id'> & { id?: string }): Promise<EvalSample> {
-  const res = await fetch(`${API_BASE}/evaluation/dataset`, {
+  const res = await authFetch(`${API_BASE}/evaluation/dataset`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(sample),
@@ -746,7 +779,7 @@ export async function addSample(sample: Omit<EvalSample, 'id'> & { id?: string }
 }
 
 export async function updateSample(sampleId: string, updates: Partial<EvalSample>): Promise<EvalSample> {
-  const res = await fetch(`${API_BASE}/evaluation/dataset/${encodeURIComponent(sampleId)}`, {
+  const res = await authFetch(`${API_BASE}/evaluation/dataset/${encodeURIComponent(sampleId)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
@@ -756,14 +789,14 @@ export async function updateSample(sampleId: string, updates: Partial<EvalSample
 }
 
 export async function deleteSample(sampleId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/evaluation/dataset/${encodeURIComponent(sampleId)}`, {
+  const res = await authFetch(`${API_BASE}/evaluation/dataset/${encodeURIComponent(sampleId)}`, {
     method: 'DELETE',
   })
   if (!res.ok) throw new Error(`Delete sample failed: ${res.statusText}`)
 }
 
 export async function importDataset(samples: Record<string, unknown>[], mode: 'replace' | 'merge' = 'replace'): Promise<{ count: number; mode: string }> {
-  const res = await fetch(`${API_BASE}/evaluation/dataset/import`, {
+  const res = await authFetch(`${API_BASE}/evaluation/dataset/import`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ samples, mode }),
@@ -773,7 +806,7 @@ export async function importDataset(samples: Record<string, unknown>[], mode: 'r
 }
 
 export async function exportDataset(): Promise<EvalSample[]> {
-  const res = await fetch(`${API_BASE}/evaluation/dataset/export`)
+  const res = await authFetch(`${API_BASE}/evaluation/dataset/export`)
   if (!res.ok) throw new Error(`Export dataset failed: ${res.statusText}`)
   return res.json()
 }
@@ -799,7 +832,7 @@ export async function runEvaluation(
 ): Promise<void> {
   const body: Record<string, unknown> = { max_samples: maxSamples || undefined }
   if (folder) body.folder = folder
-  const res = await fetch(`${API_BASE}/evaluation/run`, {
+  const res = await authFetch(`${API_BASE}/evaluation/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -842,19 +875,19 @@ export async function runEvaluation(
 }
 
 export async function listResults(): Promise<EvalResultSummary[]> {
-  const res = await fetch(`${API_BASE}/evaluation/results`)
+  const res = await authFetch(`${API_BASE}/evaluation/results`)
   if (!res.ok) throw new Error(`List results failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function getResult(filename: string): Promise<EvalResultDetail> {
-  const res = await fetch(`${API_BASE}/evaluation/results/${encodeURIComponent(filename)}`)
+  const res = await authFetch(`${API_BASE}/evaluation/results/${encodeURIComponent(filename)}`)
   if (!res.ok) throw new Error(`Get result failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function deleteResult(filename: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/evaluation/results/${encodeURIComponent(filename)}`, {
+  const res = await authFetch(`${API_BASE}/evaluation/results/${encodeURIComponent(filename)}`, {
     method: 'DELETE',
   })
   if (!res.ok) throw new Error(`Delete result failed: ${res.statusText}`)
@@ -883,7 +916,7 @@ export async function generateDataset(
   onDone: (count: number) => void,
   onError: (err: string) => void,
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/evaluation/dataset/generate`, {
+  const res = await authFetch(`${API_BASE}/evaluation/dataset/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ folder: folder || '/', max_docs: maxDocs, samples_per_doc: samplesPerDoc, mode }),
@@ -917,3 +950,156 @@ export async function generateDataset(
   }
   onDone(0)
 }
+
+// ── Auth / User ──
+
+export type UserRole = 'admin' | 'user' | 'guest'
+
+export interface UserInfo {
+  user_id: string
+  username: string
+  role: UserRole
+  is_guest: boolean
+  upload_used_today: number
+  upload_limit: number  // -1 表示无限制（管理员）
+  guest_chat_max_length: number
+}
+
+export interface LoginResponse {
+  token: string
+  username: string
+  role: UserRole
+  expires_at: string
+}
+
+export interface UploadQuota {
+  used: number
+  limit: number
+  remaining: number
+}
+
+export interface AdminUser {
+  user_id: string
+  username: string
+  role: UserRole
+  active: number
+  created_at: string
+  updated_at: string
+}
+
+/** 提取后端错误信息（兼容 {detail: ...} / {error: ...} / 纯文本） */
+async function extractError(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = await res.json()
+    return body?.detail || body?.error || body?.message || fallback
+  } catch {
+    return fallback
+  }
+}
+
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  if (!res.ok) {
+    throw new Error(await extractError(res, `登录失败: ${res.statusText}`))
+  }
+  const data: LoginResponse = await res.json()
+  setAuthToken(data.token)
+  return data
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await authFetch(`${API_BASE}/auth/logout`, { method: 'POST' })
+  } catch {
+    /* ignore */
+  }
+  setAuthToken(null)
+}
+
+export async function getCurrentUser(): Promise<UserInfo> {
+  const res = await authFetch(`${API_BASE}/auth/me`)
+  if (!res.ok) {
+    // 未登录或会话过期 — 返回访客身份，避免阻塞首屏
+    return {
+      user_id: '',
+      username: 'guest',
+      role: 'guest',
+      is_guest: true,
+      upload_used_today: 0,
+      upload_limit: 0,
+      guest_chat_max_length: 200,
+    }
+  }
+  return res.json()
+}
+
+export async function register(username: string, password: string): Promise<UserInfo> {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  if (!res.ok) throw new Error(await extractError(res, `注册失败: ${res.statusText}`))
+  return res.json()
+}
+
+export async function changeMyPassword(oldPassword: string, newPassword: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/auth/password`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+  })
+  if (!res.ok) throw new Error(await extractError(res, `修改密码失败: ${res.statusText}`))
+}
+
+export async function getUploadQuota(): Promise<UploadQuota> {
+  const res = await authFetch(`${API_BASE}/auth/upload-quota`)
+  if (!res.ok) throw new Error(`获取配额失败: ${res.statusText}`)
+  return res.json()
+}
+
+// ── 管理员：用户管理 ──
+
+export async function adminListUsers(): Promise<AdminUser[]> {
+  const res = await authFetch(`${API_BASE}/auth/users`)
+  if (!res.ok) throw new Error(await extractError(res, `获取用户列表失败: ${res.statusText}`))
+  return res.json()
+}
+
+export async function adminCreateUser(username: string, password: string, role: UserRole): Promise<UserInfo> {
+  const res = await authFetch(`${API_BASE}/auth/users`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password, role }),
+  })
+  if (!res.ok) throw new Error(await extractError(res, `创建用户失败: ${res.statusText}`))
+  return res.json()
+}
+
+export async function adminUpdateUserRole(userId: string, role: UserRole): Promise<void> {
+  const res = await authFetch(`${API_BASE}/auth/users/${userId}/role`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  })
+  if (!res.ok) throw new Error(await extractError(res, `修改角色失败: ${res.statusText}`))
+}
+
+export async function adminResetUserPassword(userId: string, newPassword: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/auth/users/${userId}/password`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_password: newPassword }),
+  })
+  if (!res.ok) throw new Error(await extractError(res, `重置密码失败: ${res.statusText}`))
+}
+
+export async function adminDeleteUser(userId: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/auth/users/${userId}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(await extractError(res, `删除用户失败: ${res.statusText}`))
+}
+

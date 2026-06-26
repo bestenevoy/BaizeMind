@@ -1,3 +1,4 @@
+import { type ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Header } from '@/components/Header'
 import { Home } from '@/pages/Home'
@@ -7,6 +8,17 @@ import { TestsPage } from '@/pages/TestsPage'
 import { EvaluationPage } from '@/pages/EvaluationPage'
 import { GraphPage } from '@/pages/GraphPage'
 import { WorkflowPage } from '@/pages/WorkflowPage'
+import { LoginPage } from '@/pages/LoginPage'
+import { UsersPage } from '@/pages/UsersPage'
+import { useAuth } from '@/hooks/useAuth'
+
+/** 要求管理员才能访问 */
+function RequireAdmin({ children }: { children: ReactNode }) {
+  const { isAdmin, loading } = useAuth()
+  if (loading) return null
+  if (!isAdmin) return <Navigate to="/" replace />
+  return <>{children}</>
+}
 
 function App() {
   return (
@@ -19,8 +31,24 @@ function App() {
           <Route path="/graph" element={<GraphPage />} />
           <Route path="/workflow" element={<WorkflowPage />} />
           <Route path="/evaluation" element={<EvaluationPage />} />
-          <Route path="/config" element={<ConfigPage />} />
           <Route path="/tests" element={<TestsPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/users"
+            element={
+              <RequireAdmin>
+                <UsersPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/config"
+            element={
+              <RequireAdmin>
+                <ConfigPage />
+              </RequireAdmin>
+            }
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

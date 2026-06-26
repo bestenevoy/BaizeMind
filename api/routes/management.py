@@ -2,10 +2,11 @@ import time
 import os
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from api.schemas import SystemStatsResponse, ConnectivityResult, GraphOverviewResponse, GraphNode, GraphEdge, EntityDetailResponse, ChunkInfo
 from config.settings import settings
+from src.auth import User, require_admin, require_login
 from src.retrieval.vector_retriever import MilvusVectorRetriever
 from src.retrieval.bm25_retriever import BM25Retriever
 from src.retrieval.hybrid_retriever import HybridRetriever
@@ -105,7 +106,7 @@ def _mask_secret(value: str) -> str:
 
 
 @router.get("/config")
-async def get_config():
+async def get_config(_: User = Depends(require_admin)):
     categories = []
     for cat_name, fields in SETTING_CATEGORIES:
         items = []
@@ -285,7 +286,7 @@ async def get_stats():
 
 
 @router.post("/cleanup-orphans")
-async def cleanup_orphans():
+async def cleanup_orphans(_: User = Depends(require_admin)):
     """Remove vectors and entities that have no corresponding document in doc_store."""
     result = {"milvus_deleted": 0, "neo4j_deleted_entities": 0}
     try:
@@ -622,7 +623,7 @@ def _run_build_graph():
 
 
 @router.post("/build-graph")
-async def build_graph():
+async def build_graph(_: User = Depends(require_admin)):
     if _build_status.get("running"):
         return {"success": False, "message": "Build already in progress", "status": _build_status}
     threading.Thread(target=_run_build_graph, daemon=True).start()
@@ -633,7 +634,7 @@ async def build_graph():
 
 
 @router.post("/rebuild-bm25")
-async def rebuild_bm25():
+async def rebuild_bm25(_: User = Depends(require_admin)):
     try:
         from src.retrieval.bm25_retriever import BM25Retriever
         bm25 = BM25Retriever()
@@ -658,7 +659,7 @@ async def rebuild_bm25():
 
 
 @router.post("/delete-all-vectors")
-async def delete_all_vectors():
+async def delete_all_vectors(_: User = Depends(require_admin)):
     try:
         from src.retrieval.vector_retriever import MilvusVectorRetriever
         vr = MilvusVectorRetriever()
@@ -670,7 +671,7 @@ async def delete_all_vectors():
 
 
 @router.post("/delete-all-graph")
-async def delete_all_graph():
+async def delete_all_graph(_: User = Depends(require_admin)):
     try:
         from src.knowledge_graph.neo4j_manager import Neo4jManager
         nm = Neo4jManager()
@@ -683,7 +684,7 @@ async def delete_all_graph():
 
 
 @router.post("/delete-inactive-graph")
-async def delete_inactive_graph():
+async def delete_inactive_graph(_: User = Depends(require_admin)):
     try:
         from src.knowledge_graph.neo4j_manager import Neo4jManager
         nm = Neo4jManager()
@@ -727,12 +728,12 @@ class ConfigOverrideBody(BaseModel):
 
 
 @router.get("/config/editable")
-async def list_editable_config():
+async def list_editable_config(_: User = Depends(require_admin)):
     return config_overrides.list_editable_config()
 
 
 @router.put("/config/editable")
-async def update_config_override(body: ConfigOverrideBody):
+async def update_config_override(body: ConfigOverrideBody, _: User = Depends(require_admin)):
     try:
         # Coerce value type based on key
         current = getattr(settings, body.key, "")
@@ -754,7 +755,7 @@ async def update_config_override(body: ConfigOverrideBody):
 
 
 @router.delete("/config/editable/{key}")
-async def reset_config_override(key: str):
+async def reset_config_override(key: str, _: User = Depends(require_admin)):
     overrides = config_overrides.load_overrides()
     if key in overrides:
         del overrides[key]
@@ -774,7 +775,7 @@ def _truncate(s: str, n: int = 200) -> str:
 
 
 @router.get("/cache")
-async def list_cache(prefix: str | None = None):
+async def list_cache(prefix: str | None = None, _: User = Depends(require_login)):
     """列出缓存条目。
 
     Query 参数：
@@ -826,7 +827,7 @@ async def list_cache(prefix: str | None = None):
 
 
 @router.post("/cache/clear")
-async def clear_cache(prefix: str | None = None):
+async def clear_cache(prefix: str | None = None, _: User = Depends(require_admin)):
     """清空缓存。
 
     Query 参数：
@@ -851,7 +852,7 @@ async def clear_cache(prefix: str | None = None):
 
 
 @router.delete("/cache/{key}")
-async def delete_cache_entry(key: str):
+async def delete_cache_entry(key: str, _: User = Depends(require_admin)):
     """删除单个缓存条目。
 
     ``key`` 是 :func:`make_key` 生成的完整 key（形如 ``namespace:hash``）。
