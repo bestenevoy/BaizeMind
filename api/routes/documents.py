@@ -262,7 +262,7 @@ async def get_document_raw(doc_id: str):
 
     import mimetypes
     media_type = mimetypes.guess_type(fp.name)[0] or "application/octet-stream"
-    return FileResponse(fp, media_type=media_type, filename=doc.get("filename", fp.name))
+    return FileResponse(fp, media_type=media_type, filename=doc.get("filename", fp.name), content_disposition_type="inline")
 
 
 @router.post("/{doc_id}/retry", response_model=DocumentUploadResponse)

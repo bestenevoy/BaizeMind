@@ -18,7 +18,7 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
   const [loading, setLoading] = useState(false)
   const [previewDoc, setPreviewDoc] = useState<DocumentContent | null>(null)
   const [previewChunks, setPreviewChunks] = useState<DocumentChunks | null>(null)
-  const [activeTab, setActiveTab] = useState<'content' | 'chunks'>('content')
+  const [activeTab, setActiveTab] = useState<'markdown' | 'original' | 'chunks'>('markdown')
   const [previewLoading, setPreviewLoading] = useState(false)
   const [retrying, setRetrying] = useState<string | null>(null)
   const [moveTarget, setMoveTarget] = useState<DocumentInfo | null>(null)
@@ -88,7 +88,7 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
 
   const handlePreview = async (docId: string) => {
     setPreviewLoading(true)
-    setActiveTab('content')
+    setActiveTab('markdown')
     try {
       const content = await getDocumentContent(docId)
       setPreviewDoc(content)
@@ -228,8 +228,11 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
             <div className="flex items-center justify-between p-4 border-b">
               <h3 className="font-semibold">文档详情 - {previewDoc.filename}</h3>
               <div className="flex items-center gap-2">
-                <Button variant={activeTab === 'content' ? 'secondary' : 'ghost'} size="sm" onClick={() => setActiveTab('content')}>
-                  <FileText className="h-3.5 w-3.5 mr-1" />原始/解析
+                <Button variant={activeTab === 'markdown' ? 'secondary' : 'ghost'} size="sm" onClick={() => setActiveTab('markdown')}>
+                  <FileText className="h-3.5 w-3.5 mr-1" />Markdown
+                </Button>
+                <Button variant={activeTab === 'original' ? 'secondary' : 'ghost'} size="sm" onClick={() => setActiveTab('original')}>
+                  <FileImage className="h-3.5 w-3.5 mr-1" />原始
                 </Button>
                 <Button variant={activeTab === 'chunks' ? 'secondary' : 'ghost'} size="sm" onClick={() => setActiveTab('chunks')}>
                   <Layers className="h-3.5 w-3.5 mr-1" />Chunks{previewChunks ? ` (${previewChunks.total})` : ''}
@@ -240,57 +243,57 @@ export function DocumentList({ folder, tags, onRefresh }: DocumentListProps) {
               </div>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto p-4">
-              {activeTab === 'content' ? (
-                <div className="space-y-4">
-                  <div>
-                    <h4 className="text-sm font-medium mb-2 text-muted-foreground">原始内容</h4>
-                    {previewDoc.is_binary && previewDoc.raw_url ? (
-                      <div className="bg-muted/50 rounded p-4">
-                        {previewDoc.file_ext.match(/\.(png|jpg|jpeg|gif|webp|bmp|svg)$/) ? (
-                          <div className="flex flex-col items-center gap-3">
-                            <FileImage className="h-12 w-12 text-muted-foreground" />
-                            <p className="text-sm text-muted-foreground">
-                              图片 ({previewDoc.file_ext}) · {previewDoc.file_size_kb.toFixed(0)} KB
-                            </p>
+              {activeTab === 'markdown' && (
+                <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-all max-h-[60vh] overflow-auto">
+                  {previewDoc.parsed_markdown || '(空)'}
+                </pre>
+              )}
+              {activeTab === 'original' && (
+                <div>
+                  {previewDoc.is_binary && previewDoc.raw_url ? (
+                    <div>
+                      {previewDoc.file_ext.match(/\.(png|jpg|jpeg|gif|webp|bmp|svg)$/) ? (
+                        <div className="flex flex-col items-center gap-2">
+                          <img
+                            src={previewDoc.raw_url}
+                            alt={previewDoc.filename}
+                            className="max-w-full max-h-[60vh] object-contain rounded border"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            图片 ({previewDoc.file_ext}) · {previewDoc.file_size_kb.toFixed(0)} KB
+                          </p>
+                        </div>
+                      ) : previewDoc.file_ext.match(/\.(pdf)$/i) ? (
+                        <iframe
+                          src={previewDoc.raw_url}
+                          className="w-full h-[60vh] border rounded"
+                          title={previewDoc.filename}
+                        />
+                      ) : (
+                        <div className="flex items-center gap-2 bg-muted/50 rounded p-4">
+                          <FileText className="h-8 w-8 text-muted-foreground" />
+                          <div>
+                            <p className="text-sm">{previewDoc.original_content}</p>
                             <a
                               href={previewDoc.raw_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-sm text-primary hover:underline flex items-center gap-1"
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                              在新窗口打开图片
-                            </a>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm text-muted-foreground">{previewDoc.original_content}</span>
-                            <a
-                              href={previewDoc.raw_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-sm text-primary hover:underline flex items-center gap-1"
+                              download
+                              className="text-sm text-primary hover:underline flex items-center gap-1 mt-1"
                             >
                               <ExternalLink className="h-3 w-3" />
                               下载文件
                             </a>
                           </div>
-                        )}
-                      </div>
-                    ) : (
-                      <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-all max-h-[300px] overflow-auto">
-                        {previewDoc.original_content || '(空)'}
-                      </pre>
-                    )}
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-medium mb-2 text-muted-foreground">解析后 Markdown</h4>
-                    <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-all max-h-[300px] overflow-auto">
-                      {previewDoc.parsed_markdown || '(空)'}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <pre className="text-xs bg-muted/50 rounded p-3 whitespace-pre-wrap break-all max-h-[60vh] overflow-auto">
+                      {previewDoc.original_content || '(空)'}
                     </pre>
-                  </div>
+                  )}
                 </div>
-              ) : (
+              )}
+              {activeTab === 'chunks' && (
                 <div className="space-y-3">
                   {previewChunks === null ? (
                     <p className="text-sm text-muted-foreground text-center py-4">加载中...</p>
