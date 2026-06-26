@@ -1,4 +1,5 @@
 import uuid
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,8 @@ from src.auth import (
 )
 from src.storage import doc_store
 from config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
@@ -139,8 +142,9 @@ async def _delete_document_evidence(doc_id: str, doc: dict):
         try:
             from src.excel_rag.pipeline import delete_excel
             delete_excel(doc_id)
-        except Exception:
-            pass
+        except Exception as e:
+            # 记录异常但不阻断：documents 记录仍需删除，避免悬挂元数据
+            logger.error("Excel cleanup failed for doc %s: %s", doc_id, e, exc_info=True)
         doc_store.delete_document(doc_id)
         return
 
@@ -481,7 +485,6 @@ def _process_document_evidence(doc_id: str, file_path: str, folder: str, skip_ev
                         break
 
         else:
-            logger = __import__("logging").getLogger(__name__)
             logger.info(f"Skip evidence: skipping evidence extraction + KG sync for {doc_id}")
 
         doc_store.update_document(doc_id, processing_stage="自动标签")

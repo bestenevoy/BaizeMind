@@ -103,7 +103,7 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
           if (step.node === 'query_router' && step.result?.query_type) {
             queryType = step.result.query_type as string
           }
-          if ((step.node === 'retrieval_agent' || step.node === 'lightrag_agent') && step.result?.documents) {
+          if ((step.node === 'retrieval_agent' || step.node === 'lightrag_agent' || step.node === 'sql_agent') && step.result?.documents) {
             retrievedDocs = (step.result.documents as Array<Record<string, unknown>>).map(d => ({
               doc_id: d.doc_id as string,
               chunk_id: d.chunk_id as string,

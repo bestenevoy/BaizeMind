@@ -87,6 +87,13 @@ def _run_sql_debug(query: str, folder, tags) -> dict:
             })
 
         resp = _empty_doc_debug(query, message="SQL 检索路径（NL2SQL）")
+        # error 值映射为可读的 fallback_reason，便于前端展示降级原因
+        err = r.get("error", "")
+        fallback_reason_map = {
+            "no_sheets": "无任何结构化数据（Excel 未入库）",
+            "no_relevant_sheet": "未召回相关 Sheet",
+        }
+        fallback_reason = fallback_reason_map.get(err, "")
         resp.update({
             "query_type": "sql_query",
             "sql_debug": {
@@ -104,8 +111,8 @@ def _run_sql_debug(query: str, folder, tags) -> dict:
                 "sql_result_rows": sql_result.get("rows", []) if isinstance(sql_result, dict) else [],
                 "sql_result_row_count": sql_result.get("row_count", 0) if isinstance(sql_result, dict) else 0,
                 "attempts": attempts,
-                "error": r.get("error", ""),
-                "fallback_reason": "",
+                "error": err,
+                "fallback_reason": fallback_reason,
             },
             "final_count": 1 if sheet_meta and r.get("sql") else 0,
         })

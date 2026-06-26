@@ -3,7 +3,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import rehypeKatex from 'rehype-katex'
 import remarkMath from 'remark-math'
-import { User, Bot, Copy, Check, ChevronDown, ChevronRight, FileText, Search, Brain, GitGraph, MessageSquare, ShieldCheck, Loader2, ExternalLink } from 'lucide-react'
+import { User, Bot, Copy, Check, ChevronDown, ChevronRight, FileText, Search, Brain, GitGraph, MessageSquare, ShieldCheck, Loader2, ExternalLink, Database } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useState, useRef, useMemo, useCallback } from 'react'
@@ -22,6 +22,7 @@ export interface Message {
 
 const NODE_ICONS: Record<string, React.ReactNode> = {
   query_router: <Brain className="h-3 w-3" />,
+  sql_agent: <Database className="h-3 w-3" />,
   retrieval_agent: <Search className="h-3 w-3" />,
   lightrag_agent: <Search className="h-3 w-3" />,
   graph_agent: <GitGraph className="h-3 w-3" />,
@@ -84,6 +85,62 @@ function StepResult({ step, userQuery, searchDebugData }: { step: StreamStep; us
       </span>
     )
   }
+  if (step.node === 'sql_agent') {
+    const retrievalPath = String(result.retrieval_path || '')
+    const isSqlPath = retrievalPath === 'sql_nl2sql'
+    const count = result.count as number
+    const sqlQuery = result.sql_query as string | undefined
+    const sheetName = result.sql_sheet_name as string | undefined
+    const rowCount = Number(result.sql_result_row_count || 0)
+    const recalledCount = Number(result.sql_recalled_count || 0)
+    const sqlError = result.sql_error as string | undefined
+    const fallbackReason = result.sql_fallback_reason as string | undefined
+    return (
+      <span className="text-xs text-foreground/70 ml-1">
+        {isSqlPath ? (
+          <>
+            → SQL 检索：召回 {recalledCount} 表，命中
+            {sheetName ? <span className="font-mono text-foreground"> {sheetName} </span> : ' '}
+            · {rowCount} 行结果
+            {sqlError && <span className="text-destructive"> · {sqlError}</span>}
+          </>
+        ) : (
+          <>
+            → SQL 未命中{fallbackReason ? `（${fallbackReason}）` : ''}，fallback 文本检索 {count} 条
+          </>
+        )}
+        {count > 0 && (
+          <button onClick={() => setExpanded(!expanded)} className="ml-1 text-primary hover:underline">
+            {expanded ? '收起' : '详情'}
+          </button>
+        )}
+        {userQuery && (
+          <button onClick={handleAnalyze} className="ml-1.5 text-primary/70 hover:text-primary inline-flex items-center gap-0.5 text-xs" title="在检索测试页面分析（含完整检索数据）">
+            <ExternalLink className="h-3 w-3" />
+            分析
+          </button>
+        )}
+        {expanded && (
+          <div className="mt-1 space-y-1">
+            {isSqlPath && sqlQuery && (
+              <div className="bg-violet-50 dark:bg-violet-950/30 rounded p-1.5 text-xs font-mono whitespace-pre-wrap break-all">
+                {sqlQuery}
+              </div>
+            )}
+            {(result.documents as Array<Record<string, unknown>>)?.map((doc, i) => (
+              <div key={i} className="bg-muted/30 rounded p-1.5 text-xs">
+                <div className="text-muted-foreground">
+                  [{i + 1}] {String(doc.doc_id)}/{String(doc.chunk_id)}
+                  {doc.source_type ? ` · ${String(doc.source_type)}` : ''}
+                </div>
+                <p className="whitespace-pre-wrap break-all">{doc.text as string}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </span>
+    )
+  }
   if (step.node === 'graph_agent') {
     return (
       <span className="text-xs text-foreground/70 ml-1">
@@ -112,7 +169,7 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
   const effectiveDocs = useMemo(() => {
     if (message.retrieved_docs && message.retrieved_docs.length > 0) return message.retrieved_docs
     const retrievalStep = message.steps?.find(
-      s => (s.node === 'retrieval_agent' || s.node === 'lightrag_agent') && s.result?.documents
+      s => (s.node === 'retrieval_agent' || s.node === 'lightrag_agent' || s.node === 'sql_agent') && s.result?.documents
     )
     if (!retrievalStep?.result?.documents) return message.retrieved_docs || []
     return (retrievalStep.result.documents as Array<Record<string, unknown>>).map(d => ({
