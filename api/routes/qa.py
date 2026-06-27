@@ -222,12 +222,16 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                 elif node_name == "answer_generator":
                     # [MERGED] 原 answer_validator 节点已合并：直接输出 final_answer
                     # [延迟显示] intermediate=True 表示会触发重判到 sql_agent，
-                    # 前端不应渲染这个中间答案，等下一轮 answer_generator 的最终答案
+                    # 此时 answer 是"信息不足"的中间产物。
+                    # 直接跳过本次 step 下发，避免前端处理过程列表出现两个"LLM 生成回答"。
+                    # sql_agent 跑完后下一轮 answer_generator (intermediate=False) 才下发最终答案。
+                    if node_output.get("intermediate", False):
+                        continue
                     payload["result"] = {
                         "answer": node_output.get("final_answer", node_output.get("draft_answer", "")),
                         "final_answer": node_output.get("final_answer", node_output.get("draft_answer", "")),
                         "citations": node_output.get("citations", []),
-                        "intermediate": node_output.get("intermediate", False),
+                        "intermediate": False,
                     }
                 elif node_name == "chitchat":
                     payload["result"] = {"answer": node_output.get("final_answer", "")}
