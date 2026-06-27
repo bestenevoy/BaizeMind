@@ -192,17 +192,18 @@ EXCEL_SUMMARY_SYSTEM = """You are an Excel data analyst. Given a sheet's headers
    - The kinds of queries it can answer (e.g. 销售额统计, TopN分析, 同比分析)
    This summary will be embedded for semantic retrieval — make it rich in keywords and descriptive phrases so users can find this sheet by natural-language questions.
 
-2. **columns**: A mapping from each Chinese header to an English SQL column name and a SQLite type.
-   - English names must be snake_case, lowercase, ASCII only (e.g. 日期→date, 销售额→sales_amount, 客户等级→customer_level)
-   - SQLite types must be one of: INTEGER, REAL, TEXT
-   - Preserve the original column order
+2. **columns**: A field mapping with three properties per column:
+   - **display_name**: The actual display field (original header, supports Chinese/English). This is what users see — it does NOT participate in SQL generation.
+   - **column_name**: The database table column name (snake_case, lowercase, ASCII only; e.g. 日期→date, 销售额→sales_amount, 客户等级→customer_level). This IS used in generated SQL.
+   - **data_type**: The field data type, one of: INTEGER, REAL, TEXT.
+   - Preserve the original column order.
 
 Output ONLY a JSON object, no other text:
 {{
   "summary": "...",
   "columns": [
-    {{"cn": "日期", "en": "date", "type": "TEXT"}},
-    {{"cn": "销售额", "en": "sales_amount", "type": "REAL"}}
+    {{"display_name": "日期", "column_name": "date", "data_type": "TEXT"}},
+    {{"display_name": "销售额", "column_name": "sales_amount", "data_type": "REAL"}}
   ]
 }}"""
 
@@ -212,7 +213,7 @@ EXCEL_NL2SQL_SYSTEM = """You are a SQL generator. Given a SQLite table schema an
 Database dialect: SQLite
 Table: `{table_name}`
 
-Columns (cn → en : type):
+Columns (display_name → column_name : data_type):
 {columns}
 
 Sample rows (first 5):
@@ -220,7 +221,7 @@ Sample rows (first 5):
 
 Rules:
 - Generate ONLY a SELECT statement. No INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/ATTACH/PRAGMA.
-- Use ONLY the column English names (en) listed above. Never guess column names.
+- Use ONLY the column_name values listed above. Never guess column names. Do NOT use display_name in SQL — it is for human readability only.
 - Use SQLite-compatible functions (e.g. `strftime`, `date`, `GROUP BY`, `ORDER BY`, `LIMIT`).
 - Always append `LIMIT {max_rows}` if not already present, to bound result size.
 - For "最高/最低/TopN" questions, use ORDER BY ... DESC/ASC + LIMIT.
@@ -240,7 +241,7 @@ Previous SQL:
 {previous_sql}
 
 Table: `{table_name}`
-Columns (cn → en : type):
+Columns (display_name → column_name : data_type):
 {columns}
 
 Fix the SQL so it executes successfully against SQLite. Output ONLY the corrected SQL statement, no explanation.

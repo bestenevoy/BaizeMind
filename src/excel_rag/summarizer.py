@@ -26,7 +26,7 @@ def _build_llm_input(sheet: SheetInfo) -> str:
     lines = [f"Sheet 名称: {sheet.sheet_name}", f"总记录数: {sheet.row_count}", "表头与类型:"]
     for col in sheet.columns:
         sample = ", ".join(str(v) for v in col.sample_values[:3])
-        lines.append(f"- {col.cn} ({col.type}) 样本: {sample}")
+        lines.append(f"- {col.display_name} ({col.data_type}) 样本: {sample}")
     lines.append("统计信息:")
     for k, v in sheet.stats.items():
         if k == "row_count":
@@ -53,8 +53,8 @@ def _fallback_summary(sheet: SheetInfo) -> tuple[str, list[dict[str, str]]]:
     cols_desc = []
     columns_out = []
     for col in sheet.columns:
-        cols_desc.append(f"- {col.cn}（{col.type}）")
-        columns_out.append({"cn": col.cn, "en": col.en, "type": col.type})
+        cols_desc.append(f"- {col.display_name}（{col.data_type}）")
+        columns_out.append({"display_name": col.display_name, "column_name": col.column_name, "data_type": col.data_type})
     parts.extend(cols_desc)
     for k, v in sheet.stats.items():
         if k == "row_count":
@@ -67,10 +67,16 @@ def generate_summary(sheet: SheetInfo) -> tuple[str, list[dict[str, str]]]:
     """为单个 Sheet 生成摘要 + 列映射。
 
     返回 (summary_text, columns)。
-    columns 元素: {"cn": str, "en": str, "type": str}
+    columns 元素: {"display_name": str, "column_name": str, "data_type": str}
+      - display_name: 实际显示字段（原始表头，支持中英文，不参与 SQL 生成）
+      - column_name: 数据库表字段名（snake_case 英文标识符，用于 SQL 生成）
+      - data_type: 字段数据类型（INTEGER / REAL / TEXT）
     """
     # 原始占位列名作为回退
-    fallback_cols = [{"cn": c.cn, "en": c.en, "type": c.type} for c in sheet.columns]
+    fallback_cols = [
+        {"display_name": c.display_name, "column_name": c.column_name, "data_type": c.data_type}
+        for c in sheet.columns
+    ]
 
     try:
         llm = get_chat_llm(temperature=0.0)
@@ -99,12 +105,16 @@ def generate_summary(sheet: SheetInfo) -> tuple[str, list[dict[str, str]]]:
 
         columns_out = []
         for i, raw in enumerate(llm_cols):
-            cn = str(raw.get("cn", sheet.columns[i].cn))
-            en = _sanitize_en_name(str(raw.get("en", "")), sheet.columns[i].en)
-            col_type = str(raw.get("type", sheet.columns[i].type)).upper()
+            display_name = str(raw.get("display_name", sheet.columns[i].display_name))
+            column_name = _sanitize_en_name(str(raw.get("column_name", "")), sheet.columns[i].column_name)
+            col_type = str(raw.get("data_type", sheet.columns[i].data_type)).upper()
             if col_type not in ("INTEGER", "REAL", "TEXT"):
-                col_type = sheet.columns[i].type
-            columns_out.append({"cn": cn, "en": en, "type": col_type})
+                col_type = sheet.columns[i].data_type
+            columns_out.append({
+                "display_name": display_name,
+                "column_name": column_name,
+                "data_type": col_type,
+            })
 
         return summary, columns_out
     except Exception as e:

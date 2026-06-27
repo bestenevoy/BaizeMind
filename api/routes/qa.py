@@ -54,6 +54,16 @@ async def ask(request: QARequest, current: User = Depends(get_current_user_optio
                 "dense_score": ds if isinstance(ds, (int, float)) else None,
                 "bm25_score": bs if isinstance(bs, (int, float)) else None,
                 "filename": doc_name_cache[did],
+                # sql_agent 的 doc 直接带 sheet_name/source_type/sql_result_* 字段
+                # （_format_sql_result_as_document 注入）；retrieval_agent 的 excel_sheet chunk
+                # 在 metadata.sheet_name / metadata.source。前端「检索上下文」需据此渲染 SQL 结果表。
+                "sheet_name": d.get("sheet_name", "") or (d.get("metadata") or {}).get("sheet_name", ""),
+                "source_type": d.get("source_type", "") or (d.get("metadata") or {}).get("source", ""),
+                "sql_result_columns": d.get("sql_result_columns", []),
+                "sql_result_rows": d.get("sql_result_rows", []),
+                "sql_result_row_count": d.get("sql_result_row_count", 0),
+                "sheet_row_count": (d.get("metadata") or {}).get("row_count") or d.get("sheet_row_count"),
+                "sheet_columns": d.get("sheet_columns", []),
             })
 
         return QAResponse(

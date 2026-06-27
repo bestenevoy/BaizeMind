@@ -533,11 +533,46 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
                         </span>
                       </div>
                       {isSqlDoc ? (
-                        /* SQL 执行结果 doc：不显示截断的 text（前 300 字符只看到表结构），
-                           引导用户查看 sql_agent step 的查询结果表格 */
-                        <p className="text-muted-foreground italic">
-                          SQL 执行结果，详见上方「SQL 检索 (NL2SQL)」步骤的查询结果表格
-                        </p>
+                        /* SQL 执行结果 doc：直接渲染查询结果数据表（前 5 行），
+                           与 sql_agent step 的表格一致，避免显示截断的表结构 text。 */
+                        (() => {
+                          const sCols = doc.sql_result_columns || []
+                          const sRows = doc.sql_result_rows || []
+                          const sRowCount = Number(doc.sql_result_row_count || 0)
+                          if (sCols.length === 0) {
+                            return <p className="text-muted-foreground italic">(SQL 结果数据不可用)</p>
+                          }
+                          return (
+                            <div className="overflow-x-auto">
+                              <div className="text-[10px] text-muted-foreground mb-0.5">
+                                SQL 结果（{Math.min(sRows.length, 5)}/{sRowCount} 行）
+                              </div>
+                              <table className="w-full text-[10px] border-collapse">
+                                <thead>
+                                  <tr className="bg-muted/50">
+                                    {sCols.map((c, ci) => (
+                                      <th key={ci} className="border border-border/50 px-1.5 py-0.5 text-left font-mono whitespace-nowrap">{c}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {sRows.length === 0 ? (
+                                    <tr><td colSpan={sCols.length} className="border border-border/50 px-1.5 py-0.5 text-muted-foreground italic">(空结果)</td></tr>
+                                  ) : sRows.slice(0, 5).map((row, ri) => (
+                                    <tr key={ri}>
+                                      {(Array.isArray(row) ? row : [row]).map((val, vi) => (
+                                        <td key={vi} className="border border-border/50 px-1.5 py-0.5 font-mono whitespace-nowrap">{String(val ?? '')}</td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                  {sRowCount > sRows.length && (
+                                    <tr><td colSpan={sCols.length} className="border border-border/50 px-1.5 py-0.5 text-muted-foreground italic">… 共 {sRowCount} 行</td></tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          )
+                        })()
                       ) : isSheetSummary ? (
                         /* sheet_summary doc：结构化渲染 Sheet 卡片
                            Sheet 名 + 行数 + 摘要 + 列结构（与检索时索引数据表的元数据一致） */
@@ -558,7 +593,7 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
                               <ul className="mt-0.5 space-y-0.5">
                                 {doc.sheet_columns.map((c, ci) => (
                                   <li key={ci} className="font-mono text-[10px]">
-                                    - {c.en} ({c.type}){c.cn ? ` → ${c.cn}` : ''}
+                                    - {c.column_name} ({c.data_type}){c.display_name ? ` → ${c.display_name}` : ''}
                                   </li>
                                 ))}
                               </ul>

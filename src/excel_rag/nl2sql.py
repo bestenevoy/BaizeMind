@@ -79,19 +79,20 @@ def inject_limit(sql: str, max_rows: int) -> str:
 
 
 def _format_columns_for_prompt(columns: list[dict[str, str]]) -> str:
-    return "\n".join(f"- {c['cn']} → {c['en']} : {c['type']}" for c in columns)
+    return "\n".join(f"- {c['display_name']} → {c['column_name']} : {c['data_type']}" for c in columns)
 
 
 def _format_sample_rows(columns: list[dict[str, str]], table_name: str) -> str:
     """从实际表取前 5 行作为 prompt 上下文。"""
     try:
         result = excel_store.execute_sql(table_name, f'SELECT * FROM "{table_name}" LIMIT 5')
-        en_to_cn = {c["en"]: c["cn"] for c in columns}
+        # column_name（数据库字段名）→ display_name（实际显示字段）
+        column_to_display = {c["column_name"]: c["display_name"] for c in columns}
         lines = []
         for row in result["rows"]:
             # row[0] 是 id 自增列，跳过
             vals = row[1:]
-            pairs = [f"{en_to_cn.get(col, col)}={v}" for col, v in zip(result["columns"][1:], vals)]
+            pairs = [f"{column_to_display.get(col, col)}={v}" for col, v in zip(result["columns"][1:], vals)]
             lines.append("  " + ", ".join(str(p) for p in pairs))
         return "\n".join(lines) if lines else "  (no rows)"
     except Exception as e:

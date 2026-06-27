@@ -27,15 +27,28 @@ def _build_sheet_summary_chunk(record: dict[str, Any]) -> dict[str, Any]:
     chunk_id 用 ``excel:{meta_id}`` 前缀形式，与普通文档 chunk 区分；
     metadata 标 source=excel_sheet 便于追溯/过滤，并保留 meta_id/sheet_name
     方便后续按需触发 NL2SQL 流程。
+
+    chunk text 内嵌 [列结构] 字段映射（en→cn），让向量检索能按字段名命中，
+    同时 LLM 在 answer_generator/sql_agent 阶段直接看到数据库字段名与业务名称的对应关系，
+    避免 NL2SQL 生成大写列名（SQLite 虽大小写不敏感，但小写 en 与建表语句一致更稳妥）。
     """
     meta_id = record["meta_id"]
     sheet_name = record.get("sheet_name", "")
     summary = record.get("summary", "")
     doc_id = record["doc_id"]
+    columns = record.get("columns", []) or []
+
+    # 字段映射：column_name (data_type) → display_name，与 retrieval_agent.extract_context 拼接格式一致，
+    # extract_context 检测到 [列结构] 已存在便不会重复拼接。
+    col_lines = "\n".join(
+        f"  - {c.get('column_name', '')} ({c.get('data_type', '')}) → {c.get('display_name', '')}"
+        for c in columns if isinstance(c, dict) and c.get("column_name")
+    )
+    schema_block = f"\n[列结构]\n{col_lines}" if col_lines else ""
 
     text = (
         f"[数据源: Excel Sheet \"{sheet_name}\"]\n"
-        f"{summary}"
+        f"{summary}{schema_block}"
     )
 
     return {

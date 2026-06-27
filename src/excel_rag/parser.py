@@ -16,9 +16,9 @@ from config.settings import settings
 
 @dataclass
 class ColumnInfo:
-    cn: str  # 原始中文表头
-    en: str = ""  # 英文列名（由 summarizer 填充）
-    type: str = "TEXT"  # SQLite 类型: INTEGER / REAL / TEXT
+    display_name: str  # 实际显示字段（原始表头，支持中英文，不参与 SQL 生成）
+    column_name: str = ""  # 数据库表字段名（snake_case 英文标识符，由 summarizer 填充）
+    data_type: str = "TEXT"  # 字段数据类型：INTEGER / REAL / TEXT
     sample_values: list[Any] = field(default_factory=list)
 
 
@@ -75,22 +75,22 @@ def _compute_stats(df: pd.DataFrame, columns: list[ColumnInfo]) -> dict[str, Any
     }
     # 数值列
     for col in columns:
-        en = col.en or col.cn
-        if col.type in ("INTEGER", "REAL"):
-            series = pd.to_numeric(df[col.cn], errors="coerce").dropna()
+        en = col.column_name or col.display_name
+        if col.data_type in ("INTEGER", "REAL"):
+            series = pd.to_numeric(df[col.display_name], errors="coerce").dropna()
             if not series.empty:
-                stats[col.cn] = {
+                stats[col.display_name] = {
                     "min": float(series.min()),
                     "max": float(series.max()),
                     "mean": float(series.mean()),
                 }
-        elif col.type == "TEXT":
+        elif col.data_type == "TEXT":
             # 枚举值（去重，最多 20 个）
-            uniq = df[col.cn].dropna().astype(str).unique().tolist()
+            uniq = df[col.display_name].dropna().astype(str).unique().tolist()
             if len(uniq) <= 20:
-                stats[col.cn] = {"enum": uniq}
+                stats[col.display_name] = {"enum": uniq}
             else:
-                stats[col.cn] = {"enum_count": len(uniq)}
+                stats[col.display_name] = {"enum_count": len(uniq)}
     return stats
 
 
@@ -134,9 +134,9 @@ def parse_excel(file_path: str | Path) -> list[SheetInfo]:
             col_type = _infer_sqlite_type(series)
             sample_values = series.dropna().head(5).tolist()
             columns.append(ColumnInfo(
-                cn=header,
-                en=_sanitize_header(header, i),
-                type=col_type,
+                display_name=header,
+                column_name=_sanitize_header(header, i),
+                data_type=col_type,
                 sample_values=sample_values,
             ))
 

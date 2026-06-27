@@ -34,9 +34,9 @@ async function authFetch(input: string, init: RequestInit = {}): Promise<Respons
 }
 
 export interface SheetColumn {
-  cn?: string
-  en: string
-  type: string
+  display_name?: string  // 实际显示字段（原始表头，支持中英文，不参与 SQL 生成）
+  column_name: string    // 数据库表字段名（用于 SQL 生成）
+  data_type: string      // 字段数据类型 (INTEGER/REAL/TEXT)
 }
 
 export interface RetrievedDoc {
@@ -482,7 +482,7 @@ export interface SqlDebugSelectedSheet {
   doc_id: string
   sheet_name: string
   score: number
-  columns: Array<{ cn?: string; en: string; type: string }>
+  columns: SheetColumn[]
   row_count: number
   summary: string
 }

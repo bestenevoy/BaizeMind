@@ -158,7 +158,7 @@ class RetrievalAgent:
                 cols = r.get('sheet_columns', []) or []
                 if cols and '[列结构]' not in text:
                     col_lines = '\n'.join(
-                        f"  - {c.get('en', '')} ({c.get('type', '')}) → {c.get('cn', '')}"
+                        f"  - {c.get('column_name', '')} ({c.get('data_type', '')}) → {c.get('display_name', '')}"
                         for c in cols if isinstance(c, dict)
                     )
                     text = f"{text}\n[列结构]\n{col_lines}"

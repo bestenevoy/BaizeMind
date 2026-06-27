@@ -78,7 +78,10 @@ def create_sheet(
 ) -> dict[str, Any]:
     """创建元数据记录 + 动态数据表并导入明细数据。
 
-    columns: [{"cn": str, "en": str, "type": str}, ...]
+    columns: [{"display_name": str, "column_name": str, "data_type": str}, ...]
+      - display_name: 实际显示字段（原始表头，支持中英文，不参与 SQL 生成）
+      - column_name: 数据库表字段名（snake_case 英文标识符，用于建表 + SQL 生成）
+      - data_type: 字段数据类型（INTEGER / REAL / TEXT）
     返回创建的元数据 dict。
     """
     meta_id = f"excel_{uuid.uuid4().hex[:16]}"
@@ -89,8 +92,8 @@ def create_sheet(
     col_defs = ['"id" INTEGER PRIMARY KEY AUTOINCREMENT']
     en_names: list[str] = []
     for col in columns:
-        en = _validate_identifier(col["en"])
-        col_type = col["type"] if col["type"] in ("INTEGER", "REAL", "TEXT") else "TEXT"
+        en = _validate_identifier(col["column_name"])
+        col_type = col["data_type"] if col["data_type"] in ("INTEGER", "REAL", "TEXT") else "TEXT"
         col_defs.append(f'"{en}" {col_type}')
         en_names.append(en)
     create_sql = f'CREATE TABLE IF NOT EXISTS "{table_name}" ({", ".join(col_defs)})'
@@ -98,16 +101,16 @@ def create_sheet(
     conn = _get_conn()
     try:
         conn.execute(create_sql)
-        # 批量导入数据（按英文列名对应）
+        # 批量导入数据（按 column_name 对应；df 列名为 display_name，需先映射）
         if not df.empty and en_names:
-            # df 列名是中文表头，按 columns 顺序映射到英文列名
-            cn_to_en = {c["cn"]: c["en"] for c in columns}
-            ordered_cn = [c["cn"] for c in columns]
+            # df 列名是原始表头，按 columns 顺序映射到 column_name
+            display_to_column = {c["display_name"]: c["column_name"] for c in columns}
+            ordered_display = [c["display_name"] for c in columns]
             # 只保留存在的列
-            existing_cn = [c for c in ordered_cn if c in df.columns]
-            if existing_cn:
-                sub_df = df[existing_cn].copy()
-                sub_df.columns = [cn_to_en[c] for c in existing_cn]
+            existing_display = [c for c in ordered_display if c in df.columns]
+            if existing_display:
+                sub_df = df[existing_display].copy()
+                sub_df.columns = [display_to_column[c] for c in existing_display]
                 # NaN → None（SQLite NULL）
                 sub_df = sub_df.where(pd.notna(sub_df), None)
                 placeholders = ", ".join("?" * len(sub_df.columns))
@@ -138,6 +141,28 @@ def create_sheet(
     }
 
 
+def _normalize_columns(columns: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """统一列结构字段名，兼容旧数据（cn/en/type → display_name/column_name/data_type）。
+
+    旧版 schema: {"cn": str, "en": str, "type": str}
+    新版 schema: {"display_name": str, "column_name": str, "data_type": str}
+    """
+    out = []
+    for c in columns:
+        if not isinstance(c, dict):
+            continue
+        # 优先用新字段，缺失时回退到旧字段名
+        display_name = c.get("display_name") or c.get("cn") or ""
+        column_name = c.get("column_name") or c.get("en") or ""
+        data_type = c.get("data_type") or c.get("type") or "TEXT"
+        out.append({
+            "display_name": str(display_name),
+            "column_name": str(column_name),
+            "data_type": str(data_type),
+        })
+    return out
+
+
 def get_sheet(meta_id: str) -> Optional[dict[str, Any]]:
     conn = _get_conn()
     row = conn.execute("SELECT * FROM excel_sheets WHERE meta_id = ?", (meta_id,)).fetchone()
@@ -145,7 +170,7 @@ def get_sheet(meta_id: str) -> Optional[dict[str, Any]]:
     if not row:
         return None
     d = dict(row)
-    d["columns"] = json.loads(d["columns_json"])
+    d["columns"] = _normalize_columns(json.loads(d["columns_json"]))
     return d
 
 
@@ -159,7 +184,7 @@ def list_sheets_by_doc(doc_id: str) -> list[dict[str, Any]]:
     out = []
     for r in rows:
         d = dict(r)
-        d["columns"] = json.loads(d["columns_json"])
+        d["columns"] = _normalize_columns(json.loads(d["columns_json"]))
         out.append(d)
     return out
 
@@ -171,7 +196,7 @@ def list_all_sheets() -> list[dict[str, Any]]:
     out = []
     for r in rows:
         d = dict(r)
-        d["columns"] = json.loads(d["columns_json"])
+        d["columns"] = _normalize_columns(json.loads(d["columns_json"]))
         out.append(d)
     return out
 

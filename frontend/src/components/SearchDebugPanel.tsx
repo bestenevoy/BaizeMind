@@ -1183,9 +1183,9 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
             <div className="p-2 space-y-1">
               {sel.columns.map((c, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs">
-                  <span className="font-mono text-foreground">{c.en}</span>
-                  <span className="text-muted-foreground">({c.type})</span>
-                  {c.cn && <span className="text-muted-foreground">→ {c.cn}</span>}
+                  <span className="font-mono text-foreground">{c.column_name}</span>
+                  <span className="text-muted-foreground">({c.data_type})</span>
+                  {c.display_name && <span className="text-muted-foreground">→ {c.display_name}</span>}
                 </div>
               ))}
             </div>

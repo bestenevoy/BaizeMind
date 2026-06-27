@@ -121,10 +121,10 @@ def _format_sql_result_as_document(
     schema_lines = []
     for c in columns:
         if isinstance(c, dict):
-            cn = c.get("cn", "")
-            en = c.get("en", "")
-            ctype = c.get("type", "TEXT")
-            schema_lines.append(f"- {en} ({ctype}): {cn}")
+            display_name = c.get("display_name", "")
+            column_name = c.get("column_name", "")
+            ctype = c.get("data_type", "TEXT")
+            schema_lines.append(f"- {column_name} ({ctype}): {display_name}")
     schema_text = "\n".join(schema_lines) if schema_lines else "(no schema)"
 
     # 结果行格式化
@@ -596,7 +596,7 @@ class AgenticRAGWorkflow:
                 if not meta_id or meta_id in existing_meta_ids:
                     continue
                 sm = sh.get("sheet_meta", {}) or {}
-                # columns 结构: [{cn, en, type}, ...]
+                # columns 结构: [{display_name, column_name, data_type}, ...]
                 sheet_columns = sm.get("columns", []) or []
                 documents.append({
                     "doc_id": sh.get("doc_id", ""),
