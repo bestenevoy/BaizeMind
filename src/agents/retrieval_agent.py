@@ -151,5 +151,16 @@ class RetrievalAgent:
         parts = []
         for i, r in enumerate(merged):
             source = f"[{i + 1}]"
-            parts.append(f"{source}\n{r.get('text', '')}")
+            # sheet_summary doc：text 是摘要，列结构在 sheet_columns 字段
+            # 需要把列结构拼到 text 里，让 answer_generator 知道字段名和类型
+            text = r.get('text', '')
+            if r.get('source_type') == 'sheet_summary':
+                cols = r.get('sheet_columns', []) or []
+                if cols and '[列结构]' not in text:
+                    col_lines = '\n'.join(
+                        f"  - {c.get('en', '')} ({c.get('type', '')}) → {c.get('cn', '')}"
+                        for c in cols if isinstance(c, dict)
+                    )
+                    text = f"{text}\n[列结构]\n{col_lines}"
+            parts.append(f"{source}\n{text}")
         return "\n\n---\n\n".join(parts)

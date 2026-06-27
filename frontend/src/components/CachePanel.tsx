@@ -124,6 +124,31 @@ export function CachePanel() {
   const namespaces = data?.namespaces ? Object.keys(data.namespaces).sort() : []
   const enabled = data?.enabled ?? false
 
+  // 按链路追踪 key（caller）分组，组内按 created_at 时间倒序（最新在前）
+  // caller 标明在何处调用 LLM：nl2sql.generate_sql / answer_generator / query_router 等
+  const groupedByCaller = (() => {
+    if (!data?.entries?.length) return [] as Array<{ caller: string; entries: NonNullable<typeof data>['entries'] }>
+    const sorted = [...data.entries].sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+    const groups = new Map<string, NonNullable<typeof data>['entries']>()
+    for (const e of sorted) {
+      const k = e.caller || '(unknown)'
+      if (!groups.has(k)) groups.set(k, [])
+      groups.get(k)!.push(e)
+    }
+    return Array.from(groups.entries()).map(([caller, entries]) => ({ caller, entries }))
+  })()
+
+  // caller → 中文说明（标明 LLM 调用位置）
+  const callerLabel: Record<string, string> = {
+    'nl2sql.generate_sql': 'NL2SQL 生成 SQL 语句',
+    'nl2sql.format_answer': 'NL2SQL 结果整理为自然语言',
+    'answer_generator': '回答生成',
+    'query_router': '查询路由分类',
+    'entity_extractor': '实体抽取',
+    'reranker': '重排序',
+    'query_rewrite': '查询改写',
+  }
+
   return (
     <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
       {/* 状态概览 */}
@@ -264,71 +289,82 @@ export function CachePanel() {
               {filterNs ? `namespace "${filterNs}" 下暂无缓存条目` : '暂无缓存条目'}
             </p>
           ) : (
-            <div className="space-y-2">
-              {data?.entries.map((e) => (
-                <div
-                  key={e.key}
-                  className="p-2.5 rounded-lg border bg-card hover:bg-muted/30 transition-colors cursor-pointer"
-                  onClick={() => handleViewDetail(e.key)}
-                >
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <Badge variant="outline" className="text-[10px] font-mono">
-                      {e.namespace || '(no-ns)'}
+            <div className="space-y-4">
+              {groupedByCaller.map(({ caller, entries }) => (
+                <div key={caller} className="space-y-2">
+                  {/* 分组标题：caller（链路追踪 key） + 调用位置说明 + 条目数 */}
+                  <div className="flex items-center gap-2 px-1 sticky top-0 bg-background/80 backdrop-blur py-1 z-10">
+                    <Badge variant="secondary" className="text-xs font-mono">
+                      {caller}
                     </Badge>
-                    {e.caller && (
-                      <Badge variant="secondary" className="text-[10px] font-mono">
-                        {e.caller}
-                      </Badge>
-                    )}
-                    <code className="text-[10px] text-muted-foreground truncate flex-1" title={e.key}>
-                      {e.key}
-                    </code>
-                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
-                      <Clock className="h-3 w-3" />
-                      {formatTTL(e.ttl_remaining)}
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 shrink-0 text-muted-foreground hover:text-blue-500"
-                      onClick={(ev) => { ev.stopPropagation(); handleViewDetail(e.key) }}
-                      title="查看完整内容"
-                    >
-                      <Eye className="h-3 w-3" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 shrink-0 text-muted-foreground hover:text-red-500"
-                      onClick={(ev) => { ev.stopPropagation(); handleDelete(e.key) }}
-                      title="删除"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      · {callerLabel[caller] || caller}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground ml-auto">
+                      {entries.length} 条 · 最新 {formatTime(entries[0]?.created_at)}
+                    </span>
                   </div>
-                  {/* value (LLM 响应) 预览 */}
-                  <pre className="text-xs bg-muted/50 dark:bg-muted/20 rounded p-2 whitespace-pre-wrap break-all max-h-24 overflow-y-auto font-mono">
-                    {e.value_preview}
-                  </pre>
-                  {/* input (给 LLM 的上下文) 预览 — 仅 LLM namespace 有 */}
-                  {e.input_preview && (
-                    <div className="mt-1.5">
-                      <div className="flex items-center gap-1 mb-0.5 text-[10px] text-muted-foreground">
-                        <span className="font-semibold">Input</span>
-                        <span>({e.input_length} chars</span>
-                        {e.has_full_input && <span className="text-green-600">· 完整</span>}
-                        {!e.has_full_input && <span className="text-yellow-600">· 旧格式仅 preview</span>}
-                        <span>)</span>
+                  {entries.map((e) => (
+                    <div
+                      key={e.key}
+                      className="p-2.5 rounded-lg border bg-card hover:bg-muted/30 transition-colors cursor-pointer"
+                      onClick={() => handleViewDetail(e.key)}
+                    >
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <Badge variant="outline" className="text-[10px] font-mono">
+                          {e.namespace || '(no-ns)'}
+                        </Badge>
+                        <code className="text-[10px] text-muted-foreground truncate flex-1" title={e.key}>
+                          {e.key}
+                        </code>
+                        <div className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
+                          <Clock className="h-3 w-3" />
+                          {formatTTL(e.ttl_remaining)}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 shrink-0 text-muted-foreground hover:text-blue-500"
+                          onClick={(ev) => { ev.stopPropagation(); handleViewDetail(e.key) }}
+                          title="查看完整内容"
+                        >
+                          <Eye className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 shrink-0 text-muted-foreground hover:text-red-500"
+                          onClick={(ev) => { ev.stopPropagation(); handleDelete(e.key) }}
+                          title="删除"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
                       </div>
-                      <pre className="text-[11px] bg-blue-50 dark:bg-blue-950/20 border-l-2 border-blue-200 dark:border-blue-800 rounded p-1.5 whitespace-pre-wrap break-all max-h-20 overflow-y-auto font-mono text-muted-foreground">
-                        {e.input_preview}
+                      {/* value (LLM 响应) 预览 */}
+                      <pre className="text-xs bg-muted/50 dark:bg-muted/20 rounded p-2 whitespace-pre-wrap break-all max-h-24 overflow-y-auto font-mono">
+                        {e.value_preview}
                       </pre>
+                      {/* input (给 LLM 的上下文) 预览 */}
+                      {e.input_preview && (
+                        <div className="mt-1.5">
+                          <div className="flex items-center gap-1 mb-0.5 text-[10px] text-muted-foreground">
+                            <span className="font-semibold">Input</span>
+                            <span>({e.input_length} chars</span>
+                            {e.has_full_input && <span className="text-green-600">· 完整</span>}
+                            {!e.has_full_input && <span className="text-yellow-600">· 旧格式仅 preview</span>}
+                            <span>)</span>
+                          </div>
+                          <pre className="text-[11px] bg-blue-50 dark:bg-blue-950/20 border-l-2 border-blue-200 dark:border-blue-800 rounded p-1.5 whitespace-pre-wrap break-all max-h-20 overflow-y-auto font-mono text-muted-foreground">
+                            {e.input_preview}
+                          </pre>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between mt-1 text-[10px] text-muted-foreground">
+                        <span>创建: {formatTime(e.created_at)}</span>
+                        <span>value {e.value_length} bytes · input {e.input_length} chars</span>
+                      </div>
                     </div>
-                  )}
-                  <div className="flex items-center justify-between mt-1 text-[10px] text-muted-foreground">
-                    <span>创建: {formatTime(e.created_at)}</span>
-                    <span>value {e.value_length} bytes · input {e.input_length} chars</span>
-                  </div>
+                  ))}
                 </div>
               ))}
             </div>

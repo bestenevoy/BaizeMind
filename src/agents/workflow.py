@@ -155,7 +155,10 @@ def _format_sql_result_as_document(
 
     return {
         "doc_id": sheet_meta.get("doc_id", ""),
-        "chunk_id": sheet_meta.get("meta_id", ""),  # 用 sheet meta_id 作为检索单元标识
+        # chunk_id 加 __sql_result 后缀，避免与 sheet_summary doc 的 chunk_id（meta_id）冲突
+        # _dedup_by_chunk_id 按 chunk_id 去重先到先得，若两者 chunk_id 相同，
+        # sheet_summary 先注入会占位，SQL 结果 doc 被丢弃 → answer_generator 拿不到 SQL 语句和结果
+        "chunk_id": f"{sheet_meta.get('meta_id', '')}__sql_result",
         "text": text,
         "score": score,
         "source_type": "sql",  # 标记来源类型，便于评估/前端区分

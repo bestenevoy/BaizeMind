@@ -95,6 +95,9 @@ function StepResult({ step, userQuery, searchDebugData }: { step: StreamStep; us
     const recalledCount = Number(result.sql_recalled_count || 0)
     const sqlError = result.sql_error as string | undefined
     const fallbackReason = result.sql_fallback_reason as string | undefined
+    // SQL 命中路径：result 顶层带 sql_result_columns / sql_result_rows（前 5 行）
+    const sqlPreviewCols = (result.sql_result_columns as string[] | undefined) || []
+    const sqlPreviewRows = (result.sql_result_rows as unknown[][] | undefined) || []
     return (
       <span className="text-xs text-foreground/70 ml-1">
         {isSqlPath ? (
@@ -120,6 +123,37 @@ function StepResult({ step, userQuery, searchDebugData }: { step: StreamStep; us
           <div className="mt-1 bg-violet-50 dark:bg-violet-950/30 border-l-2 border-violet-300 dark:border-violet-700 rounded p-1.5 text-xs font-mono whitespace-pre-wrap break-all">
             <span className="text-violet-700 dark:text-violet-300 text-[10px] font-sans">SQL: </span>
             {sqlQuery.length > 100 ? sqlQuery.slice(0, 100) + '…' : sqlQuery}
+          </div>
+        )}
+        {/* SQL 查询结果简要预览（前 5 行），让用户直观看到数据表内容 */}
+        {isSqlPath && sqlPreviewCols.length > 0 && (
+          <div className="mt-1 overflow-x-auto">
+            <div className="text-[10px] text-muted-foreground mb-0.5">
+              数据预览（{Math.min(sqlPreviewRows.length, 5)}/{rowCount} 行）
+            </div>
+            <table className="w-full text-[10px] border-collapse">
+              <thead>
+                <tr className="bg-muted/50">
+                  {sqlPreviewCols.map((c, ci) => (
+                    <th key={ci} className="border border-border/50 px-1.5 py-0.5 text-left font-mono whitespace-nowrap">{c}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sqlPreviewRows.length === 0 ? (
+                  <tr><td colSpan={sqlPreviewCols.length} className="border border-border/50 px-1.5 py-0.5 text-muted-foreground italic">(空结果)</td></tr>
+                ) : sqlPreviewRows.slice(0, 5).map((row, ri) => (
+                  <tr key={ri}>
+                    {(Array.isArray(row) ? row : [row]).map((val, vi) => (
+                      <td key={vi} className="border border-border/50 px-1.5 py-0.5 font-mono whitespace-nowrap">{String(val ?? '')}</td>
+                    ))}
+                  </tr>
+                ))}
+                {rowCount > sqlPreviewRows.length && (
+                  <tr><td colSpan={sqlPreviewCols.length} className="border border-border/50 px-1.5 py-0.5 text-muted-foreground italic">… 共 {rowCount} 行，查看完整结果请展开「查询结果详情」</td></tr>
+                )}
+              </tbody>
+            </table>
           </div>
         )}
         {/* chunks 默认折叠，点"详情"展开查看 */}
@@ -202,9 +236,28 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
   const isUser = message.role === 'user'
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(message.content)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    const text = message.content || ''
+    if (!text) return
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        // Fallback for non-secure context (HTTP) or unsupported clipboard API
+        const textarea = document.createElement('textarea')
+        textarea.value = text
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.focus()
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (e) {
+      console.error('Copy failed:', e)
+    }
   }
 
   // Fallback: extract retrieved_docs from steps if message.retrieved_docs is missing
@@ -371,6 +424,19 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
             )}
           </div>
         )}
+        {isUser && hasContent && (
+          <div className="flex justify-end mt-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={handleCopy}
+              title="复制"
+            >
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            </Button>
+          </div>
+        )}
         {!isUser && (
           <div className="flex items-center gap-2 mt-1">
             {message.query_type && (
@@ -383,7 +449,7 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
                 {(message.processing_time_ms / 1000).toFixed(1)}s
               </span>
             )}
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleCopy}>
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleCopy} title="复制">
               {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
             </Button>
           </div>
