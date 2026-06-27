@@ -93,9 +93,15 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
         (step) => {
           steps.push(step)
           if (step.node === 'answer_generator' && step.result?.answer) {
-            // [MERGED] answer_validator 已合并到 answer_generator：直接取最终答案
-            answer = step.result.answer as string
-            citations = step.result.citations as string[] || []
+            // [延迟显示] intermediate=True 表示会触发重判到 sql_agent，
+            // 此时 answer 是"信息不足"的中间产物，不渲染到 UI，
+            // 等下一轮 answer_generator 输出最终答案（intermediate=False）再显示
+            if (step.result.intermediate === true) {
+              // 不更新 answer/citations，保留默认空值；只保留 step 用于展示进度
+            } else {
+              answer = step.result.answer as string
+              citations = step.result.citations as string[] || []
+            }
           } else if (step.node === 'chitchat' && step.result?.answer) {
             answer = step.result.answer as string
           }

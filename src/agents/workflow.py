@@ -370,7 +370,7 @@ class AgenticRAGWorkflow:
         ``[query_rewrite_count-1, query_rewrite_count+1]`` 区间内自行决定。
 
         缓存由 ``CachedLLM`` 自动处理（相同 prompt 字符串命中即返回）。
-        prompt 包含 ``query_rewrite_language`` 和 ``query_rewrite_count``，
+        prompt 包含 ``response_language`` 和 ``query_rewrite_count``，
         切换任一参数会让 prompt 字符串变化 → CachedLLM 的 key 自然失效。
         是否启用缓存由全局 ``settings.cache_enabled`` 决定。
 
@@ -385,7 +385,7 @@ class AgenticRAGWorkflow:
 
         try:
             prompt = QUERY_REWRITE_SYSTEM.format(
-                language=settings.query_rewrite_language,
+                language=settings.response_language,
                 n=n,
                 min_n=min_n,
                 max_n=max_n,
@@ -537,7 +537,7 @@ class AgenticRAGWorkflow:
     def _node_chitchat(self, state: AgentState) -> dict:
         try:
             llm = self._get_llm()
-            system = CHITCHAT_SYSTEM.format(language=settings.query_rewrite_language)
+            system = CHITCHAT_SYSTEM.format(language=settings.response_language)
             resp = llm.invoke([("system", system), ("human", state["query"])])
             return {"final_answer": resp.content, "draft_answer": resp.content}
         except Exception as e:
@@ -949,12 +949,12 @@ class AgenticRAGWorkflow:
             if retrieval_path == "sql_nl2sql":
                 prompt = SQL_ANSWER_GENERATION_SYSTEM.format(
                     context=context, question=state["query"],
-                    language=settings.query_rewrite_language,
+                    language=settings.response_language,
                 )
             else:
                 prompt = ANSWER_GENERATION_SYSTEM.format(
                     context=context, question=state["query"],
-                    language=settings.query_rewrite_language,
+                    language=settings.response_language,
                 )
 
             # [MERGED] 原 validation_feedback 路径已废弃（validator 节点已合并），
@@ -964,15 +964,29 @@ class AgenticRAGWorkflow:
                 prompt += f"\n\n[Previous answer was rejected. Fix the following issues:]\n{feedback}"
 
             resp = llm.invoke(prompt)
+            answer = resp.content
+
+            # [延迟显示] 检测是否会触发重判到 sql_agent：
+            # 条件与 _route_after_generation 一致：未重判过 + 有 excel_sheet chunk + answer 信息不足
+            # 如果会重判，标记 intermediate=True 让前端不渲染这个中间答案，
+            # 等待 sql_agent 跑完后下一轮 answer_generator 的最终答案。
+            docs = state.get("documents", [])
+            will_reroute = (
+                not state.get("rerouted_to_sql", False)
+                and _has_excel_sheet_chunk(docs)
+                and _answer_indicates_insufficient(answer)
+                and state.get("iteration", 0) < state.get("max_iterations", settings.agent_max_iterations)
+            )
 
             # [MERGED] 原 answer_validator 节点的职责合并到此处：
             # - 直接输出 final_answer（不再有 draft_answer → validator 改善 → final_answer 两步）
             # - iteration 递增（兼容死循环防护的路由检查）
             return {
-                "draft_answer": resp.content,
-                "final_answer": resp.content,
+                "draft_answer": answer,
+                "final_answer": answer,
                 "citations": citations,
                 "iteration": state.get("iteration", 0) + 1,
+                "intermediate": will_reroute,
             }
         except Exception as e:
             return {
@@ -980,6 +994,7 @@ class AgenticRAGWorkflow:
                 "final_answer": f"Answer generation failed: {e}",
                 "error": str(e),
                 "iteration": state.get("iteration", 0) + 1,
+                "intermediate": False,
             }
 
     def _node_answer_validator(self, state: AgentState) -> dict:

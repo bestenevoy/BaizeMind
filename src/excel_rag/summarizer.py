@@ -74,7 +74,7 @@ def generate_summary(sheet: SheetInfo) -> tuple[str, list[dict[str, str]]]:
 
     try:
         llm = get_chat_llm(temperature=0.0)
-        system = EXCEL_SUMMARY_SYSTEM.format(language=settings.query_rewrite_language)
+        system = EXCEL_SUMMARY_SYSTEM.format(language=settings.response_language)
         user_msg = _build_llm_input(sheet)
         resp = llm.invoke([("system", system), ("human", user_msg)])
         text = resp.content.strip()

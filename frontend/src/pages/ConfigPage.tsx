@@ -451,7 +451,7 @@ export function ConfigPage() {
                 { title: '分块', keys: ['chunk_size', 'chunk_overlap'] },
                 { title: '混合检索', keys: ['hybrid_top_k', 'hybrid_dense_weight', 'hybrid_bm25_weight', 'hybrid_rrf_k', 'dense_vector_threshold'] },
                 { title: 'Rerank', keys: ['reranker_method', 'reranker_score_threshold', 'retrieval_over_fetch_multiplier', 'rerank_top_k'] },
-                { title: '查询改写', keys: ['query_rewrite_enabled', 'query_rewrite_language', 'query_rewrite_count'] },
+                { title: '查询改写', keys: ['query_rewrite_enabled', 'response_language', 'query_rewrite_count'] },
                 { title: 'Agent', keys: ['agent_max_iterations', 'agent_temperature'] },
                 { title: '用户系统', keys: ['auth_guest_chat_max_length'] },
               ]

@@ -207,7 +207,7 @@ def format_answer(
         result_text = "(empty result)"
 
     prompt = EXCEL_ANSWER_SYSTEM.format(
-        language=settings.query_rewrite_language,
+        language=settings.response_language,
         question=question,
         sql=sql,
         result=result_text,

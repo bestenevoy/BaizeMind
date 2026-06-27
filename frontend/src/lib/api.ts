@@ -586,7 +586,7 @@ export const CONFIG_SCHEMA: Record<string, ConfigSchema> = {
   agent_max_iterations: { type: 'int', label: '验证最大轮次', min: 1, max: 10 },
   agent_temperature: { type: 'float', label: 'LLM 温度', min: 0, max: 2 },
   query_rewrite_enabled: { type: 'bool', label: '查询改写开关' },
-  query_rewrite_language: { type: 'string', label: '改写语言' },
+  response_language: { type: 'string', label: '响应语言' },
   query_rewrite_count: { type: 'int', label: '改写 Query 数量', min: 1, max: 8 },
   parser_backend: { type: 'enum', label: '默认解析器', options: ['mineru', 'paddleocr_vl'] },
   auth_guest_chat_max_length: { type: 'int', label: '访客单次查询字数上限', min: 0, max: 10000, description: '0 表示不限制；同时作用于 chat 与检索测试' },

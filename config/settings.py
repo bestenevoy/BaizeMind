@@ -89,7 +89,9 @@ class Settings(BaseSettings):
     rerank_top_k: int = 10
     reranker_method: str = "embedding"  # "embedding" | "llm" | "hybrid"
     query_rewrite_enabled: bool = True
-    query_rewrite_language: str = "简体中文"
+    # LLM 输出语言：用于查询改写、chitchat、answer generation、excel summary 等所有面向用户的文本
+    # （原 query_rewrite_language 字段改名，语义更普遍）
+    response_language: str = "简体中文"
     # Multi-Query Retrieval: 将一个问题改写成多个等价 Query 的目标数量。
     # 提示词会约束 LLM 在 [count-1, count+1] 区间内根据问题表述自行决定实际数量
     # （例如 count=3 时，LLM 可产出 2~4 条等价 Query）。

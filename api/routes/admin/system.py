@@ -77,7 +77,7 @@ SETTING_CATEGORIES = [
         ("retrieval_over_fetch_multiplier", "预取倍数"),
         ("reranker_method", "重排序方式"),
         ("query_rewrite_enabled", "查询改写开关"),
-        ("query_rewrite_language", "改写语言"),
+        ("response_language", "响应语言"),
         ("query_rewrite_count", "改写 Query 数量"),
     ]),
     ("重排序模型", [

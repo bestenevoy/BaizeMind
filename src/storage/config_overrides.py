@@ -21,7 +21,7 @@ _EDITABLE_KEYS = {
     "agent_max_iterations",
     "agent_temperature",
     "query_rewrite_enabled",
-    "query_rewrite_language",
+    "response_language",
     "query_rewrite_count",
     "parser_backend",
     "auth_guest_chat_max_length",
