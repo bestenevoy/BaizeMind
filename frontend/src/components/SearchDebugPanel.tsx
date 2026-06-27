@@ -1223,14 +1223,14 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
         </div>
       )}
 
-      {/* 执行结果 */}
+      {/* 执行结果（前 5 行预览，与全局约定一致） */}
       {sqlDebug.sql && (
         <div className="border rounded">
           <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30">
-            执行结果 ({sqlDebug.sql_result_row_count} 行)
+            执行结果 (前 {Math.min(rows.length, 5)} / {sqlDebug.sql_result_row_count} 行)
           </div>
           {rows.length === 0 ? (
-            <p className="text-xs text-muted-foreground p-2">空结果</p>
+            <p className="text-xs text-muted-foreground p-2 italic">(空结果)</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -1243,7 +1243,7 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.slice(0, 50).map((row, i) => (
+                  {rows.slice(0, 5).map((row, i) => (
                     <tr key={i} className="border-t">
                       <td className="px-2 py-1 text-muted-foreground font-mono">{i + 1}</td>
                       {Array.isArray(row) ? row.map((cell, j) => (
@@ -1251,13 +1251,11 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
                       )) : <td className="px-2 py-1">{String(row ?? '')}</td>}
                     </tr>
                   ))}
+                  {sqlDebug.sql_result_row_count > rows.length && (
+                    <tr><td colSpan={cols.length + 1} className="border-t px-2 py-1 text-muted-foreground italic">… 共 {sqlDebug.sql_result_row_count} 行，查看完整结果请展开「查询结果详情」</td></tr>
+                  )}
                 </tbody>
               </table>
-              {sqlDebug.sql_result_row_count > 50 && (
-                <p className="text-xs text-muted-foreground p-2">
-                  ... 共 {sqlDebug.sql_result_row_count} 行，仅显示前 50 行
-                </p>
-              )}
             </div>
           )}
         </div>
