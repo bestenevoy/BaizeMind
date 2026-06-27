@@ -109,24 +109,27 @@ function StepResult({ step, userQuery, searchDebugData }: { step: StreamStep; us
             → SQL 未命中{fallbackReason ? `（${fallbackReason}）` : ''}，fallback 文本检索 {count} 条
           </>
         )}
-        {count > 0 && (
-          <button onClick={() => setExpanded(!expanded)} className="ml-1 text-primary hover:underline">
-            {expanded ? '收起' : '详情'}
-          </button>
-        )}
         {userQuery && (
           <button onClick={handleAnalyze} className="ml-1.5 text-primary/70 hover:text-primary inline-flex items-center gap-0.5 text-xs" title="在检索测试页面分析（含完整检索数据）">
             <ExternalLink className="h-3 w-3" />
             分析
           </button>
         )}
+        {/* SQL 语句默认显示（截断 100 字符，点击查看完整 chunks） */}
+        {isSqlPath && sqlQuery && (
+          <div className="mt-1 bg-violet-50 dark:bg-violet-950/30 border-l-2 border-violet-300 dark:border-violet-700 rounded p-1.5 text-xs font-mono whitespace-pre-wrap break-all">
+            <span className="text-violet-700 dark:text-violet-300 text-[10px] font-sans">SQL: </span>
+            {sqlQuery.length > 100 ? sqlQuery.slice(0, 100) + '…' : sqlQuery}
+          </div>
+        )}
+        {/* chunks 默认折叠，点"详情"展开查看 */}
+        {count > 0 && (
+          <button onClick={() => setExpanded(!expanded)} className="ml-1 text-primary hover:underline">
+            {expanded ? '收起 chunks' : 'chunks 详情'}
+          </button>
+        )}
         {expanded && (
           <div className="mt-1 space-y-1">
-            {isSqlPath && sqlQuery && (
-              <div className="bg-violet-50 dark:bg-violet-950/30 rounded p-1.5 text-xs font-mono whitespace-pre-wrap break-all">
-                {sqlQuery}
-              </div>
-            )}
             {(result.documents as Array<Record<string, unknown>>)?.map((doc, i) => (
               <div key={i} className="bg-muted/30 rounded p-1.5 text-xs">
                 <div className="text-muted-foreground">
@@ -267,18 +270,25 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
         {isUser ? <User className="h-4 w-4 text-white" /> : <Bot className="h-4 w-4" />}
       </div>
       <div className={`flex-1 max-w-[80%] ${isUser ? 'text-right' : ''}`}>
-        {message.steps && message.steps.length > 0 && (
+        {message.steps && message.steps.length > 0 && (() => {
+          // 过滤掉 intermediate=true 的 answer_generator step（中间产物，会触发重判），
+          // 避免处理过程显示两个"LLM 生成回答"步骤造成混淆
+          const visibleSteps = message.steps.filter(
+            s => !(s.node === 'answer_generator' && s.result?.intermediate === true)
+          )
+          if (visibleSteps.length === 0) return null
+          return (
           <div className="mb-2">
             <button
               onClick={() => setShowSteps(!showSteps)}
               className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mb-1"
             >
               {showSteps ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              处理过程 ({message.steps.length} 步)
+              处理过程 ({visibleSteps.length} 步)
             </button>
             {showSteps && (
               <div className="space-y-0.5 bg-muted/30 rounded-lg p-2 text-left">
-                {message.steps.map((step, i) => (
+                {visibleSteps.map((step, i) => (
                   <div key={i} className="flex items-start gap-1.5 text-xs">
                     <span className="shrink-0 mt-0.5"><StepIcon node={step.node} /></span>
                     <span className="text-muted-foreground">{step.label}</span>
@@ -291,7 +301,8 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
               </div>
             )}
           </div>
-        )}
+          )
+        })()}
         {hasContent && (
           <div
             className={`inline-block rounded-2xl px-4 py-2.5 text-left ${

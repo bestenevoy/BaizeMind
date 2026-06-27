@@ -915,11 +915,17 @@ class AgenticRAGWorkflow:
                 context = state["graphrag_context"]
 
             if state.get("documents"):
-                doc_context = self.retrieval_agent.extract_context(state["documents"])
+                # documents 用 operator.add 追加（retrieval_agent + sql_agent fallback 都会写入），
+                # 同一 chunk_id 可能出现多次。extract_context 内部已去重传给 LLM，
+                # citations 必须用同一份去重后的列表，否则 LLM 输出的 [1][2] 引用会指向同一条 chunk，
+                # 与 effectiveDocs 长度不匹配，导致前端点击 [2] 时拿不到 doc。
+                raw_docs = state["documents"]
+                deduped_docs = self.retrieval_agent._dedup_by_chunk_id(raw_docs)
+                doc_context = self.retrieval_agent.extract_context(raw_docs)
                 context = f"{context}\n\n[Retrieved Documents]\n{doc_context}" if context else doc_context
                 citations = [
                     f"[{i + 1}] {d.get('doc_id', '?')}/{d.get('chunk_id', '?')}"
-                    for i, d in enumerate(state["documents"][:10])
+                    for i, d in enumerate(deduped_docs[:10])
                 ]
 
             if state.get("graph_context"):

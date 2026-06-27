@@ -109,7 +109,10 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
             queryType = step.result.query_type as string
           }
           if ((step.node === 'retrieval_agent' || step.node === 'lightrag_agent' || step.node === 'sql_agent') && step.result?.documents) {
-            retrievedDocs = (step.result.documents as Array<Record<string, unknown>>).map(d => ({
+            // sql_agent fallback 后会追加 retrieval_agent 已有的同一条 chunk，
+            // 与后端 citations 去重保持一致，effectiveDocs 也按 chunk_id 去重，
+            // 否则 citations 数组与 effectiveDocs 长度不匹配，点击 [2] 拿不到 doc。
+            const newDocs = (step.result.documents as Array<Record<string, unknown>>).map(d => ({
               doc_id: d.doc_id as string,
               chunk_id: d.chunk_id as string,
               text: d.text as string,
@@ -119,6 +122,16 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
               bm25_score: d.bm25_score as number | null | undefined,
               filename: d.filename as string | undefined,
             }))
+            // 合并 + 按 chunk_id 去重（retrieval_agent 和 sql_agent 的 documents 都保留，但去重）
+            const merged = [...retrievedDocs]
+            const seen = new Set(merged.map(d => d.chunk_id))
+            for (const nd of newDocs) {
+              if (!seen.has(nd.chunk_id)) {
+                seen.add(nd.chunk_id)
+                merged.push(nd)
+              }
+            }
+            retrievedDocs = merged
             if (step.result.search_debug_data) {
               searchDebugData = step.result.search_debug_data as Record<string, unknown>
             }
