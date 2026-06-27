@@ -262,12 +262,14 @@ async def get_document_content(doc_id: str):
                         md_parts.append("")
                         md_parts.append("**列结构**:")
                         md_parts.append("")
-                        md_parts.append("| 中文 | 英文 | 类型 |")
-                        md_parts.append("|------|------|------|")
+                        # 列结构字段已统一为 display_name / column_name / data_type
+                        # （src/excel_rag/store.py:_normalize_columns 兼容旧 cn/en/type）
+                        md_parts.append("| 显示名 | 字段名 | 类型 |")
+                        md_parts.append("|--------|--------|------|")
                         for c in cols:
-                            cn = (c.get("cn") or "").replace("|", "\\|")
-                            en = (c.get("en") or "").replace("|", "\\|")
-                            t = (c.get("type") or "").replace("|", "\\|")
+                            cn = (c.get("display_name") or c.get("cn") or "").replace("|", "\\|")
+                            en = (c.get("column_name") or c.get("en") or "").replace("|", "\\|")
+                            t = (c.get("data_type") or c.get("type") or "").replace("|", "\\|")
                             md_parts.append(f"| {cn} | {en} | {t} |")
                     md_parts.append("")
                 parsed = "\n".join(md_parts)
@@ -304,8 +306,14 @@ async def get_document_chunks(doc_id: str):
             chunks = []
             for i, s in enumerate(sheets):
                 # 把列结构拼到 text 里，便于在 chunk 预览中直接看到表结构
+                # 列结构字段已统一为 display_name / column_name / data_type
                 cols = s.get("columns", []) or []
-                col_lines = [f"  - {c.get('en', '')} ({c.get('type', '')}) → {c.get('cn', '')}" for c in cols]
+                col_lines = [
+                    f"  - {c.get('column_name') or c.get('en', '')} "
+                    f"({c.get('data_type') or c.get('type', '')}) "
+                    f"→ {c.get('display_name') or c.get('cn', '')}"
+                    for c in cols
+                ]
                 text = "Sheet: {name}\n行数: {rc}\n摘要: {summary}\n列结构:\n{cols}".format(
                     name=s.get("sheet_name", ""),
                     rc=s.get("row_count", 0),
