@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useState, useRef, useMemo, useCallback } from 'react'
 import type { RetrievedDoc, SheetColumn, StreamStep } from '@/lib/api'
+import { SqlResultTable } from '@/components/SqlResultTable'
 
 export interface Message {
   role: 'user' | 'assistant'
@@ -126,33 +127,15 @@ function StepResult({ step, userQuery, searchDebugData }: { step: StreamStep; us
         )}
         {/* SQL 查询结果简要预览（前 5 行），让用户直观看到数据表内容 */}
         {isSqlPath && sqlPreviewCols.length > 0 && (
-          <div className="mt-1 overflow-x-auto">
-            <div className="text-[10px] text-muted-foreground mb-0.5">
-              数据预览（{Math.min(sqlPreviewRows.length, 5)}/{rowCount} 行）
-            </div>
-            <table className="w-full text-[10px] border-collapse">
-              <thead>
-                <tr className="bg-muted/50">
-                  {sqlPreviewCols.map((c, ci) => (
-                    <th key={ci} className="border border-border/50 px-1.5 py-0.5 text-left font-mono whitespace-nowrap">{c}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {sqlPreviewRows.length === 0 ? (
-                  <tr><td colSpan={sqlPreviewCols.length} className="border border-border/50 px-1.5 py-0.5 text-muted-foreground italic">(空结果)</td></tr>
-                ) : sqlPreviewRows.slice(0, 5).map((row, ri) => (
-                  <tr key={ri}>
-                    {(Array.isArray(row) ? row : [row]).map((val, vi) => (
-                      <td key={vi} className="border border-border/50 px-1.5 py-0.5 font-mono whitespace-nowrap">{String(val ?? '')}</td>
-                    ))}
-                  </tr>
-                ))}
-                {rowCount > sqlPreviewRows.length && (
-                  <tr><td colSpan={sqlPreviewCols.length} className="border border-border/50 px-1.5 py-0.5 text-muted-foreground italic">… 共 {rowCount} 行，查看完整结果请展开「查询结果详情」</td></tr>
-                )}
-              </tbody>
-            </table>
+          <div className="mt-1">
+            <SqlResultTable
+              columns={sqlPreviewCols}
+              rows={sqlPreviewRows}
+              rowCount={rowCount}
+              size="xs"
+              caption={<div className="text-[10px] text-muted-foreground mb-0.5">数据预览（{Math.min(sqlPreviewRows.length, 5)}/{rowCount} 行）</div>}
+              overflowHint="查看完整结果请展开「查询结果详情」"
+            />
           </div>
         )}
         {/* chunks 默认折叠，点"详情"展开查看 */}
@@ -533,46 +516,11 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
                         </span>
                       </div>
                       {isSqlDoc ? (
-                        /* SQL 执行结果 doc：直接渲染查询结果数据表（前 5 行），
-                           与 sql_agent step 的表格一致，避免显示截断的表结构 text。 */
-                        (() => {
-                          const sCols = doc.sql_result_columns || []
-                          const sRows = doc.sql_result_rows || []
-                          const sRowCount = Number(doc.sql_result_row_count || 0)
-                          if (sCols.length === 0) {
-                            return <p className="text-muted-foreground italic">(SQL 结果数据不可用)</p>
-                          }
-                          return (
-                            <div className="overflow-x-auto">
-                              <div className="text-[10px] text-muted-foreground mb-0.5">
-                                SQL 结果（{Math.min(sRows.length, 5)}/{sRowCount} 行）
-                              </div>
-                              <table className="w-full text-[10px] border-collapse">
-                                <thead>
-                                  <tr className="bg-muted/50">
-                                    {sCols.map((c, ci) => (
-                                      <th key={ci} className="border border-border/50 px-1.5 py-0.5 text-left font-mono whitespace-nowrap">{c}</th>
-                                    ))}
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {sRows.length === 0 ? (
-                                    <tr><td colSpan={sCols.length} className="border border-border/50 px-1.5 py-0.5 text-muted-foreground italic">(空结果)</td></tr>
-                                  ) : sRows.slice(0, 5).map((row, ri) => (
-                                    <tr key={ri}>
-                                      {(Array.isArray(row) ? row : [row]).map((val, vi) => (
-                                        <td key={vi} className="border border-border/50 px-1.5 py-0.5 font-mono whitespace-nowrap">{String(val ?? '')}</td>
-                                      ))}
-                                    </tr>
-                                  ))}
-                                  {sRowCount > sRows.length && (
-                                    <tr><td colSpan={sCols.length} className="border border-border/50 px-1.5 py-0.5 text-muted-foreground italic">… 共 {sRowCount} 行</td></tr>
-                                  )}
-                                </tbody>
-                              </table>
-                            </div>
-                          )
-                        })()
+                        /* SQL 执行结果 doc：结果表已在上方「处理过程」中展示，这里不再重复渲染，
+                           仅给出引用提示，避免冗余。 */
+                        <p className="text-muted-foreground italic text-[11px]">
+                          SQL 执行结果，详见上方「SQL 检索 (NL2SQL)」步骤的查询结果表格
+                        </p>
                       ) : isSheetSummary ? (
                         /* sheet_summary doc：结构化渲染 Sheet 卡片
                            Sheet 名 + 行数 + 摘要 + 列结构（与检索时索引数据表的元数据一致） */

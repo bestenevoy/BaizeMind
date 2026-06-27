@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { searchDebug, updateConfigOverride, type SearchDebugResponse, type UnifiedSearchDebugResponse, type UnifiedDebugStep } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { SqlResultTable } from '@/components/SqlResultTable'
 
 // [UNIFIED] 类型守卫：区分统一流程响应与 doc/sql 调试响应
 function isUnifiedResult(r: SearchDebugResponse | UnifiedSearchDebugResponse | null): r is UnifiedSearchDebugResponse {
@@ -993,37 +994,22 @@ function StepDetail({ step, expandedDocs, onToggleDoc }: {
         )}
 
         {/* 结果预览（前 5 行） */}
-        {sql && rows.length > 0 && (
+        {sql && cols.length > 0 && (
           <div>
             <div className="text-xs font-medium text-muted-foreground mb-1">
               结果预览 (前 {Math.min(rows.length, 5)} 行 / 共 {Number(r.sql_result_row_count ?? rows.length)} 行)
             </div>
-            <div className="overflow-x-auto border rounded">
-              <table className="w-full text-xs">
-                <thead className="bg-muted/30">
-                  <tr>
-                    <th className="px-2 py-1 text-left font-mono">#</th>
-                    {cols.map((c, i) => (
-                      <th key={i} className="px-2 py-1 text-left font-mono">{c}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.slice(0, 5).map((row, i) => (
-                    <tr key={i} className="border-t">
-                      <td className="px-2 py-1 text-muted-foreground font-mono">{i + 1}</td>
-                      {Array.isArray(row) ? row.map((cell, j) => (
-                        <td key={j} className="px-2 py-1 font-mono">{String(cell ?? '')}</td>
-                      )) : <td className="px-2 py-1">{String(row ?? '')}</td>}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="border rounded">
+              <SqlResultTable
+                columns={cols}
+                rows={rows}
+                rowCount={Number(r.sql_result_row_count ?? rows.length)}
+                showIndex
+                size="sm"
+                caption={null}
+              />
             </div>
           </div>
-        )}
-        {sql && rows.length === 0 && (
-          <div className="text-xs text-muted-foreground">(空结果)</div>
         )}
 
         {/* 重试历史 */}
@@ -1229,35 +1215,17 @@ function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) 
           <div className="px-2 py-1.5 text-xs font-medium border-b bg-muted/30">
             执行结果 (前 {Math.min(rows.length, 5)} / {sqlDebug.sql_result_row_count} 行)
           </div>
-          {rows.length === 0 ? (
-            <p className="text-xs text-muted-foreground p-2 italic">(空结果)</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-muted/30">
-                  <tr>
-                    <th className="px-2 py-1 text-left font-mono">#</th>
-                    {cols.map((c, i) => (
-                      <th key={i} className="px-2 py-1 text-left font-mono">{c}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.slice(0, 5).map((row, i) => (
-                    <tr key={i} className="border-t">
-                      <td className="px-2 py-1 text-muted-foreground font-mono">{i + 1}</td>
-                      {Array.isArray(row) ? row.map((cell, j) => (
-                        <td key={j} className="px-2 py-1 font-mono">{String(cell ?? '')}</td>
-                      )) : <td className="px-2 py-1">{String(row ?? '')}</td>}
-                    </tr>
-                  ))}
-                  {sqlDebug.sql_result_row_count > rows.length && (
-                    <tr><td colSpan={cols.length + 1} className="border-t px-2 py-1 text-muted-foreground italic">… 共 {sqlDebug.sql_result_row_count} 行，查看完整结果请展开「查询结果详情」</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <div className="p-1.5">
+            <SqlResultTable
+              columns={cols}
+              rows={rows}
+              rowCount={sqlDebug.sql_result_row_count}
+              showIndex
+              size="sm"
+              caption={null}
+              overflowHint="查看完整结果请展开「查询结果详情」"
+            />
+          </div>
         </div>
       )}
 
