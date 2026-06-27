@@ -346,6 +346,11 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
           <div className="flex flex-wrap gap-1 mt-1">
             {message.citations.slice(0, 5).map((cit, i) => {
               const doc = effectiveDocs?.[i]
+              // 显示优先级：filename > doc_id > 原始 cit 中的 doc_id
+              // 避免显示 "af187512-9f9/excel:xxx" 这种截断 UUID 形式
+              const displayRef = doc
+                ? `[${i + 1}] ${doc.filename || doc.doc_id}/${doc.chunk_id}`
+                : cit
               return (
                 <Badge
                   key={i}
@@ -354,7 +359,7 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
                   onClick={() => scrollToChunk(i + 1)}
                   title="点击查看来源"
                 >
-                  {cit}
+                  {displayRef}
                   {doc && (
                     <span className="ml-1 text-muted-foreground">
                       {doc.rerank_score != null && <span className="text-primary/80">rerank:{doc.rerank_score.toFixed(3)}</span>}
