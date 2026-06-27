@@ -179,8 +179,12 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                         "retrieval_path": node_output.get("retrieval_path", ""),
                     }
                 elif node_name == "sql_agent":
-                    # SQL 检索节点：正常路径输出 SQL 结果文档；
-                    # fallback 路径（sql_fallback/sql_fallback_error）输出文本检索结果。
+                    # [UNIFIED] SQL Tool Call 节点（条件触发）：仅在 answer_generator 判定
+                    # 信息不足 + 召回含 excel_sheet chunk 时触发。retrieval_path 取值：
+                    # - sql_nl2sql: NL2SQL 成功，输出 SQL 结果文档（含 sheet 摘要 + SQL 结果）
+                    # - sql_no_sheet: 无 sheet 召回，输出空 documents（answer_generator 生成"无法回答"）
+                    # - sql_error: NL2SQL 异常，输出空 documents
+                    # 不再有 sql_fallback/sql_fallback_error（统一召回已在前序步骤完成，不二次 fallback）
                     docs = node_output.get("documents", [])
                     retrieval_path = node_output.get("retrieval_path", "")
                     retrieval_debug = node_output.get("retrieval_debug", {}) or {}
@@ -228,8 +232,9 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                             "sql_recalled_count": len(retrieval_debug.get("sql_recalled_sheets", [])),
                             "sql_error": retrieval_debug.get("sql_error", ""),
                         })
-                    elif retrieval_path.startswith("sql_fallback"):
-                        result["sql_fallback_reason"] = retrieval_debug.get("sql_fallback_reason", "")
+                    elif retrieval_path in ("sql_no_sheet", "sql_error"):
+                        # 无 sheet 召回或异常：暴露 fallback_reason 供前端展示降级原因
+                        result["sql_fallback_reason"] = retrieval_debug.get("sql_fallback_reason", "") or retrieval_path
                     payload["result"] = result
                 elif node_name == "graph_agent":
                     graph_context = node_output.get("graph_context", "")

@@ -94,12 +94,10 @@ class AgentState(TypedDict):
     tags: list[str]
     # 单文件筛选（前端选中具体文件时传入；优先于 folder/tags 用于检索过滤）
     doc_ids: list[str]
-    # Excel 强制路由相关：
-    # force_sql=True 时（folder/tags 过滤后文档全为 Excel 文件），强制走 sql_agent
-    # 且 sql_agent 失败时不再 fallback 到文本检索（用户明确只看 Excel）
-    force_sql: bool
-    # 重判防死循环：从 retrieval_agent → answer_validator → sql_agent 自动重判后置 True
-    # 防止 sql_agent → answer_generator → answer_validator → sql_agent 循环
+    # 重判防死循环：从 answer_generator → sql_agent 自动重判后置 True
+    # 防止 sql_agent → answer_generator → sql_agent 循环
+    # [UNIFIED] sql_agent 现在仅作为统一召回后的条件性 Tool Call 触发，
+    # 不再有独立 sql_query 路由路径，也不再基于 force_sql 短路进入。
     rerouted_to_sql: bool
 
 
@@ -178,8 +176,9 @@ def _route_by_query_type(state: AgentState) -> str:
 
     if query_type == "chitchat":
         return "chitchat"
-    if query_type == "sql_query":
-        return "sql_agent"
+    # [UNIFIED] sql_query 路由分支已移除：所有非 chitchat 查询统一走向量召回
+    # (retrieval_agent / lightrag_agent)，SQL 作为召回后 answer_generator 的条件性
+    # Tool Call 触发（见 _route_after_generation）。
     if query_type == "holistic":
         return "retrieval_agent"  # DISABLED: was "graphrag_search"
 
@@ -257,17 +256,26 @@ def _has_excel_sheet_chunk(documents: list[dict]) -> bool:
 
 
 def _route_after_generation(state: AgentState) -> str:
-    """answer_generator 之后路由：合并了原 answer_validator 的职责。
+    """answer_generator 之后路由：统一召回 → LLM 决策 → 条件触发 SQL Tool Call。
 
-    现在只有一个 LLM 节点（answer_generator）负责生成 + 自检，
-    重判信号不再依赖 validator 的 LLM 标记，而是用：
+    [UNIFIED] 这是新统一流程的核心决策点。answer_generator 基于统一召回的上下文
+    （文档块 + 表结构 + 表摘要都在同一向量库）生成回答，其输出本身就是 LLM 对
+    "召回是否充分"的决策：
+    - 回答正常 → 召回充分，直接 END
+    - 回答含"信息不足"短语 → 召回不充分，进入下面的条件性 SQL 触发判定
+
+    条件触发 SQL Tool Call 的规则（对应设计文档三点决策）：
+    1. rerouted_to_sql=True → 直接 END
+       （sql_agent 已作为 Tool Call 执行过，answer_generator 已基于 SQL 结果生成
+       最终答案，不再做任何路由决策。无论 answer 是否信息不足，流程结束。）
+    2. 未重判 + 召回含 excel_sheet chunk + answer 信息不足 + iteration < max_iter
+       → sql_agent（条件性 Tool Call：召回中含相关数据表，LLM 判断 SQL 可能获得答案）
+    3. 其他 → END
+       （召回不充分但无数据表可尝试 SQL → 返回"无法回答"，对应设计文档第 3 点）
+
+    判定信号（不依赖额外 LLM 调用，复用 answer_generator 输出）：
     - _answer_indicates_insufficient(answer)：正则匹配回答文本中的"信息不足"短语
-    - _has_excel_sheet_chunk(documents)：检测是否检索到 excel_sheet chunk
-
-    路由规则：
-    1. rerouted_to_sql=True + answer 仍"信息不足" → END（防死循环）
-    2. 未重判 + excel_chunk + answer 信息不足 + iteration < max_iter → sql_agent
-    3. 其他 → END（合并后无 missing_citation 重试，依赖 prompt 自检）
+    - _has_excel_sheet_chunk(documents)：检测统一召回是否含 excel_sheet chunk
     """
     iteration = state.get("iteration", 0)
     max_iter = state.get("max_iterations", settings.agent_max_iterations)
@@ -276,25 +284,25 @@ def _route_after_generation(state: AgentState) -> str:
     answer = state.get("final_answer") or state.get("draft_answer") or ""
     answer_insufficient = _answer_indicates_insufficient(answer)
 
-    # 重判场景的最终保护：已经重判到 sql_agent 跑过了（rerouted_to_sql=True），
-    # answer 仍信息不足 → 直接 END，避免 retrieval↔sql_agent 死循环。
-    # 此时已穷尽 doc rag + nl2sql 两条路径，再走 retrieval 也不会有新信息。
-    if state.get("rerouted_to_sql", False) and answer_insufficient:
+    # [SHORT-CIRCUIT] rerouted_to_sql=True → sql_agent 已执行过，直接 END。
+    # 新统一流程下，sql_agent 是条件性 Tool Call（非独立路由），执行后 answer_generator
+    # 已基于 SQL 结果生成最终答案。无论 answer 是否信息不足，都不再路由——
+    # - answer 正常 → 最终答案，END
+    # - answer 仍信息不足 → 已穷尽统一召回 + NL2SQL 两条路径，END 避免死循环
+    if state.get("rerouted_to_sql", False):
         logger.info(
-            "rerouted_to_sql=True + still insufficient → END "
-            "(avoid retrieval↔sql_agent loop, iteration=%d/%d)",
-            iteration, max_iter,
+            "rerouted_to_sql=True → END (sql_agent already executed, iteration=%d/%d, insufficient=%s)",
+            iteration, max_iter, answer_insufficient,
         )
         return END
 
     # 自动重判触发条件：
-    # 1. 尚未重判过（防死循环）
-    # 2. 检索到了 excel_sheet 类型的 chunk（doc rag 检索到了 sheet 摘要）
+    # 1. 尚未重判过（防死循环，由上面的 short-circuit 保证）
+    # 2. 检索到了 excel_sheet 类型的 chunk（统一召回检到了 sheet 摘要）
     # 3. answer 文本含"信息不足"短语（正则匹配，非 LLM 判定）
-    # 4. iteration < max_iter
+    # 4. iteration < max_iter（answer_generator 已 +1，这里用 +1 后的值判断）
     if (
-        not state.get("rerouted_to_sql", False)
-        and has_excel_chunk
+        has_excel_chunk
         and answer_insufficient
         and iteration < max_iter
     ):
@@ -306,48 +314,11 @@ def _route_after_generation(state: AgentState) -> str:
     return END
 
 
-def _should_force_sql(
-    folder: str | None,
-    tags: list[str] | None,
-    doc_ids: list[str] | None = None,
-) -> bool:
-    """检测 folder/tags/doc_ids 过滤后的文档是否全为 Excel 文件。
-
-    - folder/tags/doc_ids 都为空 → False（不强制，走正常路由）
-    - 过滤后无文档 → False（让 sql_agent 自然 fallback 处理"无数据"场景）
-    - 过滤后文档全为 .xlsx/.xls → True（强制 sql_agent，且失败时不 fallback 到文本检索）
-    - 含其他类型文档 → False（保持正常路由）
-
-    doc_ids 优先于 folder/tags：用户在前端选中具体文件时走 doc_ids 路径。
-    """
-    if not folder and not tags and not doc_ids:
-        return False
-    try:
-        from src.storage.doc_store import list_documents, get_document
-        if doc_ids:
-            # 单/多文件筛选：逐个查 doc 元数据
-            docs = []
-            for did in doc_ids:
-                d = get_document(did)
-                if d:
-                    docs.append(d)
-        else:
-            docs = list_documents(folder=folder, tags=tags, limit=1000)
-        if not docs:
-            return False
-        excel_exts = {".xlsx", ".xls"}
-        for d in docs:
-            fn = d.get("filename", "")
-            ext = "." + fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
-            if ext not in excel_exts:
-                return False
-        logger.info(
-            "force_sql=True: all %d docs in filter are Excel files", len(docs)
-        )
-        return True
-    except Exception as e:
-        logger.warning("force_sql detection failed: %s", e)
-        return False
+# [REMOVED] _should_force_sql: 旧版基于 folder/tags/doc_ids 全为 Excel 文件时
+# 强制走 sql_query 路由的短路逻辑。新统一流程下，所有 query 都先走统一向量召回
+# （Excel sheet 摘要已作为 chunk 存入主向量库，metadata.source="excel_sheet"），
+# SQL 仅在 answer_generator 判定信息不足 + 召回含 excel_sheet chunk 时作为
+# 条件性 Tool Call 触发。用户选 Excel 文件不再特殊路由，而是自然进入统一召回。
 
 
 class AgenticRAGWorkflow:
@@ -440,7 +411,10 @@ class AgenticRAGWorkflow:
         builder.add_edge(START, "query_router")
         builder.add_conditional_edges("query_router", _route_by_query_type)
         builder.add_edge("chitchat", END)
-        # sql_agent 是纯检索节点（NL2SQL+执行），结果转 documents 后交给统一生成链路
+        # [UNIFIED] sql_agent 现在是条件触发的 SQL Tool Call 节点（不再有独立 sql_query 路由入口）：
+        # 仅在 answer_generator 判定信息不足 + 召回含 excel_sheet chunk 时由
+        # _route_after_generation 触发。NL2SQL+执行结果转 documents 后回到 answer_generator
+        # 生成最终答案（统一生成链路）。
         builder.add_edge("sql_agent", "answer_generator")
         builder.add_conditional_edges("graph_agent", _route_for_multi_hop)
         # [DISABLED] GraphRAG edge — retained for graph compilation
@@ -459,7 +433,8 @@ class AgenticRAGWorkflow:
         tags: list[str] | None = None,
         doc_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        force_sql = _should_force_sql(folder, tags, doc_ids)
+        # [UNIFIED] 不再计算 force_sql：所有 query 统一走向量召回，SQL 作为
+        # answer_generator 之后的条件性 Tool Call 触发（见 _route_after_generation）。
         state: AgentState = {
             "query": query,
             "query_type": "simple_fact",
@@ -483,12 +458,11 @@ class AgenticRAGWorkflow:
             "folder": folder or "",
             "tags": tags or [],
             "doc_ids": doc_ids or [],
-            "force_sql": force_sql,
             "rerouted_to_sql": False,
         }
         token = _ensure_request_id()
-        logger.info("workflow.invoke start: query=%r folder=%r tags=%r doc_ids=%r force_sql=%s",
-                    query, folder, tags, doc_ids, force_sql)
+        logger.info("workflow.invoke start: query=%r folder=%r tags=%r doc_ids=%r",
+                    query, folder, tags, doc_ids)
         try:
             return self._graph.invoke(state)
         finally:
@@ -502,7 +476,8 @@ class AgenticRAGWorkflow:
         tags: list[str] | None = None,
         doc_ids: list[str] | None = None,
     ):
-        force_sql = _should_force_sql(folder, tags, doc_ids)
+        # [UNIFIED] 不再计算 force_sql：所有 query 统一走向量召回，SQL 作为
+        # answer_generator 之后的条件性 Tool Call 触发（见 _route_after_generation）。
         state: AgentState = {
             "query": query,
             "query_type": "simple_fact",
@@ -526,12 +501,11 @@ class AgenticRAGWorkflow:
             "folder": folder or "",
             "tags": tags or [],
             "doc_ids": doc_ids or [],
-            "force_sql": force_sql,
             "rerouted_to_sql": False,
         }
         token = _ensure_request_id()
-        logger.info("workflow.astream start: query=%r folder=%r tags=%r doc_ids=%r force_sql=%s",
-                    query, folder, tags, doc_ids, force_sql)
+        logger.info("workflow.astream start: query=%r folder=%r tags=%r doc_ids=%r",
+                    query, folder, tags, doc_ids)
         try:
             async for event in self._graph.astream(state):
                 yield event
@@ -549,24 +523,28 @@ class AgenticRAGWorkflow:
             return {"final_answer": f"Chat failed: {e}", "error": str(e)}
 
     def _node_sql_agent(self, state: AgentState) -> dict:
-        """SQL 检索节点（纯检索阶段）：向量召回 Sheet → 多表选择 → NL2SQL → 执行（含重试）。
+        """SQL Tool Call 节点（条件触发）：向量召回 Sheet → 多表选择 → NL2SQL → 执行（含重试）。
 
-        不生成最终回答。把执行结果格式化为 documents 注入 state，
-        交给 answer_generator → validator 统一生成链路。
+        [UNIFIED] 此节点现在 ONLY 作为统一召回 + answer_generator 之后的条件性 Tool Call
+        被触发（见 _route_after_generation），不再有独立的 sql_query 路由入口，也不再基于
+        force_sql 短路进入。统一召回（retrieval_agent / lightrag_agent）已经把文档块 +
+        表结构 + 表摘要从同一向量库召回，answer_generator 基于召回内容生成回答；当回答
+        表示"信息不足"且召回中含 excel_sheet chunk 时，本节点作为 Tool Call 被触发，执行
+        NL2SQL 拿真实数据，把 SQL 结果 documents 追加到 state（operator.add），交给
+        answer_generator 生成最终答案。
 
-        失败处理：
-        - force_sql=True（用户明确选了 Excel 文件）→ 不 fallback，返回空 documents
-          让 answer_generator 看到"无数据"信号自己组织回答
-        - 否则 → 自动 fallback 到 retrieval_agent（文本 RAG）
+        失败处理（统一不再 fallback 到 retrieval_agent — 召回已在前序步骤完成）：
+        - 无 sheet 召回 / NL2SQL 失败 / 任何异常 → 返回空 documents
+          answer_generator 基于"无 SQL 结果"信号生成"无法回答"（对应设计文档第 3 点）
 
-        重判场景（从 answer_validator 路由过来）：设置 rerouted_to_sql=True 防死循环。
-        此时之前 retrieval_agent 检索到的 sheet 摘要 chunk 仍在 documents 中，
-        sql_agent 返回的 SQL 结果会追加进去（operator.add），让 answer_generator 看到
+        防死循环：本节点被调用即意味着 rerouted_to_sql=False（_route_after_generation 仅在
+        rerouted_to_sql=False 时才会路由到此）。本节点返回时统一设置 rerouted_to_sql=True，
+        下一轮 answer_generator → _route_after_generation 检测到 rerouted_to_sql=True
+        → 直接 END（不再做任何路由决策，无论 answer 是否信息不足）。
+        之前 retrieval_agent 检索到的 sheet 摘要 chunk 仍在 documents 中，sql_agent 返回
+        的 SQL 结果会追加进去（operator.add），让 answer_generator 看到
         "sheet 摘要 + 真实 SQL 结果" 双重信息生成更好的回答。
         """
-        # 判断是否为重判场景：已有 documents 且不是 force_sql 模式（force_sql 首次进入时 documents 为空）
-        is_reroute = bool(state.get("documents")) and not state.get("force_sql", False)
-
         try:
             from src.excel_rag.qa import ExcelQA
             qa = ExcelQA()
@@ -577,32 +555,20 @@ class AgenticRAGWorkflow:
                 doc_ids=state.get("doc_ids") or None,
             )
 
-            # 没有任何结构化数据或召回失败
+            # 没有任何结构化数据或召回失败 → 返回空 documents，不再 fallback 到 retrieval
+            # （统一召回已在前序步骤完成，这里 fallback 没有意义，反而可能造成死循环）
             if r.get("error") in ("no_sheets", "no_relevant_sheet"):
-                if state.get("force_sql"):
-                    # 用户明确选了 Excel 文件，不 fallback 到文本检索
-                    logger.info("force_sql=True, no sheet recalled, skipping fallback: %s", r["error"])
-                    return {
-                        "documents": [],
-                        "retrieval_path": "sql_no_sheet_forced",
-                        "error": r["error"],
-                        "rerouted_to_sql": is_reroute,
-                        "retrieval_debug": {
-                            "sql_fallback_reason": f"forced_sql_{r['error']}",
-                            "sql_recalled_sheets": r.get("recalled_sheets", []),
-                        },
-                    }
-                logger.info("sql_agent fallback to retrieval_agent: %s", r["error"])
-                retrieval_result = self._node_retrieval_agent(state)
-                retrieval_result["retrieval_path"] = "sql_fallback"
-                # 补充检索调试信息，便于评估分析 fallback 情况
-                retrieval_result["retrieval_debug"] = {
-                    **retrieval_result.get("retrieval_debug", {}),
-                    "sql_fallback_reason": r["error"],
-                    "sql_recalled_sheets": r.get("recalled_sheets", []),
+                logger.info("sql_agent no sheet recalled, returning empty: %s", r["error"])
+                return {
+                    "documents": [],
+                    "retrieval_path": "sql_no_sheet",
+                    "error": r["error"],
+                    "rerouted_to_sql": True,
+                    "retrieval_debug": {
+                        "sql_fallback_reason": r["error"],
+                        "sql_recalled_sheets": r.get("recalled_sheets", []),
+                    },
                 }
-                retrieval_result["rerouted_to_sql"] = is_reroute
-                return retrieval_result
 
             selected = r["selected_sheet"]
             sheet_meta = selected["sheet_meta"]
@@ -662,8 +628,8 @@ class AgenticRAGWorkflow:
 
             return {
                 "documents": documents,
-                "retrieval_path": "sql_nl2sql" if not is_reroute else "sql_rerouted",
-                "rerouted_to_sql": is_reroute,
+                "retrieval_path": "sql_nl2sql",
+                "rerouted_to_sql": True,
                 "retrieval_debug": {
                     "sql_query": sql,
                     "sql_sheet_meta_id": selected["meta_id"],
@@ -679,31 +645,21 @@ class AgenticRAGWorkflow:
             }
         except Exception as e:
             logger.error("sql_agent failed: %s", e, exc_info=True)
-            if state.get("force_sql"):
-                # force_sql 模式下异常也不 fallback，保留错误信息给 answer_generator
-                return {
-                    "documents": [],
-                    "retrieval_path": "sql_error_forced",
-                    "error": str(e),
-                    "rerouted_to_sql": is_reroute,
-                }
-            # 任何异常都降级到文本检索，保证不阻断主流程
-            retrieval_result = self._node_retrieval_agent(state)
-            retrieval_result["retrieval_path"] = "sql_fallback_error"
-            retrieval_result["error"] = str(e)
-            retrieval_result["rerouted_to_sql"] = is_reroute
-            return retrieval_result
+            # 统一不再 fallback 到 retrieval_agent：召回已在前序步骤完成，
+            # 这里返回空 documents 让 answer_generator 生成"无法回答"。
+            return {
+                "documents": [],
+                "retrieval_path": "sql_error",
+                "error": str(e),
+                "rerouted_to_sql": True,
+            }
 
     def _node_query_router(self, state: AgentState) -> dict:
         result = self.query_router.classify(state["query"])
-        # force_sql=True（用户筛选的文档全为 Excel 文件）→ 强制走 sql_agent
-        # chitchat 例外：闲聊仍走 chitchat，否则 "你好" 也会跑去 NL2SQL
-        if state.get("force_sql") and result["query_type"] != "chitchat":
-            logger.info(
-                "force_sql=True, overriding query_type %s → sql_query",
-                result["query_type"],
-            )
-            result["query_type"] = "sql_query"
+        # [UNIFIED] 不再基于 force_sql 覆盖 query_type 为 sql_query。
+        # query_router 只做语义意图分类（chitchat / simple_fact / multi_hop /
+        # comparison / definition），所有非 chitchat 查询统一走向量召回，
+        # SQL 由 _route_after_generation 作为条件性 Tool Call 触发。
         return {
             "query_type": result["query_type"],
             "confidence": result["confidence"],
@@ -1019,15 +975,22 @@ class AgenticRAGWorkflow:
             answer = resp.content
 
             # [延迟显示] 检测是否会触发重判到 sql_agent：
-            # 条件与 _route_after_generation 一致：未重判过 + 有 excel_sheet chunk + answer 信息不足
+            # 条件与 _route_after_generation 完全一致（含 iteration 边界）。
             # 如果会重判，标记 intermediate=True 让前端不渲染这个中间答案，
             # 等待 sql_agent 跑完后下一轮 answer_generator 的最终答案。
+            #
+            # [BUGFIX] iteration 边界对齐：answer_generator 输入 iteration=N，输出 N+1。
+            # _route_after_generation 读取 N+1，检查 N+1 < max_iter。
+            # 这里必须用 (N+1) < max_iter 才能与之对齐，否则当 N=max_iter-1 时
+            # will_reroute=True（intermediate=True，前端不渲染）但 _route_after_generation
+            # 判 END → 前端卡死等待永远不来的最终答案。
             docs = state.get("documents", [])
+            next_iteration = state.get("iteration", 0) + 1
             will_reroute = (
                 not state.get("rerouted_to_sql", False)
                 and _has_excel_sheet_chunk(docs)
                 and _answer_indicates_insufficient(answer)
-                and state.get("iteration", 0) < state.get("max_iterations", settings.agent_max_iterations)
+                and next_iteration < state.get("max_iterations", settings.agent_max_iterations)
             )
 
             # [MERGED] 原 answer_validator 节点的职责合并到此处：

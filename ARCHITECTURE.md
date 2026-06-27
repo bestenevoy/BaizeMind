@@ -43,7 +43,7 @@ BM25 Index            (LightRAG 层)       (LightRAG 层)
 │                     FastAPI Layer (:8000)                             │
 │  POST /api/v1/documents/upload    POST /api/v1/qa/ask               │
 │  GET  /api/v1/documents/*         POST /api/v1/qa/stream (SSE)      │
-│  GET  /api/v1/system/*            GET /api/v1/evaluation/*          │
+│  GET  /api/v1/system/*            GET  /api/v1/evaluation/*          │
 │  GET  /health                                                         │
 └───────────────────────────┬──────────────────────────────────────────┘
                             │
@@ -52,80 +52,113 @@ BM25 Index            (LightRAG 层)       (LightRAG 层)
                 │  (LangGraph StateGraph) │
                 └───────────┬───────────┘
                             │
-    ┌───────────────────────┼───────────────────────────┐
-    │                       │                           │
-    ▼                       ▼                           ▼
-Query Router           LightRAG Agent              Retrieval Agent
-(LLM 意图分类)       (entity → relation         (hybrid search)
-    │                  → graph → chunk)              │
-    │                       │                   ┌────┴─────┐
-    │     ┌─────────────────┘                   ▼          ▼
-    │     │ fallback (LightRAG index 为空时): Dense Search  BM25
-    │     │   graph_agent → retrieval_agent    (Milvus)    (jieba)
-    │     │                                       └────┬─────┘
-    ▼     ▼                                            ▼
-  ┌────────┐  ┌──────────┐                     RRF Fusion
-  │chitchat│  │  Answer  │                (dense 0.6 + BM25 0.4)
-  │  LLM   │  │ Generator│                          │
-  └────────┘  └────┬─────┘                     ┌─────┴─────┐
-                   │                           ▼           ▼
-                   ▼                       Reranker      Dedup
-            Answer Validator          (SiliconFlow/   (chunk_id)
-            (结构化失败原因)            local/TF-IDF)
-                   │
-                   ▼
-          Final Answer + Citations
+                            ▼
+                     query_router
+               (LLM 语义意图分类,
+                不决定 SQL 路由)
+                            │
+         ┌──────────────────┼──────────────────┐
+         ▼                  ▼                  ▼
+     chitchat         retrieval_agent     lightrag_agent
+     → END            (统一召回:            (entity→relation→
+                       doc chunks +         graph→chunk)
+                       table schemas +         │
+                       sheet summaries         │ fallback:
+                       同库)                   │ graph_agent→
+                         │                     │ retrieval_agent
+                         │                 ┌───┘
+                         └─────────────────┘
+                                   │
+                                   ▼
+                        answer_generator
+                    (生成 + 自检合并, 单次 LLM)
+                                   │
+                                   ▼
+                       _route_after_generation
+                       (统一决策点)
+                                   │
+            ┌──────────────────────┼──────────────────────┐
+            ▼                      ▼                      ▼
+        召回充分              信息不足                rerouted_to_sql=True
+        answer 正常           + 有 excel_sheet        (sql_agent 已执行)
+        → END                 chunk + 未重判          → END (直接结束)
+        (设计文档第1点)       + iter < max            (无论 answer 是否
+                                   │                  信息不足)
+                                   ▼
+                              sql_agent
+                        (条件触发 SQL Tool Call)
+                        NL2SQL → 执行 → SQL 结果
+                                   │
+                                   │ rerouted_to_sql=True
+                                   ▼
+                        answer_generator
+                    (基于 SQL 结果生成最终答案)
+                                   │
+                                   ▼
+                       _route_after_generation
+                                   │
+                          rerouted_to_sql=True
+                          → END (直接结束)
+                                   │
+                                   ▼
+                       Final Answer + Citations
 ```
 
 ---
 
 ## LangGraph 工作流详情
 
-### AgentState（21 字段）
+### AgentState（24 字段）
 
 ```python
 query: str              # 原始用户问题
-query_type: str         # chitchat | simple_fact | multi_hop | comparison | definition | sql_query
+query_type: str         # chitchat | simple_fact | multi_hop | comparison | definition
+                        # [UNIFIED] sql_query 已移除：所有非 chitchat 查询统一走向量召回
 confidence: float       # 分类置信度 0.0-1.0
 graph_eligible: bool    # 多实体+关系词 → 允许图谱增强
 
 documents: list[dict]   # 检索到的 chunks (Annotated[list, operator.add])
+                        # 统一召回：文档块 + 表结构 + 表摘要都在同一向量库
 graph_context: str      # 图谱扩展后的格式化文本
 graph_entities: list[str]   # 相关实体名
 sub_queries: list[str]      # LightRAG/graph_agent 生成的检索子问题
 graphrag_context: str       # MS GraphRAG 结果 (unreachable)
 
 retrieval_path: str     # 检索路径说明（可观测性）
+retrieval_debug: dict   # 检索调试信息（SQL 查询、结果等）
+search_debug_data: dict # 前端检索调试面板数据
 draft_answer: str       # 答案草稿
 final_answer: str       # 最终答案
 citations: list[str]    # 引用 doc_id_chunk_id 列表
-validation: dict        # 验证结果
-validation_feedback: str    # 结构化失败反馈
+validation: dict        # [MERGED] validation 节点已合并到 answer_generator
+validation_feedback: str    # [DEPRECATED] 结构化失败反馈（保留兼容）
 
 iteration: int          # 当前迭代
 max_iterations: int     # 最大迭代 (默认 5)
 error: str              # 错误信息
 folder: str             # 文件夹过滤
 tags: list[str]         # 标签过滤
+doc_ids: list[str]      # 单文件筛选（前端选中具体文件时传入）
 
-# Excel 强制路由相关
-force_sql: bool         # folder/tags 过滤后文档全为 .xlsx/.xls → 强制走 sql_agent 且失败不 fallback
-rerouted_to_sql: bool   # 自动重判防死循环：validator → sql_agent 重试后置 True
+# [UNIFIED] SQL 作为条件性 Tool Call 的防死循环标志
+rerouted_to_sql: bool   # sql_agent 被触发后置 True；
+                        # 下一轮 _route_after_generation 检测到 True + 仍信息不足 → END
 ```
 
-### 节点 (9 个)
+### 节点 (8 个)
 
 | 节点 | 职责 |
 |------|------|
-| `query_router` | LLM 意图分类：query_type + confidence + graph_eligible；force_sql=True 时覆盖为 sql_query（chitchat 例外） |
+| `query_router` | LLM 语义意图分类：query_type + confidence + graph_eligible（仅语义意图，不决定 SQL） |
 | `chitchat` | 直接 LLM 回答，无检索，立即终止 |
-| `sql_agent` | Excel NL2SQL 检索：向量召回 Sheet → 多表选择 → NL2SQL → 执行（含重试）；force_sql=False 且无 sheet 时 fallback 到 retrieval_agent |
-| `retrieval_agent` | Hybrid (dense + BM25) → RRF fusion → rerank → dedup |
+| `sql_agent` | **[条件触发 Tool Call]** NL2SQL：向量召回 Sheet → 多表选择 → NL2SQL → 执行（含重试）；仅由 `_route_after_generation` 在召回含 excel_sheet chunk + answer 信息不足时触发 |
+| `retrieval_agent` | **[统一召回]** Hybrid (dense + BM25) → RRF fusion → rerank → dedup（文档块 + 表结构 + 表摘要同库） |
 | `graph_agent` | LLM NER → Neo4j expand → 子问题生成 → 实体富化 BM25 → retrieval_agent |
 | `lightrag_agent` | Entity Index + Relation Index → Neo4j expand → chunk retrieve（含 fallback） |
 | `graphrag_search` | **[UNREACHABLE]** MS GraphRAG global/local/drift search |
-| `answer_generator` | LLM 用检索上下文 + 图谱上下文生成答案 + 引用 |
-| `answer_validator` | 幻觉检测 + 结构化失败原因 + 循环重试 + excel_sheet 重判到 sql_agent |
+| `answer_generator` | **[MERGED]** 单次 LLM 调用同时生成答案 + 自检（原 answer_validator 职责已合并）；含引用生成；`intermediate` 标志延迟显示中间答案 |
+
+> **[MERGED]** `answer_validator` 节点已合并到 `answer_generator`：单次 LLM 调用同时生成 + 自检，重判信号改用正则匹配 `_answer_indicates_insufficient` + `_has_excel_sheet_chunk`，不再依赖独立的 validator LLM 调用。
 
 ### 边
 
@@ -136,125 +169,143 @@ rerouted_to_sql: bool   # 自动重判防死循环：validator → sql_agent 重
 | 固定 | sql_agent → answer_generator | — |
 | 固定 | retrieval_agent → answer_generator | — |
 | 固定 | lightrag_agent → answer_generator | — |
-| 固定 | answer_generator → answer_validator | — |
-| 条件 | query_router → chitchat / sql_agent / retrieval_agent / lightrag_agent | `_route_by_query_type` |
+| 条件 | query_router → chitchat / retrieval_agent / lightrag_agent | `_route_by_query_type`（无 sql_query 分支） |
 | 条件 | graph_agent → retrieval_agent | `_route_for_multi_hop`（无条件路由到 retrieval） |
 | 条件 | graphrag_search → ... | `_route_after_graphrag` [UNREACHABLE] |
-| 条件 | answer_validator → END / retrieval_agent / answer_generator / sql_agent | `_route_after_validation` |
+| 条件 | answer_generator → END / sql_agent | `_route_after_generation`（条件触发 SQL Tool Call） |
 
-### 路由逻辑（`_route_by_query_type` + force_sql）
+### 统一召回流程（`_route_by_query_type` + `_route_after_generation`）
+
+**设计文档三点决策**：统一检索 → LLM 决策 → 必要时调用 SQL 工具 → 生成最终答案。
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ workflow.invoke(query, folder, tags)                                   │
-│   force_sql = _should_force_sql(folder, tags)                          │
-│   # folder/tags 过滤后文档全为 .xlsx/.xls → force_sql=True             │
+│ workflow.invoke(query, folder, tags, doc_ids)                          │
+│   [UNIFIED] 不再计算 force_sql：所有 query 统一走向量召回                │
 └──────────────────────────────────┬─────────────────────────────────────┘
                                    ▼
-                            query_router
+                            query_router (仅语义意图分类)
                                    │
        ┌───────────┬───────────────┼─────────────┬──────────────┐
        ▼           ▼               ▼             ▼              ▼
-   chitchat     sql_agent     retrieval      lightrag        (其他)
-   → END         │           _agent          _agent
-                 │               │             │
-       ┌─────────┘               │             │
-       │ force_sql=True             │             │
-       │ 且 no_sheets 时            │             │
-       │ 不 fallback                │             │
-       ▼                           ▼             ▼
-   ┌──────────┐              answer_generator
-   │ NL2SQL   │  no_sheets      ↑
-   │ + 执行   │  + 非 force  ────┘
-   └────┬─────┘  → fallback
-        │
-        ▼
-   answer_generator → answer_validator
-                            │
-                            ▼
-                   (见验证循环图)
+   chitchat   retrieval_agent  lightrag_agent  (其他)        (其他)
+   → END         │                │             │             │
+                 │                │             ▼             ▼
+                 │                │     graph_agent    retrieval_agent
+                 │                │             │
+                 │                │             ▼
+                 │                │      retrieval_agent
+                 │                │             │
+                 └────────────────┴─────────────┘
+                                   ▼
+                          answer_generator (统一生成 + 自检)
+                                   │
+                                   ▼
+                       _route_after_generation (统一决策点)
+                                   │
+            ┌──────────────────────┼──────────────────────┐
+            ▼                      ▼                      ▼
+        rerouted_to_sql=True   召回充分              信息不足
+        → 直接 END             answer 正常           + 有 excel_sheet
+        (sql_agent 已执行,     → END                 chunk + 未重判
+         不再路由)             (设计文档第1点)       + iter < max
+                                                      │
+                                                      ▼
+                                                 sql_agent
+                                                 (条件性 Tool Call)
+                                                      │
+                                                      │ 设置 rerouted_to_sql=True
+                                                      ▼
+                                          answer_generator (生成最终答案)
+                                                      │
+                                                      ▼
+                                          _route_after_generation
+                                                      │
+                                             rerouted_to_sql=True
+                                             → 直接 END
+                                             (不再路由, 流程结束)
+                                                      │
+                                                      ▼
+                                          Final Answer + Citations
 ```
 
 详细分支：
 
 ```
-query_router
+query_router (仅语义意图分类，不决定 SQL)
   │
   ├─ chitchat ⇒ chitchat → END
   │
-  ├─ sql_query (含 force_sql=True 强制覆盖，chitchat 例外)
-  │   ⇒ sql_agent → answer_generator → answer_validator → END/(loop)
-  │   │
-  │   └─ sql_agent 内部:
-  │      ├─ force_sql=True + 召回失败 → 返回空 documents（不 fallback，answer_generator 看到"无数据"信号）
-  │      ├─ force_sql=False + 召回失败 → fallback 到 retrieval_agent（文本 RAG）
-  │      └─ 召回成功 → NL2SQL + 执行（含重试）→ SQL 结果作为 document 注入
-  │
-  ├─ holistic ⇒ retrieval_agent → answer_generator → answer_validator → END/(loop)
+  ├─ holistic ⇒ retrieval_agent → answer_generator → _route_after_generation → END/(sql_agent)
   │   (MS GraphRAG 已停用，改为走普通检索)
   │
   ├─ multi_hop / comparison / (simple_fact|definition + graph_eligible=True)
-  │   ⇒ lightrag_agent → answer_generator → answer_validator → END/(loop)
+  │   ⇒ lightrag_agent → answer_generator → _route_after_generation → END/(sql_agent)
   │   │
   │   └─ lightrag_agent 内部:
   │      ├─ LightRAG entity index 有数据 → Entity Index → Relation Index → Graph Expand → Chunk Retrieve
   │      └─ entity index 为空 (.count() == 0) → fallback: graph_agent → retrieval_agent
   │
   └─ simple_fact / definition (graph_eligible=False)
-      ⇒ retrieval_agent → answer_generator → answer_validator → END/(loop)
+      ⇒ retrieval_agent → answer_generator → _route_after_generation → END/(sql_agent)
 ```
 
-**关键变更**：
+**关键变更（统一召回 + 条件触发 SQL）**：
 - `multi_hop` / `comparison` 的主路径是 `lightrag_agent`（而非 `graph_agent`）。`lightrag_agent` 在 LightRAG 索引为空时自动 fallback 到 `graph_agent → retrieval_agent` 路径，保证可用性。
-- `force_sql=True` 时 query_router 强制覆盖为 sql_query，且 sql_agent 失败不 fallback（用户明确选了 Excel 文件）。
-- `force_sql` 由 `_should_force_sql(folder, tags)` 自动判断：folder/tags 过滤后文档全为 .xlsx/.xls → True；含其他类型文档 → False。
+- **[UNIFIED]** `sql_query` 路由分支已移除：所有非 chitchat 查询统一走向量召回（retrieval_agent / lightrag_agent），SQL 作为召回后 answer_generator 的条件性 Tool Call 触发（见 `_route_after_generation`）。用户选 Excel 文件不再特殊路由，而是自然进入统一召回（Excel sheet 摘要已作为 chunk 存入主向量库，metadata.source="excel_sheet"）。
+- **[UNIFIED]** `force_sql` 状态字段与 `_should_force_sql` 函数已移除：不再基于 folder/tags/doc_ids 全为 Excel 文件时强制走 sql_query 路由。
 
-### 验证循环（`_route_after_validation`）
+### 条件触发 SQL Tool Call（`_route_after_generation`）
 
 ```
-answer_validator
+answer_generator (统一生成 + 自检)
   │
-  ├─ rerouted_to_sql=True 且 is_valid=false  → END  (★ 死循环防护，见下)
+  ├─ rerouted_to_sql=True → 直接 END
+  │   [SHORT-CIRCUIT] sql_agent 已作为 Tool Call 执行过，answer_generator 已基于
+  │   SQL 结果生成最终答案。无论 answer 是否信息不足，都不再路由——
+  │   - answer 正常 → 最终答案，END
+  │   - answer 仍信息不足 → 已穷尽统一召回 + NL2SQL 两条路径，END 避免死循环
   │
-  ├─ is_valid=true 或 iteration >= max_iterations  → END
+  ├─ 未重判 + 召回含 excel_sheet chunk + answer 信息不足 + iteration < max_iter
+  │   → sql_agent (条件性 Tool Call：召回中含相关数据表，LLM 判断 SQL 可能获得答案)
+  │   └─ sql_agent 返回时设置 rerouted_to_sql=True，下一轮直接 END
   │
-  └─ is_valid=false 且 iteration < max_iterations 且 rerouted_to_sql=False:
-       │
-       ├─ failure_reason 含 "context_insufficient":
-       │   │
-       │   ├─ 检索到 excel_sheet 类型的 chunk（metadata.source="excel_sheet" 或 chunk_id 前缀 "excel:"）
-       │   │   OR 回答文本含"信息不足"短语（兜底 validator 误判 is_valid=true 的场景）
-       │   │   → sql_agent（自动重判走 NL2SQL 拿真实数据）
-       │   │   └─ sql_agent 返回时设置 rerouted_to_sql=True，防再次进 sql_agent
-       │   │
-       │   └─ 其他情况
-       │       → retrieval_agent（重新检索）
-       │
-       └─ failure_reason 为 missing_citation / unsupported_claim / conflict_detected
-           → answer_generator（带结构化反馈修复）
+  └─ 其他 → END
+      (召回充分 → answer 正常 / 召回不充分但无数据表可尝试 SQL → 返回"无法回答")
 ```
 
-**重判触发条件**（自动从 doc rag 切换到 nl2sql）：
-1. `answer_validator` 标 `context_insufficient`，**OR** 回答文本含"信息不足"短语（兜底 validator 误判 is_valid=true 的场景）
-2. 检索 documents 中存在 `metadata.source == "excel_sheet"` 的 chunk（之前 doc rag 检索到了 sheet 摘要 chunk）
-3. `rerouted_to_sql=False`（尚未重判过，防死循环）
-4. `iteration < max_iterations`
+**条件触发 SQL Tool Call 的规则**（对应设计文档三点决策）：
+1. **召回充分**：answer_generator 基于统一召回的上下文（文档块 + 表结构 + 表摘要）生成回答，answer 正常 → 直接 END（设计文档第 1 点）
+2. **召回不充分 + 有数据表**：answer 含"信息不足"短语 + 召回含 excel_sheet chunk + 未重判过 + iteration < max → sql_agent 触发 NL2SQL Tool Call，SQL 结果与上下文一起交给 answer_generator 生成最终答案（设计文档第 2 点）
+3. **召回不充分 + 无数据表**：answer 信息不足但召回中无 excel_sheet chunk → END，返回"无法回答"（设计文档第 3 点）
 
-重判后 sql_agent 返回的 SQL 执行结果与之前的 sheet 摘要 chunk **累加**（LangGraph `operator.add`），answer_generator 看到"sheet 摘要 + 真实 SQL 结果"双重信息生成更准确的回答。
+**SQL Tool Call 触发条件**：
+1. `rerouted_to_sql=False`（尚未触发过 SQL Tool Call，由 short-circuit 保证防死循环）
+2. 回答文本含"信息不足"短语（`_answer_indicates_insufficient` 正则匹配）
+3. 检索 documents 中存在 `metadata.source == "excel_sheet"` 的 chunk（统一召回检到了 sheet 摘要 chunk）
+4. `iteration < max_iterations`（answer_generator 已 +1 后的值）
 
-**★ 死循环防护**（`rerouted_to_sql=True` 的双重作用）：
-- **第一次保护**：阻止 `sql_agent → validator → sql_agent` 循环（rerouted_to_sql=True 时不再触发重判条件）
-- **第二次保护**：阻止 `retrieval_agent → validator → retrieval_agent` 空转循环（rerouted_to_sql=True + is_valid=false 时直接 END，不再走 retrieval_agent）
-- **理由**：此时已穷尽 doc rag + nl2sql 两条路径，同一文档库再走 retrieval 也不会有新信息，继续烧 token 无意义
+SQL Tool Call 后 sql_agent 返回的 SQL 执行结果与之前的 sheet 摘要 chunk **累加**（LangGraph `operator.add`），answer_generator 看到"sheet 摘要 + 真实 SQL 结果"双重信息生成更准确的回答。
 
-### 验证失败原因
+**★ 死循环防护**（`rerouted_to_sql=True` 短路）：
+- sql_agent 被触发即置 `rerouted_to_sql=True`，下一轮 `_route_after_generation` 检测到 `rerouted_to_sql=True` → **直接 END**，不再检查 answer 是否信息不足，不再二次触发 sql_agent。
+- **理由**：sql_agent 是条件性 Tool Call（非独立路由），执行后 answer_generator 已基于 SQL 结果生成最终答案。无论结果如何，流程结束——answer 正常是最终答案，answer 信息不足说明已穷尽统一召回 + NL2SQL 两条路径，继续烧 token 无意义。
 
-| 原因 | 含义 | 重试策略 |
-|------|------|---------|
-| `missing_citation` | 缺少来源引用 | → answer_generator（要求加引用） |
-| `unsupported_claim` | 包含无依据声明 | → answer_generator（要求只用上下文信息） |
-| `context_insufficient` | 上下文信息不足 | → retrieval_agent（重新检索）；或 → sql_agent（重判，见上） |
-| `conflict_detected` | 上下文矛盾 | → answer_generator（要求说明矛盾） |
+**⚠️ iteration 边界对齐**（`will_reroute` ↔ `_route_after_generation`）：
+- answer_generator 输入 `iteration=N`，输出 `iteration=N+1`
+- `_route_after_generation` 读取 `iteration=N+1`，检查 `N+1 < max_iter`
+- answer_generator 的 `will_reroute`（控制 `intermediate` 标志）必须用 `N+1 < max_iter` 才能与之对齐
+- **Bugfix**：之前 answer_generator 用 `N < max_iter`，当 `N=max_iter-1` 时 `will_reroute=True`（前端不渲染中间答案）但 `_route_after_generation` 判 END → 前端卡死等待永远不来的最终答案
+
+### sql_agent 失败处理（统一不再 fallback）
+
+`_node_sql_agent` 现在仅作为条件性 Tool Call 触发，**不再 fallback 到 retrieval_agent**（统一召回已在前序步骤完成，二次 fallback 没有意义，反而可能造成死循环）：
+
+| retrieval_path | 含义 | 失败处理 |
+|----------------|------|---------|
+| `sql_nl2sql` | NL2SQL 成功 | 输出 SQL 结果文档（含 sheet 摘要 + SQL 结果） |
+| `sql_no_sheet` | 无 sheet 召回 | 返回空 documents，answer_generator 生成"无法回答" |
+| `sql_error` | NL2SQL 异常 | 返回空 documents，answer_generator 生成"无法回答" |
 
 ---
 

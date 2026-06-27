@@ -12,14 +12,14 @@ Analyze the user's question and classify it into exactly ONE type:
   Examples: "Compare the performance of model X and model Y."
 - definition: Questions asking for definitions, explanations of terms.
   Examples: "What is RAG?", "Explain transformer architecture."
-- sql_query: Questions that require numerical computation, aggregation, ranking, or statistical analysis
-  over structured/tabular data (Excel/CSV/database tables). These should be answered by executing SQL,
-  NOT by reading prose.
-  Signals: mentions of metrics (销售额/销量/收入/利润/成本/数量/金额/占比), aggregations
-  (总和/合计/平均/最高/最低/TopN/排名/排行/同比/环比/增长率), filters over categorical dimensions
-  (某地区/某产品/某客户/某月份), counting (有多少/几个/次数).
-  Examples: "华东地区销量最高的产品是什么？", "2024年总销售额是多少？", "各产品销量排名Top10",
-  "华北地区客户的平均消费金额", "销售额同比去年增长了多少".
+
+Note: Do NOT classify questions as a separate "sql_query" type. Questions over structured/tabular data
+(numerical computation, aggregation, ranking, statistics over Excel/CSV tables) should be classified by
+their semantic intent (usually simple_fact or multi_hop). The system uses a UNIFIED retrieval flow:
+all queries first go through unified vector recall (which includes document chunks AND table schemas/
+summaries in the same vector store). After recall, an LLM decision step determines whether the recalled
+context is sufficient to answer directly, or whether to invoke NL2SQL as a conditional tool call over
+any recalled data tables. So routing is based on semantic intent only, not on whether SQL is needed.
 
 Additionally, set "graph_eligible": true if:
 - The query mentions 2+ distinct named entities (companies, people, products, technologies)

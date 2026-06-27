@@ -29,7 +29,10 @@ class QueryRouter:
                 data = json.loads(match.group())
                 query_type = data.get("query_type", "simple_fact")
                 # [DISABLED] GraphRAG: holistic queries now fallback to retrieval path
-                if query_type not in ("chitchat", "simple_fact", "multi_hop", "comparison", "definition", "sql_query"):
+                # [UNIFIED] sql_query 已移除：所有 query 统一走向量召回，SQL 作为召回后的条件性
+                # Tool Call（由 _route_after_generation 基于 answer + excel_chunk 判定触发）。
+                # query_router 只负责语义意图分类，不再决定是否走 NL2SQL。
+                if query_type not in ("chitchat", "simple_fact", "multi_hop", "comparison", "definition"):
                     query_type = "simple_fact"
                 return {
                     "query_type": query_type,
