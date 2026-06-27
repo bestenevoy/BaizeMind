@@ -213,15 +213,18 @@ EXCEL_NL2SQL_SYSTEM = """You are a SQL generator. Given a SQLite table schema an
 Database dialect: SQLite
 Table: `{table_name}`
 
-Columns (display_name → column_name : data_type):
+Schema (column_name is the SQL identifier you MUST use; display_name is the original human-readable header shown to users):
+  Format below: `column_name (data_type) -- display_name`
 {columns}
 
-Sample rows (first 5):
+Sample rows (first 5, column order matches column_name above):
 {sample_rows}
 
 Rules:
 - Generate ONLY a SELECT statement. No INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/ATTACH/PRAGMA.
-- Use ONLY the column_name values listed above. Never guess column names. Do NOT use display_name in SQL — it is for human readability only.
+- **In SQL, use ONLY the column_name (the SQL identifier before the parentheses). Never use display_name (the human-readable text after `--`) in SQL.** display_name only helps you understand which user-facing field the question refers to.
+- If the question mentions a field by its display_name, map it to the corresponding column_name before writing SQL.
+- Never guess column names — only use column_name values that appear above.
 - Use SQLite-compatible functions (e.g. `strftime`, `date`, `GROUP BY`, `ORDER BY`, `LIMIT`).
 - Always append `LIMIT {max_rows}` if not already present, to bound result size.
 - For "最高/最低/TopN" questions, use ORDER BY ... DESC/ASC + LIMIT.
@@ -241,10 +244,11 @@ Previous SQL:
 {previous_sql}
 
 Table: `{table_name}`
-Columns (display_name → column_name : data_type):
+Schema (column_name is the SQL identifier; display_name is the human-readable header):
+  Format: `column_name (data_type) -- display_name`
 {columns}
 
-Fix the SQL so it executes successfully against SQLite. Output ONLY the corrected SQL statement, no explanation.
+Fix the SQL so it executes successfully against SQLite. Use ONLY column_name in SQL (never display_name). Output ONLY the corrected SQL statement, no explanation.
 Corrected SQL:"""
 
 # ── Excel RAG: Multi-table selection ──

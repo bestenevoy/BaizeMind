@@ -79,7 +79,18 @@ def inject_limit(sql: str, max_rows: int) -> str:
 
 
 def _format_columns_for_prompt(columns: list[dict[str, str]]) -> str:
-    return "\n".join(f"- {c['display_name']} → {c['column_name']} : {c['data_type']}" for c in columns)
+    """格式化列结构给 LLM。
+
+    输出格式与 prompt 说明保持一致：
+      `column_name (data_type) -- display_name`
+
+    把 column_name 放在最前面（LLM 生成 SQL 时直接看第一个 token 即可），
+    data_type 紧随其后用于类型判断，display_name 作为人类可读注释放最后。
+    """
+    return "\n".join(
+        f"- {c['column_name']} ({c['data_type']}) -- {c['display_name']}"
+        for c in columns
+    )
 
 
 def _format_sample_rows(columns: list[dict[str, str]], table_name: str) -> str:
