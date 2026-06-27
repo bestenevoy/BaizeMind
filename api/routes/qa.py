@@ -202,6 +202,14 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                             # retrieval_agent 的 excel_sheet chunk 在 metadata.sheet_name
                             "sheet_name": d.get("sheet_name", "") or meta.get("sheet_name", ""),
                             "source_type": d.get("source_type", "") or meta.get("source", ""),
+                            # sql_agent 命中路径：doc 自带 sql_result_columns / sql_result_rows
+                            # 前端 chunks 详情直接渲染数据表，不再依赖 doc.text（截断后只看到表结构）
+                            "sql_result_columns": d.get("sql_result_columns", []),
+                            "sql_result_rows": d.get("sql_result_rows", []),
+                            "sql_result_row_count": d.get("sql_result_row_count", 0),
+                            # sheet_summary doc：结构化字段供前端渲染 Sheet 卡片（行数/列结构）
+                            "sheet_row_count": d.get("sheet_row_count", 0),
+                            "sheet_columns": d.get("sheet_columns", []),
                         })
                     result = {
                         "count": len(docs),
@@ -215,6 +223,8 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                             "sql_query": retrieval_debug.get("sql_query", ""),
                             "sql_sheet_name": retrieval_debug.get("sql_sheet_name", ""),
                             "sql_result_row_count": retrieval_debug.get("sql_result_row_count", 0),
+                            "sql_result_columns": retrieval_debug.get("sql_result_columns", []),
+                            "sql_result_rows": retrieval_debug.get("sql_result_rows", []),
                             "sql_recalled_count": len(retrieval_debug.get("sql_recalled_sheets", [])),
                             "sql_error": retrieval_debug.get("sql_error", ""),
                         })

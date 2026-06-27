@@ -5,7 +5,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { ChatMessage, type Message } from '@/components/ChatMessage'
-import { askQuestionStream, type StreamStep, type RetrievedDoc } from '@/lib/api'
+import { askQuestionStream, type StreamStep, type RetrievedDoc, type SheetColumn } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 
 const STORAGE_KEY = 'agentic_rag_chat_history'
@@ -118,6 +118,11 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
               filename: d.filename as string | undefined,
               sheet_name: d.sheet_name as string | undefined,
               source_type: d.source_type as string | undefined,
+              sql_result_columns: d.sql_result_columns as string[] | undefined,
+              sql_result_rows: d.sql_result_rows as unknown[][] | undefined,
+              sql_result_row_count: d.sql_result_row_count as number | undefined,
+              sheet_row_count: d.sheet_row_count as number | undefined,
+              sheet_columns: d.sheet_columns as SheetColumn[] | undefined,
             }))
             // 合并 + 按 chunk_id 去重（retrieval_agent 和 sql_agent 的 documents 都保留，但去重）
             const merged = [...retrievedDocs]

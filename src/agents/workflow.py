@@ -163,6 +163,8 @@ def _format_sql_result_as_document(
         "sheet_name": sheet_meta.get("sheet_name", ""),
         "sql": sql,
         "sql_result_columns": result_cols,
+        # 暴露前 5 行结果，便于前端 chunks 详情直接渲染数据表（避免 doc.text 截断后只显示表结构）
+        "sql_result_rows": result_rows[:5] if result_rows else [],
         "sql_result_row_count": row_count,
     }
 
@@ -607,14 +609,53 @@ class AgenticRAGWorkflow:
             attempts = r["attempts"]
             err = r["error"]
 
-            # 把 SQL 执行结果格式化为一个 document，注入 documents
-            documents = [_format_sql_result_as_document(
+            # 先注入召回的 sheet 摘要，再注入 SQL 结果 doc
+            # 顺序很重要：前端 effectiveDocs 按 chunk_id 去重时先到先得，
+            # selected sheet 的 summary（chunk_id=meta_id）先入，
+            # SQL 结果 doc（chunk_id=meta_id）后入被去重丢弃，
+            # 这样"检索上下文"只显示 sheet 摘要，不显示 SQL 结果提示。
+            # 但 sql_agent step 的 chunks 详情用原始 result.documents，仍能渲染 SQL 表格。
+            # answer_generator 从 state["documents"]（不去重）仍能看到 SQL 结果 doc。
+            existing_meta_ids = {
+                d.get("sheet_meta_id") or d.get("chunk_id")
+                for d in state.get("documents", [])
+                if isinstance(d, dict)
+            }
+            documents = []
+            for sh in recalled:
+                meta_id = sh.get("meta_id", "")
+                if not meta_id or meta_id in existing_meta_ids:
+                    continue
+                sm = sh.get("sheet_meta", {}) or {}
+                # columns 结构: [{cn, en, type}, ...]
+                sheet_columns = sm.get("columns", []) or []
+                documents.append({
+                    "doc_id": sh.get("doc_id", ""),
+                    "chunk_id": meta_id,
+                    "text": sh.get("summary", ""),
+                    "score": sh.get("score", 0.0),
+                    "source_type": "sheet_summary",
+                    "sheet_meta_id": meta_id,
+                    "sheet_name": sh.get("sheet_name", ""),
+                    # 结构化字段供前端渲染 Sheet 卡片（行数/列结构）
+                    "sheet_row_count": sm.get("row_count", 0),
+                    "sheet_columns": sheet_columns,
+                    "sql": "",
+                    "sql_result_columns": [],
+                    "sql_result_rows": [],
+                    "sql_result_row_count": 0,
+                })
+
+            # 把 SQL 执行结果格式化为一个 document，追加到 documents 末尾
+            # chunk_id 与 selected sheet 的 summary 相同（meta_id），前端去重时被丢弃
+            # 但 answer_generator 仍能从 state["documents"] 看到 SQL 结果
+            documents.append(_format_sql_result_as_document(
                 sheet_meta=sheet_meta,
                 sql=sql,
                 sql_result=sql_result,
                 err=err,
                 score=selected.get("score", 0.0),
-            )]
+            ))
 
             return {
                 "documents": documents,
@@ -629,6 +670,8 @@ class AgenticRAGWorkflow:
                     "sql_error": err,
                     "sql_result_columns": sql_result.get("columns", []) if isinstance(sql_result, dict) else [],
                     "sql_result_row_count": sql_result.get("row_count", 0) if isinstance(sql_result, dict) else 0,
+                    # 暴露前 5 行结果，便于前端 sql_agent step 详情直接渲染数据表
+                    "sql_result_rows": (sql_result.get("rows", []) if isinstance(sql_result, dict) else [])[:5],
                 },
             }
         except Exception as e:

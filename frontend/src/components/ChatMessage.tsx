@@ -7,7 +7,7 @@ import { User, Bot, Copy, Check, ChevronDown, ChevronRight, FileText, Search, Br
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useState, useRef, useMemo, useCallback } from 'react'
-import type { RetrievedDoc, StreamStep } from '@/lib/api'
+import type { RetrievedDoc, SheetColumn, StreamStep } from '@/lib/api'
 
 export interface Message {
   role: 'user' | 'assistant'
@@ -125,20 +125,59 @@ function StepResult({ step, userQuery, searchDebugData }: { step: StreamStep; us
         {/* chunks 默认折叠，点"详情"展开查看 */}
         {count > 0 && (
           <button onClick={() => setExpanded(!expanded)} className="ml-1 text-primary hover:underline">
-            {expanded ? '收起 chunks' : 'chunks 详情'}
+            {expanded ? '收起' : `${isSqlPath ? '查询结果' : 'chunks'}详情`}
           </button>
         )}
         {expanded && (
           <div className="mt-1 space-y-1">
-            {(result.documents as Array<Record<string, unknown>>)?.map((doc, i) => (
-              <div key={i} className="bg-muted/30 rounded p-1.5 text-xs">
-                <div className="text-muted-foreground">
-                  [{i + 1}] {String(doc.doc_id)}/{String(doc.chunk_id)}
-                  {doc.source_type ? ` · ${String(doc.source_type)}` : ''}
+            {(result.documents as Array<Record<string, unknown>>)?.map((doc, i) => {
+              const cols = (doc.sql_result_columns as string[] | undefined) || []
+              const rows = (doc.sql_result_rows as unknown[][] | undefined) || []
+              const rowCount = Number(doc.sql_result_row_count || 0)
+              const isSqlDoc = String(doc.source_type || '') === 'sql' || cols.length > 0
+              return (
+                <div key={i} className="bg-muted/30 rounded p-1.5 text-xs">
+                  <div className="text-muted-foreground flex items-center gap-1 flex-wrap">
+                    <span>[{i + 1}]</span>
+                    {Boolean(doc.filename) && <span className="truncate max-w-[140px]">{String(doc.filename)}</span>}
+                    {Boolean(doc.sheet_name) && <Badge variant="secondary" className="text-[10px] font-mono">{String(doc.sheet_name)}</Badge>}
+                    {Boolean(doc.source_type) && <span>· {String(doc.source_type)}</span>}
+                    {isSqlDoc && rowCount > 0 && <span>· {rowCount} 行</span>}
+                  </div>
+                  {isSqlDoc && cols.length > 0 ? (
+                    /* sql_agent 命中路径：直接渲染查询结果数据表，不显示 doc.text（text 截断后只看到表结构） */
+                    <div className="mt-1 overflow-x-auto">
+                      <table className="w-full text-[10px] border-collapse">
+                        <thead>
+                          <tr className="bg-muted/50">
+                            {cols.map((c, ci) => (
+                              <th key={ci} className="border border-border/50 px-1.5 py-0.5 text-left font-mono whitespace-nowrap">{c}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.length === 0 ? (
+                            <tr><td colSpan={cols.length} className="border border-border/50 px-1.5 py-0.5 text-muted-foreground italic">(空结果)</td></tr>
+                          ) : rows.map((row, ri) => (
+                            <tr key={ri}>
+                              {(Array.isArray(row) ? row : [row]).map((val, vi) => (
+                                <td key={vi} className="border border-border/50 px-1.5 py-0.5 font-mono whitespace-nowrap">{String(val ?? '')}</td>
+                              ))}
+                            </tr>
+                          ))}
+                          {rowCount > rows.length && (
+                            <tr><td colSpan={cols.length} className="border border-border/50 px-1.5 py-0.5 text-muted-foreground italic">… 还有 {rowCount - rows.length} 行未显示</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    /* fallback 路径：显示文本 RAG 检索到的 chunk text */
+                    <p className="whitespace-pre-wrap break-all mt-1">{doc.text as string}</p>
+                  )}
                 </div>
-                <p className="whitespace-pre-wrap break-all">{doc.text as string}</p>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </span>
@@ -186,6 +225,11 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
       filename: d.filename as string | undefined,
       sheet_name: d.sheet_name as string | undefined,
       source_type: d.source_type as string | undefined,
+      sql_result_columns: d.sql_result_columns as string[] | undefined,
+      sql_result_rows: d.sql_result_rows as unknown[][] | undefined,
+      sql_result_row_count: d.sql_result_row_count as number | undefined,
+      sheet_row_count: d.sheet_row_count as number | undefined,
+      sheet_columns: d.sheet_columns as SheetColumn[] | undefined,
     }))
   }, [message.retrieved_docs, message.steps])
 
@@ -393,32 +437,75 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
             </button>
             {showContext && (
               <div className="mt-2 space-y-2">
-                {effectiveDocs.map((doc, i) => (
-                  <div
-                    key={i}
-                    id={`chunk-${i + 1}`}
-                    ref={(el) => { if (el) chunkRefs.current.set(i + 1, el) }}
-                    className={`bg-muted/40 rounded-lg p-2.5 text-xs transition-all duration-300 border border-transparent ${
-                      activeCitation === i + 1 ? 'ring-2 ring-primary bg-muted/60 border-primary/20' : ''
-                    }`}
-                  >
-                    <div className="flex items-center gap-1 text-muted-foreground mb-1">
-                      <FileText className="h-3 w-3" />
-                      <span className="truncate">{doc.filename || doc.doc_id}</span>
-                      {doc.sheet_name && (
-                        <Badge variant="secondary" className="text-[10px] font-mono shrink-0">
-                          {doc.sheet_name}
-                        </Badge>
+                {effectiveDocs.map((doc, i) => {
+                  const isSqlDoc = doc.source_type === 'sql'
+                  const isSheetSummary = doc.source_type === 'sheet_summary'
+                  return (
+                    <div
+                      key={i}
+                      id={`chunk-${i + 1}`}
+                      ref={(el) => { if (el) chunkRefs.current.set(i + 1, el) }}
+                      className={`bg-muted/40 rounded-lg p-2.5 text-xs transition-all duration-300 border border-transparent ${
+                        activeCitation === i + 1 ? 'ring-2 ring-primary bg-muted/60 border-primary/20' : ''
+                      }`}
+                    >
+                      <div className="flex items-center gap-1 text-muted-foreground mb-1">
+                        <FileText className="h-3 w-3" />
+                        <span className="truncate">{doc.filename || doc.doc_id}</span>
+                        {doc.sheet_name && (
+                          <Badge variant="secondary" className="text-[10px] font-mono shrink-0">
+                            {doc.sheet_name}
+                          </Badge>
+                        )}
+                        {isSqlDoc && <Badge variant="outline" className="text-[10px] font-mono shrink-0">SQL 结果</Badge>}
+                        {isSheetSummary && <Badge variant="outline" className="text-[10px] font-mono shrink-0">Sheet 摘要</Badge>}
+                        <span className="ml-auto shrink-0 flex items-center gap-1.5 text-xs font-mono tabular-nums">
+                          {doc.rerank_score != null && <span className="text-primary/80">rerank:{doc.rerank_score.toFixed(3)}</span>}
+                          {doc.dense_score != null && <span>dense:{doc.dense_score.toFixed(3)}</span>}
+                          {doc.bm25_score != null && <span>bm25:{doc.bm25_score.toFixed(2)}</span>}
+                          {!isSqlDoc && !isSheetSummary && doc.score != null && <span>score:{doc.score.toFixed(3)}</span>}
+                          {(isSqlDoc || isSheetSummary) && doc.score != null && <span>recall:{doc.score.toFixed(3)}</span>}
+                        </span>
+                      </div>
+                      {isSqlDoc ? (
+                        /* SQL 执行结果 doc：不显示截断的 text（前 300 字符只看到表结构），
+                           引导用户查看 sql_agent step 的查询结果表格 */
+                        <p className="text-muted-foreground italic">
+                          SQL 执行结果，详见上方「SQL 检索 (NL2SQL)」步骤的查询结果表格
+                        </p>
+                      ) : isSheetSummary ? (
+                        /* sheet_summary doc：结构化渲染 Sheet 卡片
+                           Sheet 名 + 行数 + 摘要 + 列结构（与检索时索引数据表的元数据一致） */
+                        <div className="space-y-1 leading-relaxed">
+                          {doc.sheet_name && <div><span className="text-muted-foreground">Sheet:</span> {doc.sheet_name}</div>}
+                          {doc.sheet_row_count != null && doc.sheet_row_count > 0 && (
+                            <div><span className="text-muted-foreground">行数:</span> {doc.sheet_row_count}</div>
+                          )}
+                          {doc.text && (
+                            <div>
+                              <span className="text-muted-foreground">摘要:</span>
+                              <p className="whitespace-pre-wrap break-all mt-0.5 scrollbar-thin max-h-24 overflow-y-auto">{doc.text}</p>
+                            </div>
+                          )}
+                          {doc.sheet_columns && doc.sheet_columns.length > 0 && (
+                            <div>
+                              <span className="text-muted-foreground">列结构:</span>
+                              <ul className="mt-0.5 space-y-0.5">
+                                {doc.sheet_columns.map((c, ci) => (
+                                  <li key={ci} className="font-mono text-[10px]">
+                                    - {c.en} ({c.type}){c.cn ? ` → ${c.cn}` : ''}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="whitespace-pre-wrap break-all leading-relaxed scrollbar-thin max-h-32 overflow-y-auto">{doc.text}</p>
                       )}
-                      <span className="ml-auto shrink-0 flex items-center gap-1.5 text-xs font-mono tabular-nums">
-                        {doc.rerank_score != null && <span className="text-primary/80">rerank:{doc.rerank_score.toFixed(3)}</span>}
-                        {doc.dense_score != null && <span>dense:{doc.dense_score.toFixed(3)}</span>}
-                        {doc.bm25_score != null && <span>bm25:{doc.bm25_score.toFixed(2)}</span>}
-                      </span>
                     </div>
-                    <p className="whitespace-pre-wrap break-all leading-relaxed scrollbar-thin max-h-32 overflow-y-auto">{doc.text}</p>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>

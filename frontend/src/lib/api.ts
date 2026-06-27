@@ -33,6 +33,12 @@ async function authFetch(input: string, init: RequestInit = {}): Promise<Respons
   return res
 }
 
+export interface SheetColumn {
+  cn?: string
+  en: string
+  type: string
+}
+
 export interface RetrievedDoc {
   doc_id: string
   chunk_id: string
@@ -44,6 +50,13 @@ export interface RetrievedDoc {
   filename?: string
   sheet_name?: string
   source_type?: string
+  // sql_agent 命中路径：SQL 执行结果
+  sql_result_columns?: string[]
+  sql_result_rows?: unknown[][]
+  sql_result_row_count?: number
+  // sheet_summary doc：sheet 元数据（行数/列结构）
+  sheet_row_count?: number
+  sheet_columns?: SheetColumn[]
 }
 
 export interface QAResponse {
