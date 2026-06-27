@@ -650,9 +650,28 @@ export interface CacheEntry {
   namespace: string
   value_preview: string
   value_length: number
+  input_preview: string
+  input_length: number
+  has_full_input: boolean
+  caller: string
   created_at: number
   expires_at: number | null
   ttl_remaining: number | null
+}
+
+export interface CacheEntryDetail {
+  enabled: boolean
+  key: string
+  namespace: string
+  content: string
+  content_length: number
+  input: string
+  input_length: number
+  caller: string
+  created_at: number
+  expires_at: number | null
+  ttl_remaining: number | null
+  message?: string
 }
 
 export interface CacheListResponse {
@@ -684,6 +703,12 @@ export async function clearCache(prefix?: string): Promise<{ success: boolean; c
 export async function deleteCacheEntry(key: string): Promise<{ success: boolean; existed: boolean; key: string }> {
   const res = await authFetch(`${API_BASE}/system/cache/${encodeURIComponent(key)}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`Delete cache entry failed: ${res.statusText}`)
+  return res.json()
+}
+
+export async function getCacheEntry(key: string): Promise<CacheEntryDetail> {
+  const res = await authFetch(`${API_BASE}/system/cache/${encodeURIComponent(key)}`)
+  if (!res.ok) throw new Error(`Get cache entry failed: ${res.statusText}`)
   return res.json()
 }
 

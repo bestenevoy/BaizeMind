@@ -58,22 +58,30 @@ def _serialize_messages(input: Any) -> str:
     return str(input)
 
 
-# LLM 缓存 value 中的 input_preview 截断长度（够看出是哪个 query，又不至于占空间）
-_INPUT_PREVIEW_LEN = 400
+# LLM 缓存 value 中 input 完整存储（不截断）。
+# 列表 API 会单独做短预览，详情接口返回完整 input 供 debug 分析。
+# 之前 _INPUT_PREVIEW_LEN=400 截断太短，answer_generator 的 prompt 可达 8000+ 字符，
+# 用户在 cache panel 看不到给 LLM 的实际上下文，无法 debug。
+_INPUT_PREVIEW_LEN = 400  # 保留用于旧格式兼容解码，新写入不再截断
 
 
 def _encode_llm_cache_value(content: str, input_serialized: str, caller: str) -> str:
-    """把 LLM 响应 + 触发它的 input 预览 + 调用方打包成 JSON 字符串。
+    """把 LLM 响应 + 触发它的完整 input + 调用方打包成 JSON 字符串。
 
-    用于缓存 value，便于在 cache_admin 列表里看出"这条缓存是哪个 query 触发的"。
+    用于缓存 value，便于在 cache_admin 详情接口看到"给 LLM 的实际上下文"。
 
-    向后兼容：旧缓存 value 是纯 content 字符串（不是 JSON），由 _decode 处理。
+    向后兼容：
+    - 旧格式：纯 content 字符串
+    - 旧 JSON 格式：``{"content": ..., "input_preview": "截断400字符", "caller": ...}``
+    - 新 JSON 格式：``{"content": ..., "input": "完整内容", "input_preview": "截断400字符", "caller": ...}``
     """
     preview = input_serialized[:_INPUT_PREVIEW_LEN]
     return json.dumps(
         {
             "content": content,
-            "input_preview": preview,
+            "input": input_serialized,  # 完整 input，用于 debug 分析
+            "input_preview": preview,   # 截断预览，用于列表显示（向后兼容）
+            "input_length": len(input_serialized),
             "caller": caller,
         },
         ensure_ascii=False,
@@ -83,14 +91,13 @@ def _encode_llm_cache_value(content: str, input_serialized: str, caller: str) ->
 def _decode_llm_cache_value(raw: str) -> str:
     """从缓存 value 中提取 content 字符串。
 
-    兼容两种格式：
-    - 新格式：JSON ``{"content": ..., "input_preview": ..., "caller": ...}``
-    - 旧格式：纯 content 字符串（直接返回）
+    兼容三种格式：
+    - 新 JSON：``{"content": ..., "input": ..., "input_preview": ..., "caller": ...}``
+    - 旧 JSON：``{"content": ..., "input_preview": ..., "caller": ...}``（无 input 字段）
+    - 旧纯文本：直接返回
     """
     if not raw:
         return raw
-    # JSON 一定以 '{' 开头；纯 content 可能也以 '{' 开头但极少
-    # 保险起见尝试 parse，失败则当作旧格式
     if raw.lstrip().startswith("{"):
         try:
             data = json.loads(raw)
@@ -102,14 +109,20 @@ def _decode_llm_cache_value(raw: str) -> str:
 
 
 def _extract_llm_cache_meta(raw: str) -> dict:
-    """从缓存 value 中提取 meta（input_preview / caller），无法解析时返回空。"""
+    """从缓存 value 中提取 meta（input / input_preview / caller / input_length）。
+
+    新格式返回完整 input；旧格式只能返回截断的 input_preview。
+    详情接口据此判断是否可展示完整内容。
+    """
     if not raw or not raw.lstrip().startswith("{"):
         return {}
     try:
         data = json.loads(raw)
         if isinstance(data, dict) and "content" in data:
             return {
+                "input": data.get("input", ""),  # 新格式有；旧格式为空字符串
                 "input_preview": data.get("input_preview", ""),
+                "input_length": data.get("input_length", len(data.get("input_preview", ""))),
                 "caller": data.get("caller", ""),
             }
     except (json.JSONDecodeError, ValueError):

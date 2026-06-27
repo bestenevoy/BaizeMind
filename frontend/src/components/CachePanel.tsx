@@ -3,8 +3,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { RefreshCw, Trash2, Database, Clock, AlertCircle } from 'lucide-react'
-import { listCache, clearCache, deleteCacheEntry, type CacheListResponse } from '@/lib/api'
+import { RefreshCw, Trash2, Database, Clock, AlertCircle, Eye, X } from 'lucide-react'
+import {
+  listCache, clearCache, deleteCacheEntry, getCacheEntry,
+  type CacheListResponse, type CacheEntryDetail,
+} from '@/lib/api'
 
 function formatTime(ts: number | null): string {
   if (ts === null || ts === undefined) return '永不过期'
@@ -28,6 +31,10 @@ export function CachePanel() {
   const [error, setError] = useState('')
   const [filterNs, setFilterNs] = useState<string>('')  // 空 = 全部
   const [busy, setBusy] = useState(false)
+  // 详情抽屉：点击列表项展开，显示完整 input + content 供 debug 分析
+  const [detail, setDetail] = useState<CacheEntryDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
 
   // showSkeleton=true: 显示 skeleton（首次加载/手动刷新）
   // showSkeleton=false: 保留旧数据 + 轻量 refreshing 指示（namespace 切换）
@@ -97,6 +104,20 @@ export function CachePanel() {
       await fetchCache(filterNs, false)
     } catch (e: any) {
       alert(`删除失败: ${e?.message || e}`)
+    }
+  }
+
+  const handleViewDetail = async (key: string) => {
+    setDetailLoading(true)
+    setDetailError('')
+    setDetail(null)
+    try {
+      const d = await getCacheEntry(key)
+      setDetail(d)
+    } catch (e: any) {
+      setDetailError(e?.message || String(e))
+    } finally {
+      setDetailLoading(false)
     }
   }
 
@@ -247,12 +268,18 @@ export function CachePanel() {
               {data?.entries.map((e) => (
                 <div
                   key={e.key}
-                  className="p-2.5 rounded-lg border bg-card hover:bg-muted/30 transition-colors"
+                  className="p-2.5 rounded-lg border bg-card hover:bg-muted/30 transition-colors cursor-pointer"
+                  onClick={() => handleViewDetail(e.key)}
                 >
                   <div className="flex items-center gap-2 mb-1.5">
                     <Badge variant="outline" className="text-[10px] font-mono">
                       {e.namespace || '(no-ns)'}
                     </Badge>
+                    {e.caller && (
+                      <Badge variant="secondary" className="text-[10px] font-mono">
+                        {e.caller}
+                      </Badge>
+                    )}
                     <code className="text-[10px] text-muted-foreground truncate flex-1" title={e.key}>
                       {e.key}
                     </code>
@@ -263,19 +290,44 @@ export function CachePanel() {
                     <Button
                       variant="ghost"
                       size="icon"
+                      className="h-6 w-6 shrink-0 text-muted-foreground hover:text-blue-500"
+                      onClick={(ev) => { ev.stopPropagation(); handleViewDetail(e.key) }}
+                      title="查看完整内容"
+                    >
+                      <Eye className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       className="h-6 w-6 shrink-0 text-muted-foreground hover:text-red-500"
-                      onClick={() => handleDelete(e.key)}
+                      onClick={(ev) => { ev.stopPropagation(); handleDelete(e.key) }}
                       title="删除"
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
-                  <pre className="text-xs bg-muted/50 dark:bg-muted/20 rounded p-2 whitespace-pre-wrap break-all max-h-32 overflow-y-auto font-mono">
+                  {/* value (LLM 响应) 预览 */}
+                  <pre className="text-xs bg-muted/50 dark:bg-muted/20 rounded p-2 whitespace-pre-wrap break-all max-h-24 overflow-y-auto font-mono">
                     {e.value_preview}
                   </pre>
+                  {/* input (给 LLM 的上下文) 预览 — 仅 LLM namespace 有 */}
+                  {e.input_preview && (
+                    <div className="mt-1.5">
+                      <div className="flex items-center gap-1 mb-0.5 text-[10px] text-muted-foreground">
+                        <span className="font-semibold">Input</span>
+                        <span>({e.input_length} chars</span>
+                        {e.has_full_input && <span className="text-green-600">· 完整</span>}
+                        {!e.has_full_input && <span className="text-yellow-600">· 旧格式仅 preview</span>}
+                        <span>)</span>
+                      </div>
+                      <pre className="text-[11px] bg-blue-50 dark:bg-blue-950/20 border-l-2 border-blue-200 dark:border-blue-800 rounded p-1.5 whitespace-pre-wrap break-all max-h-20 overflow-y-auto font-mono text-muted-foreground">
+                        {e.input_preview}
+                      </pre>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between mt-1 text-[10px] text-muted-foreground">
                     <span>创建: {formatTime(e.created_at)}</span>
-                    <span>{e.value_length} bytes</span>
+                    <span>value {e.value_length} bytes · input {e.input_length} chars</span>
                   </div>
                 </div>
               ))}
@@ -283,6 +335,136 @@ export function CachePanel() {
           )}
         </CardContent>
       </Card>
+
+      {/* 详情抽屉：点击列表项后从右侧滑出，展示完整 input + content */}
+      {(detail || detailLoading || detailError) && (
+        <div
+          className="fixed inset-0 z-50 flex justify-end bg-black/40"
+          onClick={() => { setDetail(null); setDetailError('') }}
+        >
+          <div
+            className="w-full max-w-3xl h-full bg-background shadow-xl overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* 抽屉头部 */}
+            <div className="sticky top-0 z-10 bg-background border-b p-4 flex items-center justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                <Eye className="h-4 w-4 shrink-0 text-blue-500" />
+                <span className="font-semibold text-sm">缓存条目详情</span>
+                {detail?.caller && (
+                  <Badge variant="secondary" className="text-[10px] font-mono shrink-0">
+                    {detail.caller}
+                  </Badge>
+                )}
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0"
+                onClick={() => { setDetail(null); setDetailError('') }}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* 抽屉内容 */}
+            <div className="p-4 space-y-4">
+              {detailLoading && <Skeleton className="h-40 w-full" />}
+              {detailError && (
+                <div className="flex items-center gap-2 text-sm text-red-500">
+                  <AlertCircle className="h-4 w-4" />
+                  {detailError}
+                </div>
+              )}
+              {detail?.message && (
+                <div className="flex items-center gap-2 text-sm text-yellow-600 bg-yellow-50 dark:bg-yellow-950/30 p-2 rounded">
+                  <AlertCircle className="h-4 w-4" />
+                  {detail.message}
+                </div>
+              )}
+              {detail && !detail.message && (
+                <>
+                  {/* Meta 信息 */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="p-2 rounded border">
+                      <div className="text-muted-foreground">Namespace</div>
+                      <div className="font-mono">{detail.namespace}</div>
+                    </div>
+                    <div className="p-2 rounded border">
+                      <div className="text-muted-foreground">Caller</div>
+                      <div className="font-mono truncate">{detail.caller || '-'}</div>
+                    </div>
+                    <div className="p-2 rounded border">
+                      <div className="text-muted-foreground">Input 长度</div>
+                      <div className="font-mono">{detail.input_length} chars</div>
+                    </div>
+                    <div className="p-2 rounded border">
+                      <div className="text-muted-foreground">Content 长度</div>
+                      <div className="font-mono">{detail.content_length} bytes</div>
+                    </div>
+                    <div className="p-2 rounded border">
+                      <div className="text-muted-foreground">创建时间</div>
+                      <div className="font-mono">{formatTime(detail.created_at)}</div>
+                    </div>
+                    <div className="p-2 rounded border">
+                      <div className="text-muted-foreground">TTL 剩余</div>
+                      <div className="font-mono">{formatTTL(detail.ttl_remaining)}</div>
+                    </div>
+                  </div>
+
+                  {/* Key */}
+                  <div>
+                    <div className="text-xs font-semibold mb-1 text-muted-foreground">Key</div>
+                    <code className="text-[11px] bg-muted p-2 rounded block break-all font-mono">
+                      {detail.key}
+                    </code>
+                  </div>
+
+                  {/* Input (给到 LLM 的实际上下文) */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="text-xs font-semibold text-muted-foreground">
+                        Input (给到 LLM 的实际上下文)
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-[10px]"
+                        onClick={() => navigator.clipboard?.writeText(detail.input)}
+                      >
+                        复制
+                      </Button>
+                    </div>
+                    <pre className="text-xs bg-blue-50 dark:bg-blue-950/20 border-l-2 border-blue-200 dark:border-blue-800 rounded p-3 whitespace-pre-wrap break-all max-h-96 overflow-y-auto font-mono">
+                      {detail.input || '(空 — 非 LLM namespace 或旧格式缓存无完整 input)'}
+                    </pre>
+                  </div>
+
+                  {/* Content (LLM 响应) */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="text-xs font-semibold text-muted-foreground">
+                        Content (LLM 响应)
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-[10px]"
+                        onClick={() => navigator.clipboard?.writeText(detail.content)}
+                      >
+                        复制
+                      </Button>
+                    </div>
+                    <pre className="text-xs bg-muted/50 dark:bg-muted/20 rounded p-3 whitespace-pre-wrap break-all max-h-96 overflow-y-auto font-mono">
+                      {detail.content}
+                    </pre>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
