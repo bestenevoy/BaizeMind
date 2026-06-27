@@ -1,6 +1,12 @@
 // Mock data for Agent / Workflow orchestration visualization.
 // 数据来源：src/agents/workflow.py（AgenticRAGWorkflow._build_graph）。
 // 后端接口尚未实现，所有节点 / 边 / 场景均为前端 mock。
+//
+// [UNIFIED] 统一召回 + LLM 决策 + 条件触发 SQL Tool Call 流程：
+// - 所有非 chitchat 查询统一走向量召回（retrieval_agent / lightrag_agent）
+// - answer_generator 合并了原 answer_validator 的职责（单次 LLM 生成 + 自检）
+// - SQL 不再是独立路由，而是 answer_generator 之后的条件性 Tool Call
+// - rerouted_to_sql=True 时直接 END（不再路由）
 
 export type NodeCategory =
   | 'terminal'
@@ -9,7 +15,7 @@ export type NodeCategory =
   | 'retrieval'
   | 'graph'
   | 'generator'
-  | 'validator'
+  | 'tool'
 
 export interface WorkflowNode {
   id: string
@@ -71,10 +77,10 @@ export const workflowNodes: WorkflowNode[] = [
     x: 72,
     y: 340,
     icon: 'Play',
-    description: 'LangGraph 入口，初始化 AgentState 并传入用户查询、folder、tags。',
+    description: 'LangGraph 入口，初始化 AgentState 并传入用户查询、folder、tags、doc_ids。',
     inputs: [],
-    outputs: ['query', 'folder', 'tags', 'max_iterations'],
-    source: 'workflow.py:270 invoke()',
+    outputs: ['query', 'folder', 'tags', 'doc_ids', 'max_iterations'],
+    source: 'workflow.py:invoke()',
   },
   {
     id: 'query_router',
@@ -85,10 +91,10 @@ export const workflowNodes: WorkflowNode[] = [
     y: 340,
     icon: 'Split',
     description:
-      'LLM 分类查询类型 (chitchat / simple_fact / definition / multi_hop / comparison / holistic) 并判断 graph_eligible，决定后续分支。',
+      '[UNIFIED] LLM 仅做语义意图分类 (chitchat / simple_fact / definition / multi_hop / comparison / holistic) 并判断 graph_eligible。不决定 SQL 路由——所有非 chitchat 查询统一走向量召回。',
     inputs: ['query'],
     outputs: ['query_type', 'confidence', 'graph_eligible'],
-    source: 'workflow.py:332 · query_router.py',
+    source: 'workflow.py:_node_query_router · query_router.py',
   },
   {
     id: 'chitchat',
@@ -101,7 +107,7 @@ export const workflowNodes: WorkflowNode[] = [
     description: '闲聊分支：直接调用 LLM 生成回复，跳过检索与校验，直接结束。',
     inputs: ['query'],
     outputs: ['final_answer', 'draft_answer'],
-    source: 'workflow.py:323',
+    source: 'workflow.py:_node_chitchat',
   },
   {
     id: 'lightrag_agent',
@@ -112,10 +118,10 @@ export const workflowNodes: WorkflowNode[] = [
     y: 248,
     icon: 'Zap',
     description:
-      'LightRAG 流程：实体 / 关系向量索引 → 图谱扩展 → 文档检索。索引为空时自动回退到 graph_agent + retrieval。',
+      '[统一召回] LightRAG 流程：实体 / 关系向量索引 → 图谱扩展 → 文档检索。索引为空时自动回退到 graph_agent + retrieval。文档块 + 表结构 + 表摘要同库召回。',
     inputs: ['query', 'folder', 'tags'],
     outputs: ['documents', 'graph_context', 'graph_entities', 'retrieval_path'],
-    source: 'workflow.py:490 · lightrag_retriever.py',
+    source: 'workflow.py:_node_lightrag_agent · lightrag_retriever.py',
   },
   {
     id: 'retrieval_agent',
@@ -126,10 +132,10 @@ export const workflowNodes: WorkflowNode[] = [
     y: 432,
     icon: 'Search',
     description:
-      'Multi-Query 改写 → BM25 + 稠密向量 → RRF 融合 → Rerank，支持按 folder / tags 过滤；图谱实体词追加到 BM25。',
-    inputs: ['query', 'graph_entities', 'sub_queries', 'folder', 'tags'],
+      '[统一召回] Multi-Query 改写 → BM25 + 稠密向量 → RRF 融合 → Rerank，支持按 folder / tags / doc_ids 过滤。文档块 + 表结构 + 表摘要在同一向量库，不再区分 doc_query / sql_query。',
+    inputs: ['query', 'graph_entities', 'sub_queries', 'folder', 'tags', 'doc_ids'],
     outputs: ['documents', 'retrieval_path', 'retrieval_debug', 'search_debug_data'],
-    source: 'workflow.py:340 · retrieval_agent.py',
+    source: 'workflow.py:_node_retrieval_agent · retrieval_agent.py',
   },
   {
     id: 'graph_agent',
@@ -143,7 +149,7 @@ export const workflowNodes: WorkflowNode[] = [
       '实体抽取 + Neo4j 图谱扩展，LLM 过滤相关实体并生成子问题供多路检索。当前仅作为 LightRAG 兜底路径。',
     inputs: ['query'],
     outputs: ['graph_context', 'graph_entities', 'sub_queries'],
-    source: 'workflow.py:454 · graph_agent.py',
+    source: 'workflow.py:_node_graph_agent · graph_agent.py',
     fallback: true,
   },
   {
@@ -158,7 +164,7 @@ export const workflowNodes: WorkflowNode[] = [
       'Microsoft GraphRAG 全局 / drift 检索。已禁用：保留节点仅为图编译完整性，路由不可达。',
     inputs: ['query', 'query_type'],
     outputs: ['graphrag_context'],
-    source: 'workflow.py:556 · graphrag_query.py',
+    source: 'workflow.py:_node_graphrag_search · graphrag_query.py',
     disabled: true,
   },
   {
@@ -170,24 +176,24 @@ export const workflowNodes: WorkflowNode[] = [
     y: 340,
     icon: 'PenLine',
     description:
-      'LLM 综合图谱上下文 + 检索文档生成答案，附引用 [N]；支持验证反馈重试，上下文按文档边界截断到 8000 字符。',
-    inputs: ['query', 'documents', 'graph_context', 'graphrag_context', 'citations', 'validation_feedback'],
-    outputs: ['draft_answer', 'citations'],
-    source: 'workflow.py:580',
+      '[MERGED] 单次 LLM 调用同时生成答案 + 自检（原 answer_validator 职责已合并）。综合统一召回上下文生成答案，附引用 [N]。输出本身即 LLM 对"召回是否充分"的决策：answer 正常 → 召回充分；answer 含"信息不足" → 进入条件性 SQL 触发判定。',
+    inputs: ['query', 'documents', 'graph_context', 'graphrag_context', 'citations'],
+    outputs: ['draft_answer', 'final_answer', 'citations', 'iteration', 'intermediate'],
+    source: 'workflow.py:_node_answer_generator',
   },
   {
-    id: 'answer_validator',
-    label: '答案校验',
-    codeName: 'answer_validator',
-    category: 'validator',
+    id: 'sql_agent',
+    label: 'SQL Tool Call',
+    codeName: 'sql_agent',
+    category: 'tool',
     x: 1024,
-    y: 340,
-    icon: 'ShieldCheck',
+    y: 180,
+    icon: 'Table',
     description:
-      '校验答案：missing_citation / unsupported_claim / context_insufficient / conflict_detected。失败时按原因回退到 retrieval 或重生成。',
-    inputs: ['query', 'documents', 'draft_answer', 'citations'],
-    outputs: ['validation', 'validation_feedback', 'final_answer', 'iteration'],
-    source: 'workflow.py:636 · answer_validator.py',
+      '[条件触发 Tool Call] 仅在 answer_generator 判定信息不足 + 召回含 excel_sheet chunk 时由 _route_after_generation 触发。NL2SQL：向量召回 Sheet → 多表选择 → 生成 SQL → 执行（含重试）。SQL 结果与上下文累加后回到 answer_generator 生成最终答案。不再 fallback 到 retrieval_agent。',
+    inputs: ['query', 'folder', 'tags', 'doc_ids'],
+    outputs: ['documents', 'retrieval_path', 'rerouted_to_sql', 'retrieval_debug'],
+    source: 'workflow.py:_node_sql_agent · excel_rag/qa.py',
   },
   {
     id: 'END',
@@ -200,7 +206,7 @@ export const workflowNodes: WorkflowNode[] = [
     description: '输出最终 final_answer、citations、retrieval_path 等状态。',
     inputs: ['final_answer', 'citations', 'retrieval_path'],
     outputs: [],
-    source: 'workflow.py:266 END',
+    source: 'workflow.py:END',
   },
 ]
 
@@ -218,14 +224,14 @@ export const workflowEdges: WorkflowEdge[] = [
     id: 'e3',
     source: 'query_router',
     target: 'lightrag_agent',
-    label: 'multi_hop / comparison',
+    label: 'multi_hop / comparison / graph_eligible',
     conditional: true,
   },
   {
     id: 'e4',
     source: 'query_router',
     target: 'retrieval_agent',
-    label: 'simple_fact / holistic',
+    label: 'simple_fact / definition / holistic',
     conditional: true,
   },
   {
@@ -271,29 +277,32 @@ export const workflowEdges: WorkflowEdge[] = [
     disabled: true,
     conditional: true,
   },
-  { id: 'e12', source: 'answer_generator', target: 'answer_validator' },
+  // [UNIFIED] answer_generator → _route_after_generation 条件路由：
+  // - 召回充分 / 无数据表 → END
+  // - 信息不足 + 有 excel_sheet chunk → sql_agent（条件触发 Tool Call）
+  // - rerouted_to_sql=True → END（直接结束，不再路由）
   {
-    id: 'e13',
-    source: 'answer_validator',
+    id: 'e12',
+    source: 'answer_generator',
     target: 'END',
-    label: 'valid ✓',
+    label: '召回充分 / 无数据表',
     conditional: true,
   },
   {
-    id: 'e14',
-    source: 'answer_validator',
-    target: 'retrieval_agent',
-    label: 'context_insufficient ↻',
-    routing: 'bottom',
+    id: 'e13',
+    source: 'answer_generator',
+    target: 'sql_agent',
+    label: '信息不足 + excel_sheet',
+    routing: 'top',
     conditional: true,
     dashed: true,
   },
   {
-    id: 'e15',
-    source: 'answer_validator',
+    id: 'e14',
+    source: 'sql_agent',
     target: 'answer_generator',
-    label: 'retry ↻',
-    routing: 'top',
+    label: 'SQL 结果回流',
+    routing: 'bottom',
     conditional: true,
     dashed: true,
   },
@@ -313,7 +322,7 @@ export const scenarios: Scenario[] = [
         nodeId: 'START',
         title: '初始化状态',
         note: 'AgentState 注入 query，max_iterations 来自 settings。',
-        state: { query: '你好，你能帮我做什么？', iteration: 0, max_iterations: 3 },
+        state: { query: '你好，你能帮我做什么？', iteration: 0, max_iterations: 5 },
       },
       {
         nodeId: 'query_router',
@@ -344,8 +353,8 @@ export const scenarios: Scenario[] = [
     queryType: 'simple_fact',
     query: 'BGE-M3 默认使用什么 Embedding API？',
     description:
-      '简单事实查询（graph_eligible=false）：路由到 retrieval_agent 走混合检索，一次校验通过。',
-    path: ['START', 'query_router', 'retrieval_agent', 'answer_generator', 'answer_validator', 'END'],
+      '[UNIFIED] 简单事实查询：统一召回 → answer_generator 生成 + 自检 → 召回充分 → END。',
+    path: ['START', 'query_router', 'retrieval_agent', 'answer_generator', 'END'],
     steps: [
       {
         nodeId: 'START',
@@ -356,13 +365,13 @@ export const scenarios: Scenario[] = [
       {
         nodeId: 'query_router',
         title: '查询分类',
-        note: '判定 simple_fact，graph_eligible=false → retrieval_agent。',
+        note: '[UNIFIED] 判定 simple_fact，graph_eligible=false → retrieval_agent（不决定 SQL）。',
         state: { query_type: 'simple_fact', confidence: 0.91, graph_eligible: false },
       },
       {
         nodeId: 'retrieval_agent',
-        title: 'Multi-Query 混合检索',
-        note: '改写出 3 条 dense query + 1 条共享 bm25 query，RRF 融合后 rerank 取 top_k。',
+        title: '统一混合检索',
+        note: '[统一召回] 改写出 3 条 dense query + 1 条共享 bm25 query，RRF 融合后 rerank 取 top_k。文档块 + 表结构 + 表摘要同库召回。',
         state: {
           documents: '8 chunks (rerank_top_k)',
           retrieval_path: '[Multi-query] 3 dense (Q0=原始) + 1 bm25',
@@ -371,18 +380,14 @@ export const scenarios: Scenario[] = [
       },
       {
         nodeId: 'answer_generator',
-        title: '生成带引用答案',
-        note: '综合检索文档生成答案，附 [1][2] 引用。',
+        title: '生成 + 自检（召回充分）',
+        note: '[MERGED] 单次 LLM 调用生成带引用答案。answer 正常 → _route_after_generation 判定召回充分 → END。',
         state: {
           draft_answer: 'BGE-M3 默认使用 SiliconFlow API (BGE_M3_USE_LOCAL=false)…[1]',
+          final_answer: 'BGE-M3 默认使用 SiliconFlow API (BGE_M3_USE_LOCAL=false)…[1]',
           citations: ['[1] doc_01/chunk_4', '[2] doc_01/chunk_7'],
+          iteration: 1,
         },
-      },
-      {
-        nodeId: 'answer_validator',
-        title: '校验通过',
-        note: 'is_valid=true，引用完整、有证据支撑。',
-        state: { validation: { is_valid: true, failure_reasons: [] }, iteration: 1 },
       },
       {
         nodeId: 'END',
@@ -398,8 +403,8 @@ export const scenarios: Scenario[] = [
     queryType: 'definition',
     query: '什么是 LightRAG？它和 GraphRAG 有什么关系？',
     description:
-      'definition 且 graph_eligible=true：路由到 lightrag_agent，通过实体 / 关系向量索引定位文档。',
-    path: ['START', 'query_router', 'lightrag_agent', 'answer_generator', 'answer_validator', 'END'],
+      '[UNIFIED] definition 且 graph_eligible=true：统一召回（LightRAG 路径）→ answer_generator 生成 + 自检 → 召回充分 → END。',
+    path: ['START', 'query_router', 'lightrag_agent', 'answer_generator', 'END'],
     steps: [
       {
         nodeId: 'START',
@@ -410,13 +415,13 @@ export const scenarios: Scenario[] = [
       {
         nodeId: 'query_router',
         title: '查询分类',
-        note: '判定 definition 且 graph_eligible=true → lightrag_agent。',
+        note: '[UNIFIED] 判定 definition 且 graph_eligible=true → lightrag_agent。',
         state: { query_type: 'definition', confidence: 0.88, graph_eligible: true },
       },
       {
         nodeId: 'lightrag_agent',
-        title: 'LightRAG 实体检索',
-        note: 'entity_index 命中 LightRAG/GraphRAG 实体，relation_index 扩展关联关系，召回相关 chunks。',
+        title: 'LightRAG 统一召回',
+        note: '[统一召回] entity_index 命中 LightRAG/GraphRAG 实体，relation_index 扩展关联关系，召回相关 chunks（含表摘要）。',
         state: {
           graph_entities: ['LightRAG', 'GraphRAG', 'entity_index', 'relation_index'],
           documents: '6 chunks',
@@ -425,18 +430,14 @@ export const scenarios: Scenario[] = [
       },
       {
         nodeId: 'answer_generator',
-        title: '生成答案',
-        note: '结合图谱上下文 + 检索文档生成对比说明。',
+        title: '生成 + 自检（召回充分）',
+        note: '[MERGED] 结合图谱上下文 + 检索文档生成对比说明。answer 正常 → END。',
         state: {
           draft_answer: 'LightRAG 是基于实体/关系向量索引的轻量图谱检索方案…[1][2]',
+          final_answer: 'LightRAG 是基于实体/关系向量索引的轻量图谱检索方案…[1][2]',
           citations: ['[1] doc_03/chunk_2', '[2] doc_03/chunk_5'],
+          iteration: 1,
         },
-      },
-      {
-        nodeId: 'answer_validator',
-        title: '校验通过',
-        note: 'is_valid=true。',
-        state: { validation: { is_valid: true }, iteration: 1 },
       },
       {
         nodeId: 'END',
@@ -447,95 +448,96 @@ export const scenarios: Scenario[] = [
     ],
   },
   {
-    id: 'multi_hop_retry',
-    label: '多跳·重试',
-    queryType: 'multi_hop',
-    query: '对比 BM25 和稠密向量检索在中文长文档上的优缺点',
+    id: 'excel_sql_toolcall',
+    label: 'Excel·SQL Tool Call',
+    queryType: 'simple_fact',
+    query: '销售表中 2024 年 Q3 的总营收是多少？',
     description:
-      'multi_hop 路由到 lightrag_agent，首次校验 missing_citation → 回退 retrieval_agent 补充证据后重生成，第二次通过。',
+      '[UNIFIED] 统一召回（含 excel_sheet chunk）→ answer 信息不足 → 条件触发 SQL Tool Call → 基于 SQL 结果生成最终答案。对应设计文档第 2 点决策。',
     path: [
       'START',
       'query_router',
-      'lightrag_agent',
-      'answer_generator',
-      'answer_validator',
       'retrieval_agent',
       'answer_generator',
-      'answer_validator',
+      'sql_agent',
+      'answer_generator',
       'END',
     ],
     steps: [
       {
         nodeId: 'START',
         title: '初始化状态',
-        note: '多跳对比类问题。',
-        state: { query: '对比 BM25 和稠密向量检索在中文长文档上的优缺点' },
+        note: '用户选了 Excel 文件提问，统一流程不再特殊路由。',
+        state: { query: '销售表中 2024 年 Q3 的总营收是多少？', folder: '销售数据', tags: [] },
       },
       {
         nodeId: 'query_router',
         title: '查询分类',
-        note: '判定 multi_hop → lightrag_agent。',
-        state: { query_type: 'multi_hop', confidence: 0.84, graph_eligible: true },
-      },
-      {
-        nodeId: 'lightrag_agent',
-        title: 'LightRAG 检索',
-        note: '实体索引命中 BM25 / 稠密向量，召回 5 chunks。',
-        state: {
-          graph_entities: ['BM25', '稠密向量', '检索'],
-          documents: '5 chunks',
-          retrieval_path: '[LightRAG] entity→relation→expand→retrieve',
-        },
-      },
-      {
-        nodeId: 'answer_generator',
-        title: '生成答案（第 1 次）',
-        note: '生成对比答案但未标注引用。',
-        state: {
-          draft_answer: 'BM25 擅长关键词匹配，稠密向量擅长语义召回…',
-          citations: [],
-          iteration: 0,
-        },
-      },
-      {
-        nodeId: 'answer_validator',
-        title: '校验失败：missing_citation',
-        note: '检测到事实性陈述缺少引用，feedback 提示补充 [N]，iteration=1。',
-        state: {
-          validation: { is_valid: false, failure_reasons: ['missing_citation'] },
-          validation_feedback: 'Answer lacks source citations for factual claims…',
-          iteration: 1,
-        },
+        note: '[UNIFIED] 判定 simple_fact → retrieval_agent（不决定 SQL，统一走向量召回）。',
+        state: { query_type: 'simple_fact', confidence: 0.89, graph_eligible: false },
       },
       {
         nodeId: 'retrieval_agent',
-        title: '补充检索（回退）',
-        note: 'context_insufficient 未触发，此处由 answer_generator 重试，但补充更多证据 chunk。',
+        title: '统一混合检索',
+        note: '[统一召回] 召回文档块 + excel_sheet 摘要 chunk（metadata.source="excel_sheet"）。sheet 摘要含表结构/行数，但无具体数值。',
         state: {
-          documents: '8 chunks (补充 3 条)',
-          retrieval_path: '[Multi-query] 4 dense + 1 bm25 (retry)',
+          documents: '3 chunks (含 1 个 excel_sheet 摘要)',
+          retrieval_path: '[Multi-query] 2 dense + 1 bm25',
+          retrieval_debug: { rrf_total: 8, reranked_count: 3, has_excel_sheet: true },
         },
       },
       {
         nodeId: 'answer_generator',
-        title: '重生成答案（第 2 次）',
-        note: '携带 validation_feedback 重新生成，补充引用。',
+        title: '生成 + 自检（信息不足）',
+        note: '[MERGED] 基于召回上下文生成答案，但召回只有 sheet 摘要（表结构/行数），无具体数值 → answer 含"信息不足"。intermediate=True（前端延迟显示）。',
         state: {
-          draft_answer: 'BM25 擅长关键词匹配…[1] 稠密向量擅长语义召回…[2][3]',
-          citations: ['[1] doc_02/chunk_1', '[2] doc_02/chunk_3', '[3] doc_05/chunk_2'],
+          draft_answer: '提供的文档中没有足够的信息来回答这个问题。',
+          final_answer: '提供的文档中没有足够的信息来回答这个问题。',
+          citations: [],
+          iteration: 1,
+          intermediate: true,
+          rerouted_to_sql: false,
         },
       },
       {
-        nodeId: 'answer_validator',
-        title: '校验通过',
-        note: 'is_valid=true，iteration=2 < max_iterations=3。',
-        state: { validation: { is_valid: true }, iteration: 2 },
+        nodeId: 'sql_agent',
+        title: '条件触发 SQL Tool Call',
+        note: '_route_after_generation 检测到：未重判 + 有 excel_sheet chunk + answer 信息不足 → 触发 NL2SQL。向量召回 Sheet → 多表选择 → 生成 SQL → 执行。返回 SQL 结果 documents，设置 rerouted_to_sql=True。',
+        state: {
+          documents: 'SQL 结果 1 条 (Sheet: sales_2024)',
+          retrieval_path: 'sql_nl2sql',
+          rerouted_to_sql: true,
+          retrieval_debug: {
+            sql_query: 'SELECT SUM(revenue) FROM sales_2024 WHERE quarter = "Q3" AND year = 2024',
+            sql_sheet_name: 'sales_2024',
+            sql_result_row_count: 1,
+            sql_result_columns: ['SUM(revenue)'],
+            sql_result_rows: [[1284500]],
+          },
+        },
+      },
+      {
+        nodeId: 'answer_generator',
+        title: '生成最终答案',
+        note: '基于"sheet 摘要 + 真实 SQL 结果"生成最终答案。intermediate=False（前端渲染）。下一轮 _route_after_generation 检测 rerouted_to_sql=True → 直接 END。',
+        state: {
+          draft_answer: '2024 年 Q3 的总营收为 1,284,500 元 [1]',
+          final_answer: '2024 年 Q3 的总营收为 1,284,500 元 [1]',
+          citations: ['[1] excel:sales_2024/sales_2024'],
+          iteration: 2,
+          intermediate: false,
+          rerouted_to_sql: true,
+        },
       },
       {
         nodeId: 'END',
         title: '返回结果',
-        note: '输出带引用的最终对比答案。',
-        state: { final_answer: 'BM25 擅长关键词匹配…[1]…', citations: ['[1]…', '[2]…', '[3]…'] },
+        note: 'rerouted_to_sql=True → 直接 END。输出最终答案与引用。',
+        state: {
+          final_answer: '2024 年 Q3 的总营收为 1,284,500 元 [1]',
+          citations: ['[1] excel:sales_2024/sales_2024'],
+          retrieval_path: 'sql_nl2sql',
+        },
       },
     ],
   },
@@ -595,14 +597,14 @@ export const nodeTemplates: NodeTemplate[] = [
     outputs: ['answer'],
   },
   {
-    type: 'validator',
-    label: '校验',
-    codeName: 'validator',
-    category: 'validator',
-    icon: 'ShieldCheck',
-    description: '校验答案，决定重试或结束。',
-    inputs: ['answer'],
-    outputs: ['validation'],
+    type: 'tool',
+    label: 'SQL 工具',
+    codeName: 'tool',
+    category: 'tool',
+    icon: 'Table',
+    description: '条件触发的 NL2SQL Tool Call，从数据表查询结构化数据。',
+    inputs: ['query'],
+    outputs: ['sql_result'],
   },
   {
     type: 'chat',
@@ -634,5 +636,5 @@ export const categoryColors: Record<NodeCategory, { bar: string; ring: string; s
   retrieval: { bar: '#3b82f6', ring: '#60a5fa', soft: 'rgba(59,130,246,0.10)', text: '#1d4ed8' },
   graph: { bar: '#10b981', ring: '#34d399', soft: 'rgba(16,185,129,0.10)', text: '#047857' },
   generator: { bar: '#f59e0b', ring: '#fbbf24', soft: 'rgba(245,158,11,0.10)', text: '#b45309' },
-  validator: { bar: '#f43f5e', ring: '#fb7185', soft: 'rgba(244,63,94,0.10)', text: '#be123c' },
+  tool: { bar: '#6366f1', ring: '#818cf8', soft: 'rgba(99,102,241,0.10)', text: '#4338ca' },
 }

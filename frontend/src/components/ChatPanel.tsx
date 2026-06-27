@@ -104,7 +104,8 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
             queryType = step.result.query_type as string
           }
           if ((step.node === 'retrieval_agent' || step.node === 'lightrag_agent' || step.node === 'sql_agent') && step.result?.documents) {
-            // sql_agent fallback 后会追加 retrieval_agent 已有的同一条 chunk，
+            // [UNIFIED] sql_agent 作为条件性 Tool Call 触发后，其 SQL 结果 documents 会与
+            // 之前 retrieval_agent/lightrag_agent 召回的 documents 累加（LangGraph operator.add）。
             // 与后端 citations 去重保持一致，effectiveDocs 也按 chunk_id 去重，
             // 否则 citations 数组与 effectiveDocs 长度不匹配，点击 [2] 拿不到 doc。
             const newDocs = (step.result.documents as Array<Record<string, unknown>>).map(d => ({

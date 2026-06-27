@@ -3,7 +3,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import rehypeKatex from 'rehype-katex'
 import remarkMath from 'remark-math'
-import { User, Bot, Copy, Check, ChevronDown, ChevronRight, FileText, Search, Brain, GitGraph, MessageSquare, ShieldCheck, Loader2, ExternalLink, Database } from 'lucide-react'
+import { User, Bot, Copy, Check, ChevronDown, ChevronRight, FileText, Search, Brain, GitGraph, MessageSquare, Loader2, ExternalLink, Database } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useState, useRef, useMemo, useCallback } from 'react'
@@ -28,7 +28,6 @@ const NODE_ICONS: Record<string, React.ReactNode> = {
   graph_agent: <GitGraph className="h-3 w-3" />,
   graphrag_search: <GitGraph className="h-3 w-3" />,
   answer_generator: <MessageSquare className="h-3 w-3" />,
-  answer_validator: <ShieldCheck className="h-3 w-3" />,
   chitchat: <MessageSquare className="h-3 w-3" />,
 }
 
@@ -109,7 +108,7 @@ function StepResult({ step, userQuery, searchDebugData }: { step: StreamStep; us
           </>
         ) : (
           <>
-            → SQL 未命中{fallbackReason ? `（${fallbackReason}）` : ''}，fallback 文本检索 {count} 条
+            → SQL 未命中{fallbackReason ? `（${fallbackReason}）` : ''}，返回空结果
           </>
         )}
         {userQuery && (

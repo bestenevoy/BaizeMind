@@ -509,7 +509,7 @@ export interface SqlDebug {
 
 export interface SearchDebugResponse {
   query: string
-  query_type?: string  // "sql_query" | "simple_fact" | "multi_hop" | ...
+  query_type?: string  // "simple_fact" | "multi_hop" | "comparison" | "definition" | "holistic" | "chitchat"
   multi_query?: boolean
   query_count?: number
   dense_union_count?: number
@@ -541,7 +541,7 @@ export interface SearchDebugResponse {
   final_count: number
   filtered_out_by_rerank_threshold: number
   message?: string
-  sql_debug?: SqlDebug  // 仅 query_type == "sql_query" 时存在
+  sql_debug?: SqlDebug  // 仅 SearchDebugPanel 强制 forcePath="sql" 时存在（debug 端点专属，非主工作流路径）
 }
 
 export async function searchDebug(

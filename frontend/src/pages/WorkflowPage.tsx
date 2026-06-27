@@ -364,7 +364,7 @@ export function WorkflowPage() {
               </span>
             </CardTitle>
             <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-              {(['terminal', 'router', 'retrieval', 'graph', 'generator', 'validator', 'chat'] as const).map((cat) => (
+              {(['terminal', 'router', 'retrieval', 'graph', 'generator', 'tool', 'chat'] as const).map((cat) => (
                 <span key={cat} className="flex items-center gap-1">
                   <span className="w-2.5 h-2.5 rounded-sm" style={{ background: categoryColors[cat].bar }} />
                   {cat}
