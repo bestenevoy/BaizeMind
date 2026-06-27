@@ -255,6 +255,77 @@ def _has_excel_sheet_chunk(documents: list[dict]) -> bool:
     return False
 
 
+def _is_data_table_document(d: dict) -> bool:
+    """判断单个 document 是否属于"数据表类文件"。
+
+    数据表类文件判断标准（统一以 source_type / metadata.source / chunk_id 前缀为准）：
+    - Excel/CSV/数据库链接表等结构化数据文件的 sheet_summary chunk：
+      metadata.source == "excel_sheet" 或 source_type == "excel_sheet" 或 chunk_id 以 "excel:" 开头
+    - SQL 执行结果 doc：source_type == "sql" 或 chunk_id 含 "__sql_result" 后缀
+      （sql_agent 生成的 document，本质也是数据表查询产物）
+
+    扩展点：未来 CSV / DB link 表接入时，只需在此函数添加新的 source 标识即可。
+    """
+    if not isinstance(d, dict):
+        return False
+    meta = d.get("metadata", {}) or {}
+    source_type = d.get("source_type", "") or ""
+    cid = d.get("chunk_id", "") or ""
+
+    # Excel sheet 摘要 chunk
+    if meta.get("source") == "excel_sheet":
+        return True
+    if source_type == "excel_sheet":
+        return True
+    if cid.startswith("excel:"):
+        return True
+    # SQL 执行结果 doc（_format_sql_result_as_document 生成）
+    if source_type == "sql":
+        return True
+    if "__sql_result" in cid:
+        return True
+    return False
+
+
+def _all_documents_are_data_tables(documents: list[dict]) -> bool:
+    """检测召回的 documents 是否全部为数据表类文件。
+
+    用于 retrieval_agent / lightrag_agent 之后路由决策：
+    - 全部为数据表类 → 跳过 answer_generator 的 LLM 判断，直接进 sql_agent
+    - 空召回 / 混合类型 → 保持原流程（answer_generator 判断是否需要 SQL）
+    """
+    if not documents:
+        return False
+    return all(_is_data_table_document(d) for d in documents if isinstance(d, dict))
+
+
+def _route_after_retrieval(state: AgentState) -> str:
+    """retrieval_agent / lightrag_agent 之后路由：数据表类文档短路到 sql_agent。
+
+    [SHORT-CIRCUIT] 当召回的 documents 全部为数据表类文件（Excel/CSV/DB link 等）时，
+    跳过 answer_generator 的 LLM 判断，直接进入 sql_agent 执行 NL2SQL。
+    这避免了"先让 LLM 看摘要 → 判断信息不足 → 再触发 SQL"的额外 LLM 往返，
+    在用户已通过 folder/tags/doc_ids 限定到纯数据表文件场景下显著提升响应效率。
+
+    决策规则：
+    1. 召回非空 + 全部为数据表类 → sql_agent（短路）
+    2. 空召回 / 含非数据表文档 → answer_generator（保持原流程，由 LLM 判断）
+       - 混合类型场景：LLM 先尝试用召回上下文回答；不足时 _route_after_generation
+         仍会触发 sql_agent（数据表 chunk 已在召回中）
+
+    防死循环：此函数仅在 retrieval_agent / lightrag_agent 之后调用一次，
+    不会在 sql_agent → answer_generator 之后再次进入（该路径走 _route_after_generation）。
+    """
+    docs = state.get("documents", [])
+    if _all_documents_are_data_tables(docs) and _has_excel_sheet_chunk(docs):
+        logger.info(
+            "Short-circuit to sql_agent: all %d recalled docs are data-table types",
+            len(docs),
+        )
+        return "sql_agent"
+    return "answer_generator"
+
+
 def _route_after_generation(state: AgentState) -> str:
     """answer_generator 之后路由：统一召回 → LLM 决策 → 条件触发 SQL Tool Call。
 
@@ -412,15 +483,18 @@ class AgenticRAGWorkflow:
         builder.add_conditional_edges("query_router", _route_by_query_type)
         builder.add_edge("chitchat", END)
         # [UNIFIED] sql_agent 现在是条件触发的 SQL Tool Call 节点（不再有独立 sql_query 路由入口）：
-        # 仅在 answer_generator 判定信息不足 + 召回含 excel_sheet chunk 时由
-        # _route_after_generation 触发。NL2SQL+执行结果转 documents 后回到 answer_generator
-        # 生成最终答案（统一生成链路）。
+        # 触发路径有二：
+        # 1. retrieval_agent / lightrag_agent 之后召回全部为数据表类 → _route_after_retrieval 短路
+        # 2. answer_generator 判定信息不足 + 召回含 excel_sheet chunk → _route_after_generation
+        # NL2SQL+执行结果转 documents 后回到 answer_generator 生成最终答案（统一生成链路）。
         builder.add_edge("sql_agent", "answer_generator")
         builder.add_conditional_edges("graph_agent", _route_for_multi_hop)
         # [DISABLED] GraphRAG edge — retained for graph compilation
         builder.add_conditional_edges("graphrag_search", _route_after_graphrag)
-        builder.add_edge("retrieval_agent", "answer_generator")
-        builder.add_edge("lightrag_agent", "answer_generator")
+        # [SHORT-CIRCUIT] 召回后立即判断：若全部为数据表类文件 → 直接 sql_agent
+        # 跳过 answer_generator 的 LLM 判断，省一次 LLM 往返，提升纯数据表场景响应效率
+        builder.add_conditional_edges("retrieval_agent", _route_after_retrieval)
+        builder.add_conditional_edges("lightrag_agent", _route_after_retrieval)
         # answer_generator 单次 LLM 生成 + 自检后路由（合并了原 answer_validator 的职责）
         builder.add_conditional_edges("answer_generator", _route_after_generation)
 
