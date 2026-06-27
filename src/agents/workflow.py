@@ -7,7 +7,6 @@ from langgraph.graph import StateGraph, START, END
 from src.agents.query_router import QueryRouter
 from src.agents.retrieval_agent import RetrievalAgent
 from src.agents.graph_agent import GraphAgent
-from src.agents.answer_validator import AnswerValidator
 from src.logging_config import get_request_id, set_request_id, reset_request_id
 from src.retrieval.lightrag_retriever import LightRAGRetriever
 from src.llm.deepseek import get_chat_llm
@@ -397,7 +396,9 @@ class AgenticRAGWorkflow:
         self.query_router = QueryRouter()
         self.retrieval_agent = RetrievalAgent()
         self.graph_agent = GraphAgent()
-        self.answer_validator = AnswerValidator()
+        # [MERGED] answer_validator 节点已合并到 answer_generator：单次 LLM 调用
+        # 同时生成 + 自检（详见 _node_answer_generator）。AnswerValidator 类仍保留供
+        # 独立评测/脚本调用（src/agents/answer_validator.py），但不再实例化到 workflow。
         self.lightrag_retriever = LightRAGRetriever()
         self._llm = None
         self._graphrag_query = None
@@ -1084,66 +1085,6 @@ class AgenticRAGWorkflow:
                 "error": str(e),
                 "iteration": state.get("iteration", 0) + 1,
                 "intermediate": False,
-            }
-
-    def _node_answer_validator(self, state: AgentState) -> dict:
-        try:
-            context = ""
-            if state.get("documents"):
-                # Use full text of top documents (up to 6000 chars) so the validator
-                # sees the same evidence the answer generator used, preventing false
-                # "unsupported_claim" verdicts from truncated context.
-                context_parts = []
-                char_budget = 6000
-                for d in state["documents"][:8]:
-                    text = d.get("text", "")
-                    if len(context_parts) > 0:
-                        char_budget -= 2  # for "\n"
-                    if char_budget <= 0:
-                        break
-                    text = text[:char_budget]
-                    char_budget -= len(text)
-                    context_parts.append(text)
-                context = "\n".join(context_parts)
-
-            validation = self.answer_validator.validate(
-                question=state["query"],
-                answer=state.get("draft_answer", ""),
-                context=context,
-                citations=state.get("citations", []),
-            )
-
-            new_iteration = state.get("iteration", 0) + 1
-            final_answer = validation.get("improved_answer") or state.get("draft_answer", "")
-
-            # Build feedback string from failure reasons for retry
-            failure_reasons = validation.get("failure_reasons", [])
-            issues = validation.get("issues", [])
-            feedback_parts = []
-            reason_map = {
-                "missing_citation": "Answer lacks source citations for factual claims. Cite every claim with [N], where N is the context chunk number (e.g. [1], [2]).",
-                "unsupported_claim": "Answer contains claims not supported by context. Remove or limit to evidence in context only.",
-                "context_insufficient": "Context lacks information to answer. State 'insufficient information' rather than guessing.",
-                "conflict_detected": "Context has conflicting information. Acknowledge the conflict explicitly.",
-            }
-            for reason in failure_reasons:
-                if reason in reason_map:
-                    feedback_parts.append(reason_map[reason])
-            feedback = "\n".join(feedback_parts) if feedback_parts else ""
-
-            return {
-                "validation": validation,
-                "validation_feedback": feedback,
-                "final_answer": final_answer,
-                "iteration": new_iteration,
-            }
-        except Exception as e:
-            return {
-                "validation": {"is_valid": True},
-                "validation_feedback": "",
-                "final_answer": state.get("draft_answer", ""),
-                "iteration": state.get("iteration", 0) + 1,
-                "error": str(e),
             }
 
 

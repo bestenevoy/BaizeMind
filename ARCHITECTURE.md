@@ -44,6 +44,8 @@ BM25 Index            (LightRAG 层)       (LightRAG 层)
 │  POST /api/v1/documents/upload    POST /api/v1/qa/ask               │
 │  GET  /api/v1/documents/*         POST /api/v1/qa/stream (SSE)      │
 │  GET  /api/v1/system/*            GET  /api/v1/evaluation/*          │
+│  POST /api/v1/excel/*   (Excel QA 独立端点, 直接走 ExcelQA.retrieve) │
+│  POST /api/v1/auth/*    (登录/注册/用户管理, auth_enabled 控制开关) │
 │  GET  /health                                                         │
 └───────────────────────────┬──────────────────────────────────────────┘
                             │
@@ -70,20 +72,27 @@ BM25 Index            (LightRAG 层)       (LightRAG 层)
                          └─────────────────┘
                                    │
                                    ▼
-                        answer_generator
-                    (生成 + 自检合并, 单次 LLM)
+                  _route_after_retrieval  (★ NEW 短路)
+                  ┌──────────────┴───────────────┐
+                  ▼                              ▼
+        召回全为数据表 + 含 excel_sheet       其他情况 (空/混合/非数据表)
+        → sql_agent (跳过 LLM 判断)         → answer_generator
+                  │                              │
+                  │                              ▼
+                  │              answer_generator (生成 + 自检合并, 单次 LLM)
+                  │                              │
+                  │                              ▼
+                  │              _route_after_generation (统一决策点)
+                  │                              │
+                  │              ┌────────────────┼────────────────┐
+                  │              ▼                ▼                ▼
+                  │          召回充分        信息不足         rerouted_to_sql=True
+                  │          answer 正常     + 有 excel_sheet   (sql_agent 已执行)
+                  │          → END          chunk + 未重判      → END (直接结束)
+                  │                          + iter < max
+                  │                              │
+                  └──────────────────────────────┘
                                    │
-                                   ▼
-                       _route_after_generation
-                       (统一决策点)
-                                   │
-            ┌──────────────────────┼──────────────────────┐
-            ▼                      ▼                      ▼
-        召回充分              信息不足                rerouted_to_sql=True
-        answer 正常           + 有 excel_sheet        (sql_agent 已执行)
-        → END                 chunk + 未重判          → END (直接结束)
-        (设计文档第1点)       + iter < max            (无论 answer 是否
-                                   │                  信息不足)
                                    ▼
                               sql_agent
                         (条件触发 SQL Tool Call)
@@ -142,7 +151,10 @@ doc_ids: list[str]      # 单文件筛选（前端选中具体文件时传入）
 
 # [UNIFIED] SQL 作为条件性 Tool Call 的防死循环标志
 rerouted_to_sql: bool   # sql_agent 被触发后置 True；
-                        # 下一轮 _route_after_generation 检测到 True + 仍信息不足 → END
+                        # 触发路径有两条：
+                        #   (1) 数据表短路: _route_after_retrieval 检测召回全为数据表 → sql_agent
+                        #   (2) 条件 Tool Call: _route_after_generation 检测 answer 信息不足 + excel_sheet chunk → sql_agent
+                        # 下一轮 _route_after_generation 检测到 True + 仍信息不足 → END (防死循环)
 ```
 
 ### 节点 (8 个)
@@ -167,12 +179,20 @@ rerouted_to_sql: bool   # sql_agent 被触发后置 True；
 | 固定 | START → query_router | — |
 | 固定 | chitchat → END | — |
 | 固定 | sql_agent → answer_generator | — |
-| 固定 | retrieval_agent → answer_generator | — |
-| 固定 | lightrag_agent → answer_generator | — |
+| 条件 | retrieval_agent → answer_generator / sql_agent | `_route_after_retrieval`（**短路**：召回全为数据表类 + 含 excel_sheet chunk → sql_agent） |
+| 条件 | lightrag_agent → answer_generator / sql_agent | `_route_after_retrieval`（同上，避免重复 LLM 判断） |
 | 条件 | query_router → chitchat / retrieval_agent / lightrag_agent | `_route_by_query_type`（无 sql_query 分支） |
 | 条件 | graph_agent → retrieval_agent | `_route_for_multi_hop`（无条件路由到 retrieval） |
 | 条件 | graphrag_search → ... | `_route_after_graphrag` [UNREACHABLE] |
 | 条件 | answer_generator → END / sql_agent | `_route_after_generation`（条件触发 SQL Tool Call） |
+
+> **[SHORT-CIRCUIT]** `_route_after_retrieval` 是数据表场景的快速通道：
+> 当用户已通过 folder/tags/doc_ids 限定到纯数据表文件（Excel sheet 摘要 / SQL 结果 doc），
+> 召回后无需再经过 `answer_generator` 的 LLM 判断 "信息是否不足 → 是否触发 SQL"，
+> 直接进入 `sql_agent` 执行 NL2SQL，节省一次 LLM 往返。
+> 判断函数：`_is_data_table_document()`（基于 `metadata.source` / `source_type` / `chunk_id` 前缀）+
+> `_all_documents_are_data_tables()` + `_has_excel_sheet_chunk()` 双重校验。
+> 混合场景（含非数据表文档）保持原流程，由 `_route_after_generation` 兜底触发 SQL。
 
 ### 统一召回流程（`_route_by_query_type` + `_route_after_generation`）
 
@@ -478,7 +498,70 @@ graph_relation_whitelist = [
 
 GraphRAG 工具 (`graphrag_global_search`, `graphrag_local_search`, `graphrag_drift_search`) 已注释移除。
 
-### 10. 评测 (`src/evaluation/`)
+### 10. Excel RAG 子系统 (`src/excel_rag/`)
+
+独立结构化数据查询子系统，处理 `.xlsx` 文件。当 `settings.excel_rag_enabled=True` 时，
+文档入库流程会自动调用 `src/excel_rag/pipeline.ingest_excel()`，将 Excel 拆分为
+"元数据层 + 数据层"双轨存储，并写入 Milvus 独立集合 `excel_sheets`，与主 chunk 集合并存。
+
+| 文件 | 类 | 职责 | 技术细节 |
+|------|-----|------|---------|
+| `parser.py` | `ExcelParser` | Sheet/Column 解析 | 输出 `SheetInfo` + `ColumnInfo`；前 N 行采样做类型推断 (`excel_sample_rows_for_inference=200`) |
+| `summarizer.py` | `SheetSummarizer` | Sheet 摘要 + 列名映射 | LLM 生成自然语言摘要 + 字段映射 (display_name ↔ column_name) |
+| `store.py` | `ExcelStore` | 元数据 + 动态数据表 | SQLite 表 `excel_sheets` (元数据) + `excel_data_<doc_id>_<sheet_idx>` (每 sheet 一张动态表) |
+| `vector_store.py` | `ExcelVectorStore` | 摘要向量检索 | Milvus 独立集合 `excel_sheets` (IVF_FLAT, COSINE, nlist=128, dim=1024) |
+| `nl2sql.py` | `NL2SQL` + `ExcelQAExecutor` | NL2SQL + 执行 | `execute_with_retry()` 自动修正 (max_retries=2, timeout=5s)；`format_answer()` 双模式 (表格 + 自然语言) |
+| `qa.py` | `ExcelQA` | 查询编排 | `retrieve()` → 多表选择 → NL2SQL → 执行；与主 workflow 的 `sql_agent` 节点共享 NL2SQL 实现 |
+| `pipeline.py` | — | 入库编排 | `ingest_excel()` 串接 parse → summarize → store → vector_store；同时把 sheet_summary 作为 chunk 注入主 collection，供混合召回 |
+
+**字段映射三属性**（`ColumnInfo`，解决 SQL 字段名与显示名不一致问题）：
+
+| 属性 | 含义 | 示例 |
+|------|------|------|
+| `display_name` | 用户可见字段名（中英文混合，描述性） | `"销售金额"` / `"Revenue (¥)"` |
+| `column_name` | 数据库实际列名（snake_case，SQL 安全） | `"sales_amount"` / `"revenue_cny"` |
+| `data_type` | 列类型 | `INTEGER` / `REAL` / `TEXT` |
+
+兼容旧数据：`store._normalize_columns()` 自动把旧 `cn` / `en` / `type` 字段转换为三属性格式。
+
+### 11. 鉴权系统 (`src/auth.py`)
+
+| 组件 | 说明 |
+|------|------|
+| `auth_enabled` (settings) | 全局开关。`False` 时所有 API 端点匿名可访问，跳过 `current_user` 依赖 |
+| 用户表 (`users` SQLite 表) | 字段: id / username / role / pass_hash / created_at / is_active |
+| 角色 | `admin`（全部权限）/ `user`（限上传配额）/ `guest`（限聊天长度） |
+| `auth_allow_register` | 默认 `False`，仅管理员可创建账号 |
+| `auth_guest_chat_max_length` | 访客单次聊天输入字符上限 |
+| `auth_user_upload_daily_limit` | 普通用户每日上传文件数上限 |
+| 密码哈希 | PBKDF2-HMAC-SHA256 |
+| 依赖注入 | `get_current_user` / `get_current_user_optional` / `require_admin` |
+| `RequestIdMiddleware` | 全局注入 `X-Request-ID`，串联日志 + LLM token 统计 |
+
+### 12. 缓存层 (`src/cache/`)
+
+统一缓存抽象，LLM 响应 / Embedding / Reranker 共用同一后端，按 `namespace` 区分 key 前缀。
+启用缓存可避免对相同输入重复调用 DeepSeek/SiliconFlow 远程 API。
+
+| 文件 | 职责 |
+|------|------|
+| `base.py` | `CacheBackend` 抽象基类：`get` / `set` / `delete` / `clear_namespace` |
+| `factory.py` | `get_cache()` 工厂；`_BACKEND_BUILDERS` 注册表，按 `settings.cache_backend` 选择后端 |
+| `memory_backend.py` | 进程内 LRU（默认；最快，重启丢失，单进程适用） |
+| `sqlite_backend.py` | SQLite 持久化（`data/cache.db`，多 worker 共享） |
+| `garnet_backend.py` / `redis_backend.py` | Garnet/Redis 协议相同，跨进程共享 + 原生 TTL（生产推荐） |
+| `noop_backend.py` | 禁用缓存占位（`cache_backend="none"` 或 `"noop"`） |
+| `llm/cached_wrapper.py` | LangChain `BaseChatModel` 包装器，透明拦截 `invoke` / `generate` 落缓存 |
+
+namespace 前缀：`llm` (LLM 响应)、`emb` (embedding 向量)、`rerank` (reranker 结果)。
+全局开关 `cache_enabled=False` 时所有命名空间禁用，走真实请求。
+
+### 13. LLM Token 统计 (`src/llm/token_stats.py`)
+
+按 `X-Request-ID` 收集 DeepSeek 调用的 prompt/completion/total_tokens，
+通过 `/api/v1/admin/llm-stats/*` 接口暴露给管理员面板，便于成本观测。
+
+### 14. 评测 (`src/evaluation/`)
 
 | 文件 | 职责 | 技术细节 |
 |------|------|---------|
@@ -549,7 +632,14 @@ GraphRAG 工具 (`graphrag_global_search`, `graphrag_local_search`, `graphrag_dr
                 └─ → retrieval_agent
                       ├─ 对每个 sub_query + 原始 query 执行 hybrid search
                       ├─ 按 chunk_id 去重，最多 20 结果
-                      └─ → answer_generator → answer_validator
+                      └─ → _route_after_retrieval → answer_generator
+                          (数据表短路: → sql_agent → answer_generator)
+
+  ┌─ 数据表短路（_route_after_retrieval）─────────────────────────────────┐
+  │ 召回全为数据表类 (Excel sheet 摘要 / SQL 结果 doc) + 含 excel_sheet: │
+  │   retrieval_agent / lightrag_agent → sql_agent → answer_generator    │
+  │   （跳过 answer_generator 的首次 LLM 判断）                            │
+  └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -558,18 +648,19 @@ GraphRAG 工具 (`graphrag_global_search`, `graphrag_local_search`, `graphrag_dr
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/api/v1/documents/upload` | 上传文档，触发全流程处理 |
+| `POST` | `/api/v1/documents/upload` | 上传文档，触发全流程处理（Excel 自动分流到 `excel_rag.pipeline`） |
 | `GET` | `/api/v1/documents/list` | 文档列表 (folder/tags/status 过滤) |
 | `GET` | `/api/v1/documents/{id}/status` | 查询处理状态 |
 | `GET` | `/api/v1/documents/{id}/chunks` | 获取文档 Chunks |
 | `GET` | `/api/v1/documents/{id}/content` | 获取文档 Markdown 内容 |
-| `DELETE` | `/api/v1/documents/{id}` | 级联删除 (Milvus + BM25 + Neo4j + SQLite) |
+| `DELETE` | `/api/v1/documents/{id}` | 级联删除 (Milvus + BM25 + Neo4j + SQLite + excel_data_* 动态表) |
 | `PUT` | `/api/v1/documents/{id}/move` | 移动文档到文件夹 |
 | `POST` | `/api/v1/documents/{id}/tags` | 设置标签 |
 | `POST` | `/api/v1/documents/{id}/retry` | 重新处理失败文档 |
 | `GET/POST/DELETE` | `/api/v1/documents/folders/*` | 文件夹管理 |
 | `POST` | `/api/v1/qa/ask` | 问答 (非流式) |
-| `POST` | `/api/v1/qa/stream` | 问答 (SSE 流式) |
+| `POST` | `/api/v1/qa/stream` | 问答 (SSE 流式, 带节点标签 + 调试面板数据) |
+| `POST` | `/api/v1/excel/qa` | Excel 独立问答 (直接 `ExcelQA.retrieve`, 不走 LangGraph) |
 | `GET` | `/api/v1/system/config` | 系统配置查看 |
 | `GET` | `/api/v1/system/connectivity-check` | 外部服务连通性检查 |
 | `GET` | `/api/v1/system/stats` | 系统统计 |
@@ -577,6 +668,15 @@ GraphRAG 工具 (`graphrag_global_search`, `graphrag_local_search`, `graphrag_dr
 | `GET` | `/api/v1/system/graph/overview` | 图谱可视化数据 |
 | `GET` | `/api/v1/system/graph/entity/{name}` | 实体详情 |
 | `GET/PUT/DELETE` | `/api/v1/system/config/editable/*` | 运行时配置覆盖 |
+| `*` | `/api/v1/admin/cache/*` | 缓存管理 (统计/清理/重载, 管理员) |
+| `*` | `/api/v1/admin/llm-stats/*` | LLM token 统计查询 (管理员) |
+| `*` | `/api/v1/admin/search-debug/*` | 检索调试面板数据 (管理员) |
+| `*` | `/api/v1/admin/system/*` | 系统管理 (管理员) |
+| `*` | `/api/v1/admin/graph/*` | 图谱管理 (管理员) |
+| `POST` | `/api/v1/auth/login` | 登录 (返回 JWT) |
+| `POST` | `/api/v1/auth/register` | 注册 (`auth_allow_register=True` 时启用) |
+| `GET` | `/api/v1/auth/me` | 当前用户信息 |
+| `*` | `/api/v1/auth/users/*` | 用户管理 (管理员) |
 | `*` | `/api/v1/evaluation/*` | 评测数据集 + 运行 |
 | `GET` | `/health` | 健康检查 |
 
@@ -596,7 +696,7 @@ GraphRAG 工具 (`graphrag_global_search`, `graphrag_local_search`, `graphrag_dr
 | `hybrid_bm25_weight` | 0.4 | RRF BM25 权重 |
 | `hybrid_rrf_k` | 60 | RRF 常数 |
 | `retrieval_similarity_threshold` | 0.0 | 检索过滤阈值 (0=禁用) |
-| `reranker_method` | `embedding` | 重排序策略 |
+| `reranker_method` | `embedding` | 重排序策略 (cosine / cross-encoder / hybrid) |
 | `milvus_collection` | `agentic_rag` | Chunk 向量集合名 |
 | `lightrag_entity_collection` | `lightrag_entities` | 实体向量集合名 |
 | `lightrag_relation_collection` | `lightrag_relations` | 关系向量集合名 |
@@ -607,6 +707,22 @@ GraphRAG 工具 (`graphrag_global_search`, `graphrag_local_search`, `graphrag_dr
 | `agent_max_iterations` | 5 | 验证循环最大迭代 |
 | `agent_temperature` | 0.1 | LLM 默认温度 |
 | `bge_m3_batch_size` | 32 | Embedding 批处理大小 |
+| `excel_rag_enabled` | `True` | Excel RAG 子系统开关 |
+| `excel_milvus_collection` | `excel_sheets` | Excel sheet 摘要向量集合名 |
+| `excel_sql_timeout_ms` | 5000 | Excel NL2SQL 执行超时 |
+| `excel_sql_max_retries` | 2 | Excel NL2SQL 自动修正重试次数 |
+| `excel_sample_rows_for_inference` | 200 | 列类型推断采样行数 |
+| `cache_enabled` | `True` | 全局缓存开关 (LLM/embedding/rerank) |
+| `cache_backend` | `memory` | 缓存后端 (memory/sqlite/garnet/redis/none) |
+| `cache_ttl_seconds` | 86400 | 默认缓存 TTL |
+| `cache_db_path` | `data/cache.db` | sqlite 后端数据库路径 |
+| `cache_llm_namespace` | `llm` | LLM 响应缓存 key 前缀 |
+| `cache_embedding_namespace` | `emb` | embedding 缓存 key 前缀 |
+| `garnet_url` | `redis://127.0.0.1:16389/0` | Garnet/Redis 服务器地址 |
+| `auth_enabled` | `True` | 鉴权开关 |
+| `auth_allow_register` | `False` | 自助注册开关 |
+| `auth_guest_chat_max_length` | 500 | 访客聊天输入上限 |
+| `auth_user_upload_daily_limit` | 20 | 普通用户每日上传上限 |
 
 ---
 
@@ -659,11 +775,14 @@ GraphRAG 工具 (`graphrag_global_search`, `graphrag_local_search`, `graphrag_dr
 | Embedding 并发批处理 | `bge_m3.py:54-70` | ~3-5x 加速（ThreadPoolExecutor, concurrency=8） |
 | 图谱关系白名单 | `settings.py:63-69`, `workflow.py:251-291` | 减少低权重关系噪声，降低 LLM token 消耗 |
 | Chunk 去重安全化 | `context_merger.py:41` | `hash(text[:500])` 替代 `text[:100]` |
-| Validator 结构化失败原因 | `prompts.py:97-114`, `answer_validator.py`, `workflow.py:398-442` | 按原因定向重试，不盲目烧 token |
+| answer_generator 单次 LLM 合并生成+自检 | `workflow.py:_node_answer_generator` | 比独立 validator 节省 1 次 LLM 往返/轮；重判改用正则 `_answer_indicates_insufficient` |
+| 数据表短路 `_route_after_retrieval` | `workflow.py` | 纯数据表场景跳过 answer_generator 首次 LLM 判断，节省 1 次往返 |
 | Query Router 兜底 | `prompts.py:16-20`, `query_router.py`, `workflow.py:41-54` | `graph_eligible` 信号防止误分类 |
 | Graph Agent 子问题生成 | `graph_agent.py:70-101` | 多 query 检索替代简单实体拼接 |
 | RRF 权重优化 | `settings.py:56-58` | dense 0.5→0.6, BM25 0.2→0.4 |
 | Neo4j `type(r)` bugfix | `neo4j_manager.py:113,143` | `r.type` property 替代 `type(r)` 函数 |
+| 统一缓存层 (`src/cache/`) | `cache/factory.py` + `llm/cached_wrapper.py` | LLM/embedding/rerank 同输入零成本命中，避免重复远程调用 |
+| Chunk GC (`src/storage/gc.py`) | `storage/gc.py` | ref_count=0 的 ChunkContent 在 `chunk_gc_ttl_days` 后物理删除 + Milvus 向量清理 |
 
 ### 待优化瓶颈
 
@@ -676,10 +795,10 @@ GraphRAG 工具 (`graphrag_global_search`, `graphrag_local_search`, `graphrag_dr
 ## 目录结构
 
 ```
-agentic-rag/
+BaizeMind/
 ├── config/
-│   ├── settings.py              # pydantic-settings (99 行), 加载 .env
-│   └── prompts.py               # 全部 LLM prompt (136 行)
+│   ├── settings.py              # pydantic-settings, 加载 .env (含 Excel/Cache/Auth 配置)
+│   └── prompts.py               # 全部 LLM prompt
 ├── src/
 │   ├── document_parser/         # 文档解析
 │   │   ├── mineru_parser.py     # MinerU CLI PDF/Office 解析
@@ -697,62 +816,102 @@ agentic-rag/
 │   │   ├── vector_retriever.py  # Milvus chunk 向量检索
 │   │   ├── bm25_retriever.py    # BM25 关键词检索
 │   │   ├── hybrid_retriever.py  # RRF 混合检索 (dense + BM25)
-│   │   ├── reranker.py          # 三策略重排序
+│   │   ├── reranker.py          # 三策略重排序 (cosine / cross-encoder / hybrid)
 │   │   ├── graph_expander.py    # Neo4j 图谱路径扩展
 │   │   ├── entity_index.py      # LightRAG 实体向量索引
 │   │   ├── relation_index.py    # LightRAG 关系向量索引
-│   │   └── lightrag_retriever.py # LightRAG 编排器
-│   ├── knowledge_graph/         # 知识图谱
+│   │   ├── lightrag_retriever.py # LightRAG 编排器
+│   │   └── debug_formatter.py   # 检索调试面板数据格式化
+│   ├── knowledge_graph/         # 知识图谱 (证据驱动)
 │   │   ├── entity_extractor.py  # LLM 实体关系抽取
 │   │   ├── neo4j_manager.py     # Neo4j CRUD + UNWIND 批量导入
 │   │   ├── graph_query.py       # Text-to-Cypher + 图谱查询
 │   │   ├── graphrag_indexer.py  # MS GraphRAG 索引
-│   │   └── graphrag_query.py    # MS GraphRAG 查询 (3 种模式)
+│   │   ├── graphrag_query.py    # MS GraphRAG 查询 (3 种模式)
+│   │   ├── evidence.py          # 证据模型 (ENTITY/ENTITY_ATTRIBUTE/FACT/FACT_ATTRIBUTE)
+│   │   ├── evidence_writer.py  # 证据写入 (含去重 + active flag)
+│   │   ├── chunk_manager.py     # ChunkContent 去重 + 引用计数
+│   │   ├── graph_sync_worker.py # GraphSyncTask 队列 → Neo4j 批量同步
+│   │   └── attribute_resolver.py # 实体属性解析
+│   ├── excel_rag/               # ★ Excel RAG 子系统
+│   │   ├── parser.py            # ExcelParser → SheetInfo / ColumnInfo (三属性)
+│   │   ├── summarizer.py        # LLM 摘要 + 字段映射
+│   │   ├── store.py             # excel_sheets 元数据 + excel_data_<doc>_<sheet> 动态表
+│   │   ├── vector_store.py     # Milvus excel_sheets 独立集合
+│   │   ├── nl2sql.py             # NL2SQL + execute_with_retry + format_answer
+│   │   ├── qa.py                # ExcelQA 查询编排
+│   │   └── pipeline.py          # ingest_excel / delete_excel 入库编排
+│   ├── cache/                   # ★ 统一缓存层
+│   │   ├── base.py              # CacheBackend 抽象
+│   │   ├── factory.py           # get_cache() 工厂 + _BACKEND_BUILDERS 注册
+│   │   ├── memory_backend.py    # 进程内 LRU (默认)
+│   │   ├── sqlite_backend.py    # SQLite 持久化
+│   │   ├── garnet_backend.py    # Garnet (Redis 协议)
+│   │   ├── redis_backend.py     # Redis
+│   │   └── noop_backend.py      # 禁用缓存占位
 │   ├── llm/
-│   │   └── deepseek.py          # ChatOpenAI 封装
+│   │   ├── deepseek.py          # ChatOpenAI 封装 (get_chat_llm / get_reasoner_llm)
+│   │   ├── cached_wrapper.py    # ★ 缓存透明包装器 (拦截 invoke/generate)
+│   │   └── token_stats.py       # ★ LLM token 统计 (按 X-Request-ID 聚合)
+│   ├── storage/
+│   │   ├── doc_store.py         # SQLite 文档元数据 (含 folders/tags/evidence/GraphSyncTask)
+│   │   ├── auto_tagger.py       # LLM 自动标签
+│   │   ├── config_overrides.py  # 运行时配置覆盖
+│   │   └── gc.py                # Chunk GC (ref_count=0 → 物理删除, chunk_gc_ttl_days)
+│   ├── auth.py                  # ★ 鉴权 (用户/角色/JWT/PBKDF2)
+│   ├── logging_config.py        # 结构化日志 + request_id 上下文
 │   ├── agents/                  # Agent 框架
 │   │   ├── query_router.py      # 意图分类 + graph_eligible
 │   │   ├── retrieval_agent.py   # 检索编排 + 去重
 │   │   ├── graph_agent.py       # NER + 图谱扩展 + 子问题生成
-│   │   ├── answer_validator.py  # 幻觉检测 + 结构化失败原因
-│   │   ├── workflow.py          # LangGraph StateGraph (8 节点, 5 条件边)
+│   │   ├── answer_validator.py  # 幻觉检测 (类保留供独立脚本调用, workflow 不再实例化)
+│   │   ├── workflow.py          # LangGraph StateGraph (8 节点, 7 条件边)
 │   │   └── tools.py             # LangChain @tool (备选路径)
-│   ├── storage/
-│   │   ├── doc_store.py         # SQLite 文档元数据 (339 行)
-│   │   ├── auto_tagger.py       # LLM 自动标签
-│   │   └── config_overrides.py  # 运行时配置覆盖
 │   └── evaluation/
 │       ├── dataset.py           # 105 条 QA 样本管理
 │       ├── runner.py            # 评测执行
 │       └── metrics.py           # 指标计算
 ├── api/
-│   ├── main.py                  # FastAPI app (lifespan BM25 rebuild)
+│   ├── main.py                  # FastAPI app (RequestIdMiddleware + lifespan BM25 rebuild)
 │   └── routes/
-│       ├── documents.py         # 文档 CRUD + 文件夹管理 (412 行)
-│       ├── qa.py                # 问答 /ask + /stream (153 行)
-│       ├── management.py        # 系统配置/统计/图谱可视化 (478 行)
-│       └── evaluation.py        # 评测接口 (375 行)
+│       ├── documents.py         # 文档 CRUD + 文件夹管理 + Excel 自动分流
+│       ├── qa.py                # 问答 /ask + /stream (NODE_LABELS 节点标签)
+│       ├── management.py        # 系统配置/统计/图谱可视化
+│       ├── evaluation.py        # 评测接口
+│       ├── excel.py             # ★ Excel 独立问答端点
+│       ├── auth.py              # ★ 登录/注册/用户管理
+│       └── admin/               # ★ 管理员子目录
+│           ├── cache_admin.py   # 缓存管理
+│           ├── llm_stats.py     # LLM token 统计
+│           ├── search_debug.py  # 检索调试
+│           ├── system.py        # 系统管理
+│           └── graph_admin.py   # 图谱管理
 ├── scripts/
-│   ├── ingest_documents.py      # 文档导入 CLI
+│   ├── ingest_documents.py      # 文档导入 CLI (PDF/Office)
 │   ├── build_graph.py           # 构建 Neo4j 知识图谱
 │   ├── build_graphrag.py        # 构建 MS GraphRAG 索引
 │   ├── build_lightrag_index.py  # 构建 LightRAG 实体+关系向量索引
+│   ├── migrate_kg_to_evidence.py # 旧 Neo4j KG → 证据驱动模型迁移
 │   ├── run_evaluation.py        # 运行评测
 │   ├── diagnose.py              # 系统诊断
 │   └── setup_milvus.sh          # Milvus 容器部署脚本
-├── tests/                       # 测试
-├── frontend/                    # React 前端
+├── tests/                       # 测试 (test_parser/chunker/graph/evidence/evidence_pipeline 离线安全)
+├── frontend/                    # React 18 + Vite + Tailwind + shadcn/ui
 │   └── src/
-│       ├── App.tsx              # 主应用
-│       ├── components/          # 组件
-│       ├── pages/               # 页面
-│       ├── hooks/               # 自定义 hooks
-│       ├── lib/                 # 工具库
-│       └── contexts/            # React contexts
+│       ├── App.tsx              # 主应用 + 路由 (含 /login /users /config 管理员页)
+│       ├── components/
+│       │   ├── ChatMessage.tsx           # 聊天消息渲染 (含 SqlResultTable)
+│       │   ├── SqlResultTable.tsx        # ★ SQL 结果表渲染 (全局 5 行预览)
+│       │   └── SearchDebugPanel.tsx      # 检索调试面板 (含 SqlResultTable)
+│       ├── pages/               # Documents / Graph / Workflow / Evaluation / Tests
+│       ├── hooks/               # useAuth / useDocuments / ...
+│       ├── lib/                 # API 客户端 + 工具
+│       └── contexts/            # React contexts (auth / theme / ...)
 ├── data/
 │   ├── raw/                     # 原始文档
 │   ├── processed/               # MinerU 处理输出
-│   ├── documents.db             # SQLite 文档元数据
+│   ├── documents.db             # SQLite 文档元数据 + ChunkContent + Evidence + GraphSyncTask + users
+│   ├── cache.db                 # sqlite 缓存后端 (cache_backend="sqlite" 时)
 │   ├── bm25_index/              # BM25 持久化索引
 │   └── graphrag/                # MS GraphRAG 数据
 └── pyproject.toml               # uv 项目配置

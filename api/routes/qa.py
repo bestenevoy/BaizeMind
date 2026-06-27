@@ -91,7 +91,6 @@ NODE_LABELS = {
     "graph_agent": ("知识图谱查询", "图谱上下文"),
     "graphrag_search": ("Microsoft GraphRAG 检索", "GraphRAG 结果"),
     "answer_generator": ("LLM 生成回答", "生成回答"),
-    "answer_validator": ("验证回答", "验证结果"),
 }
 
 
