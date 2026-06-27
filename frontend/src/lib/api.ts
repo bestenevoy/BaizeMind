@@ -550,8 +550,8 @@ export async function searchDebug(
   tags?: string[],
   docId?: string | null,
   topK?: number,
-  forcePath?: 'auto' | 'doc' | 'sql',
-): Promise<SearchDebugResponse> {
+  forcePath?: 'unified' | 'doc' | 'sql',
+): Promise<SearchDebugResponse | UnifiedSearchDebugResponse> {
   const res = await authFetch(`${API_BASE}/system/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -562,11 +562,35 @@ export async function searchDebug(
       tags: tags?.length ? tags : undefined,
       doc_id: docId || undefined,
       ...(topK ? { top_k: topK } : {}),
-      force_path: forcePath || 'auto',
+      force_path: forcePath || 'unified',
     }),
   })
   if (!res.ok) throw new Error(`Search debug failed: ${res.statusText}`)
   return res.json()
+}
+
+// ── [UNIFIED] 统一流程调试响应（forcePath="unified" 时返回） ──
+
+export interface UnifiedDebugStep {
+  node: string
+  label: string
+  detail: string
+  status: 'done' | 'error'
+  error: string
+  intermediate: boolean
+  result: Record<string, unknown>
+}
+
+export interface UnifiedSearchDebugResponse {
+  query: string
+  mode: 'unified'
+  query_type: string
+  steps: UnifiedDebugStep[]
+  sql_triggered: boolean
+  final_answer: string
+  citations: string[]
+  retrieval_path: string
+  error: string
 }
 
 // ── Config Overrides ──

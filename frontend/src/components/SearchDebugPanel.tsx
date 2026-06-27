@@ -1,12 +1,17 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Search, Loader2, ChevronDown, ChevronRight, Check, X, Eye, EyeOff, HelpCircle } from 'lucide-react'
+import { Search, Loader2, ChevronDown, ChevronRight, Check, X, Eye, EyeOff, HelpCircle, Database, Brain, GitGraph, MessageSquare, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
-import { searchDebug, updateConfigOverride, type SearchDebugResponse } from '@/lib/api'
+import { searchDebug, updateConfigOverride, type SearchDebugResponse, type UnifiedSearchDebugResponse, type UnifiedDebugStep } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+
+// [UNIFIED] 类型守卫：区分统一流程响应与 doc/sql 调试响应
+function isUnifiedResult(r: SearchDebugResponse | UnifiedSearchDebugResponse | null): r is UnifiedSearchDebugResponse {
+  return r != null && 'mode' in r && r.mode === 'unified'
+}
 
 export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }: {
   folder: string | null; docId: string | null; tags: string[]
@@ -19,7 +24,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
 
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<SearchDebugResponse | null>(null)
+  const [result, setResult] = useState<SearchDebugResponse | UnifiedSearchDebugResponse | null>(null)
   const [error, setError] = useState('')
   const [expandedPreviews, setExpandedPreviews] = useState<Record<string, boolean>>({})
   const [resultTab, setResultTab] = useState<string>('rewrite')
@@ -28,7 +33,7 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   const [saving, setSaving] = useState(false)
   const [showAll, setShowAll] = useState(true)
   const [queryFilter, setQueryFilter] = useState<number>(-1) // -1=汇总, 0..N-1=按改写 query 筛选
-  const [forcePath, setForcePath] = useState<'auto' | 'doc' | 'sql'>('auto')
+  const [forcePath, setForcePath] = useState<'unified' | 'doc' | 'sql'>('unified')
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Check for pre-fetched data from chat (sessionStorage)
@@ -79,8 +84,11 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
     try {
       const res = await searchDebug(searchQuery, folder, tags, docId, undefined, forcePath)
       setResult(res)
-      // 切到 SQL 路径时重置 tab
-      if (res.query_type === 'sql_query') {
+      // [UNIFIED] 统一流程模式不需要切 tab（直接展示 steps 列表）
+      // doc/sql 模式：切到 SQL 路径时重置 tab
+      if ('mode' in res && res.mode === 'unified') {
+        setResultTab('trace')
+      } else if (res.query_type === 'sql_query') {
         setResultTab('sql')
       }
     } catch (err) {
@@ -145,12 +153,13 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
   else if (folder) filterInfo.push(`文件夹: ${folder}`)
   if (tags.length) filterInfo.push(`标签: ${tags.join(', ')}`)
   if (!docId && !folder && !tags.length) filterInfo.push('全部文档')
-  const denseUpToThreshold = result?.stages?.dense_top5 ? result.stages.dense_top5.filter(c => (c.score ?? 0) >= (result.dense_threshold || result.threshold)).length : 0
+  // [UNIFIED] 统一流程模式无 stages/dense_threshold 等字段，doc/sql 模式才计算
+  const docResult = !isUnifiedResult(result) ? result : null
   // Dense 召回去重并集 chunk 数：multi 模式用后端计算的 dense_union_count（所有 Q 完整召回去重）；
   // 单 query 模式取 dense_top5.length
-  const denseUnionCount = result?.multi_query
-    ? (result.dense_union_count ?? 0)
-    : (result?.stages?.dense_top5?.length ?? 0)
+  const denseUnionCount = docResult?.multi_query
+    ? (docResult.dense_union_count ?? 0)
+    : (docResult?.stages?.dense_top5?.length ?? 0)
 
   return (
     <Card className="p-4 text-sm h-full flex flex-col min-h-0">
@@ -190,11 +199,11 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
             />
             <select
               value={forcePath}
-              onChange={(e) => setForcePath(e.target.value as 'auto' | 'doc' | 'sql')}
+              onChange={(e) => setForcePath(e.target.value as 'unified' | 'doc' | 'sql')}
               className="text-xs border rounded px-1.5 py-1 bg-background"
-              title="强制检索路径：auto=按 query_type 自动判断；doc=文本 RAG；sql=NL2SQL"
+              title="调试模式：unified=复用主工作流完整流程；doc=仅文本 RAG 独立调用；sql=仅 NL2SQL 独立调用"
             >
-              <option value="auto">自动</option>
+              <option value="unified">统一流程</option>
               <option value="doc">文本RAG</option>
               <option value="sql">NL2SQL</option>
             </select>
@@ -208,7 +217,13 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
           </div>
           {error && <p className="text-xs text-destructive mt-2">{error}</p>}
 
-          {result && (
+          {/* [UNIFIED] 统一流程模式：展示完整执行轨迹（与 chat 流程一致） */}
+          {result && isUnifiedResult(result) && (
+            <UnifiedTraceView result={result} />
+          )}
+
+          {/* doc / sql 调试模式：原有 stages/sql_debug 渲染 */}
+          {result && !isUnifiedResult(result) && (
             <div className="mt-3 flex-1 min-h-0 flex flex-col space-y-3">
               {/* 第一行：可编辑配置项（点击数值修改） */}
               <div className="flex items-center gap-3 text-sm bg-muted/30 rounded p-2 flex-wrap flex-none">
@@ -646,6 +661,438 @@ export function SearchDebugPanel({ folder, docId, tags, folderTree, tagFilter }:
       </div>
     </Card>
   )
+}
+
+// ── [UNIFIED] 统一流程轨迹视图：展示完整执行轨迹（与 chat 流程一致） ──
+
+const NODE_ICON: Record<string, typeof Brain> = {
+  query_router: Brain,
+  retrieval_agent: Search,
+  lightrag_agent: GitGraph,
+  graph_agent: GitGraph,
+  sql_agent: Database,
+  answer_generator: MessageSquare,
+  chitchat: MessageSquare,
+}
+
+const NODE_COLOR: Record<string, string> = {
+  query_router: 'text-blue-500',
+  retrieval_agent: 'text-cyan-500',
+  lightrag_agent: 'text-purple-500',
+  graph_agent: 'text-purple-500',
+  sql_agent: 'text-indigo-500',
+  answer_generator: 'text-emerald-500',
+  chitchat: 'text-amber-500',
+}
+
+function UnifiedTraceView({ result }: { result: UnifiedSearchDebugResponse }) {
+  const [expandedSteps, setExpandedSteps] = useState<Record<number, boolean>>({})
+  const [expandedDocs, setExpandedDocs] = useState<Record<string, boolean>>({})
+
+  const toggleStep = (i: number) => setExpandedSteps(prev => ({ ...prev, [i]: !prev[i] }))
+  const toggleDoc = (key: string) => setExpandedDocs(prev => ({ ...prev, [key]: !prev[key] }))
+
+  // 找到最终答案步（最后一个非 intermediate 的 answer_generator 或 chitchat）
+  const finalStep = [...result.steps].reverse().find(s =>
+    (s.node === 'answer_generator' && !s.intermediate) || s.node === 'chitchat'
+  )
+  // [TYPEFIX] finalStep.result 是 Record<string, unknown>，需预先转为 string 避免 unknown 泄漏到 JSX
+  const finalAnswerText = finalStep ? String(finalStep.result.final_answer || finalStep.result.answer || '') : ''
+
+  return (
+    <div className="mt-3 flex-1 min-h-0 flex flex-col space-y-3">
+      {/* 顶部摘要：query_type / sql_triggered / retrieval_path / error */}
+      <div className="flex items-center gap-2 text-xs flex-wrap flex-none bg-muted/30 rounded p-2">
+        <Badge variant="outline" className="text-xs font-mono">query_type: {result.query_type}</Badge>
+        {result.sql_triggered ? (
+          <Badge variant="default" className="text-xs bg-indigo-500 hover:bg-indigo-500">
+            <Zap className="h-3 w-3 mr-1" />SQL Tool Call 已触发
+          </Badge>
+        ) : (
+          <Badge variant="secondary" className="text-xs">未触发 SQL</Badge>
+        )}
+        {result.retrieval_path && (
+          <Badge variant="outline" className="text-xs">retrieval_path: {result.retrieval_path}</Badge>
+        )}
+        <span className="text-muted-foreground">|</span>
+        <span className="text-muted-foreground">共 {result.steps.length} 步</span>
+        {result.error && (
+          <span className="text-destructive">错误: {result.error}</span>
+        )}
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-0">
+        {result.steps.map((step, i) => {
+          const Icon = NODE_ICON[step.node] || MessageSquare
+          const color = NODE_COLOR[step.node] || 'text-muted-foreground'
+          const isSqlTrigger = step.node === 'answer_generator' && step.intermediate && step.result.rerouted_to_sql === true
+          const isIntermediate = step.intermediate
+          const hasDetail = hasStepDetail(step)
+          const isLast = i === result.steps.length - 1
+
+          return (
+            <div key={i} className="relative pl-6 pb-3">
+              {/* 时间线竖线（除最后一个外） */}
+              {!isLast && (
+                <div className="absolute left-[11px] top-6 bottom-0 w-px bg-border" />
+              )}
+              {/* 时间线圆点 */}
+              <div className={`absolute left-1 top-1 w-5 h-5 rounded-full flex items-center justify-center bg-background border-2 ${step.status === 'error' ? 'border-red-400' : isSqlTrigger ? 'border-amber-400' : 'border-border'}`}>
+                <Icon className={`h-3 w-3 ${color}`} />
+              </div>
+
+              {/* 步骤卡片 */}
+              <div className={`rounded border p-2 ${step.status === 'error' ? 'border-red-300 bg-red-50 dark:bg-red-950/10' : isSqlTrigger ? 'border-amber-300 bg-amber-50 dark:bg-amber-950/10' : isIntermediate ? 'border-muted-foreground/30 bg-muted/20' : 'border-border bg-card'}`}>
+                {/* 第一行：节点名 + 状态 */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-medium text-sm">{step.label}</span>
+                  <span className="text-xs text-muted-foreground font-mono">{step.node}</span>
+                  <span className="text-xs text-muted-foreground">— {step.detail}</span>
+                  {step.status === 'error' ? (
+                    <Badge variant="destructive" className="text-[10px] ml-auto">错误</Badge>
+                  ) : (
+                    <Badge variant="secondary" className="text-[10px] ml-auto">done</Badge>
+                  )}
+                  {isSqlTrigger && (
+                    <Badge variant="outline" className="text-[10px] bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-400">
+                      <Zap className="h-2.5 w-2.5 mr-0.5" />条件触发 SQL
+                    </Badge>
+                  )}
+                  {isIntermediate && !isSqlTrigger && (
+                    <Badge variant="outline" className="text-[10px] bg-muted">中间态</Badge>
+                  )}
+                </div>
+
+                {/* 第二行：节点摘要（始终展示） */}
+                <StepSummary step={step} />
+
+                {/* 错误信息 */}
+                {step.error && (
+                  <p className="text-xs text-destructive mt-1">{step.error}</p>
+                )}
+
+                {/* 可展开详情 */}
+                {hasDetail && (
+                  <button
+                    onClick={() => toggleStep(i)}
+                    className="text-xs text-primary/70 hover:text-primary mt-1"
+                  >
+                    {expandedSteps[i] ? '收起详情' : '展开详情'}
+                  </button>
+                )}
+                {expandedSteps[i] && hasDetail && (
+                  <StepDetail step={step} expandedDocs={expandedDocs} onToggleDoc={toggleDoc} />
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* 最终答案 */}
+      {finalStep && finalAnswerText && (
+        <div className="flex-none border rounded p-3 bg-emerald-50 dark:bg-emerald-950/10 border-emerald-200 dark:border-emerald-800">
+          <div className="flex items-center gap-1.5 mb-1">
+            <MessageSquare className="h-3.5 w-3.5 text-emerald-600" />
+            <span className="text-xs font-medium text-emerald-700 dark:text-emerald-300">最终答案</span>
+          </div>
+          <p className="text-sm whitespace-pre-wrap break-all">
+            {finalAnswerText}
+          </p>
+          {result.citations.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              <span className="text-xs text-muted-foreground">引用:</span>
+              {result.citations.map((c, i) => (
+                <Badge key={i} variant="outline" className="text-[10px] font-mono">{c}</Badge>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// 判断步骤是否有可展开详情
+function hasStepDetail(step: UnifiedDebugStep): boolean {
+  const r = step.result
+  if (step.node === 'query_router') return false
+  if (step.node === 'retrieval_agent' || step.node === 'lightrag_agent') {
+    return Array.isArray(r.documents) && r.documents.length > 0
+  }
+  if (step.node === 'sql_agent') {
+    return !!(r.sql_query || (Array.isArray(r.sql_recalled_sheets) && r.sql_recalled_sheets.length > 0) || (Array.isArray(r.sql_result_rows) && r.sql_result_rows.length > 0))
+  }
+  if (step.node === 'answer_generator') {
+    return !!(r.answer || r.final_answer)
+  }
+  if (step.node === 'chitchat') {
+    return !!r.answer
+  }
+  if (step.node === 'graph_agent') {
+    return !!(r.graph_context || (Array.isArray(r.graph_entities) && r.graph_entities.length > 0))
+  }
+  return false
+}
+
+// 步骤摘要（始终展示的单行关键信息）
+function StepSummary({ step }: { step: UnifiedDebugStep }): ReactNode {
+  const r = step.result
+  if (step.node === 'query_router') {
+    return (
+      <div className="text-xs text-muted-foreground mt-0.5">
+        query_type: <span className="font-mono text-foreground">{String(r.query_type ?? '')}</span>
+        {r.confidence != null && <> · confidence: <span className="font-mono text-foreground">{Number(r.confidence).toFixed(3)}</span></>}
+        {r.graph_eligible === true && <Badge variant="outline" className="text-[10px] ml-1">graph_eligible</Badge>}
+      </div>
+    )
+  }
+  if (step.node === 'retrieval_agent' || step.node === 'lightrag_agent') {
+    const count = Number(r.count ?? 0)
+    const hasExcel = r.has_excel_sheet === true
+    const path = typeof r.retrieval_path === 'string' ? r.retrieval_path : ''
+    return (
+      <div className="text-xs text-muted-foreground mt-0.5">
+        召回 <span className="font-mono font-semibold text-foreground">{count}</span> 条
+        {path ? <> · path: <span className="font-mono text-foreground">{path}</span></> : null}
+        {hasExcel && <Badge variant="outline" className="text-[10px] ml-1 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 border-indigo-300">含 excel_sheet</Badge>}
+      </div>
+    )
+  }
+  if (step.node === 'sql_agent') {
+    const rowCount = Number(r.sql_result_row_count ?? 0)
+    const sheetName = r.sql_sheet_name ? String(r.sql_sheet_name) : ''
+    const hasSql = !!r.sql_query
+    const err = r.sql_error ? String(r.sql_error) : ''
+    const fallback = r.sql_fallback_reason ? String(r.sql_fallback_reason) : ''
+    return (
+      <div className="text-xs text-muted-foreground mt-0.5">
+        {hasSql ? (
+          <>
+            {sheetName && <>sheet: <span className="font-mono text-foreground">{sheetName}</span> · </>}
+            结果 <span className={`font-mono font-semibold ${rowCount === 0 ? 'text-red-500' : 'text-foreground'}`}>{rowCount}</span> 行
+          </>
+        ) : (
+          <span className="text-red-500">未生成 SQL</span>
+        )}
+        {err && <span className="text-red-400 ml-1">— {err}</span>}
+        {fallback && <span className="text-red-400 ml-1">— {fallback}</span>}
+      </div>
+    )
+  }
+  if (step.node === 'answer_generator') {
+    const iter = r.iteration != null ? Number(r.iteration) : null
+    const isIntermediate = step.intermediate
+    return (
+      <div className="text-xs text-muted-foreground mt-0.5">
+        {iter != null && <>iteration: <span className="font-mono text-foreground">{iter}</span></>}
+        {isIntermediate && <span className="text-amber-600 ml-1">· 信息不足中间态</span>}
+        {r.rerouted_to_sql === true && <span className="text-amber-600 ml-1">· 将触发 SQL Tool Call</span>}
+      </div>
+    )
+  }
+  if (step.node === 'chitchat') {
+    return <div className="text-xs text-muted-foreground mt-0.5">直接 LLM 回答（无检索）</div>
+  }
+  if (step.node === 'graph_agent') {
+    const entities = Array.isArray(r.graph_entities) ? r.graph_entities.length : 0
+    return (
+      <div className="text-xs text-muted-foreground mt-0.5">
+        实体: <span className="font-mono text-foreground">{entities}</span>
+      </div>
+    )
+  }
+  return null
+}
+
+// 步骤详情（展开后内容）
+function StepDetail({ step, expandedDocs, onToggleDoc }: {
+  step: UnifiedDebugStep
+  expandedDocs: Record<string, boolean>
+  onToggleDoc: (key: string) => void
+}): ReactNode {
+  const r = step.result
+
+  if (step.node === 'retrieval_agent' || step.node === 'lightrag_agent') {
+    const docs = Array.isArray(r.documents) ? r.documents as Array<Record<string, unknown>> : []
+    return (
+      <div className="mt-2 space-y-1">
+        <div className="text-xs font-medium text-muted-foreground">召回文档 (前 {Math.min(docs.length, 10)} 条)</div>
+        {docs.slice(0, 10).map((d, i) => {
+          const chunkId = String(d.chunk_id ?? '')
+          const filename = String(d.filename ?? d.doc_id ?? '')
+          const score = d.score != null ? Number(d.score) : null
+          const text = String((d.text ?? d.text_preview ?? '') as string).slice(0, 300)
+          const docKey = `${step.node}-${i}`
+          const meta = d.metadata as Record<string, unknown> | undefined
+          const source = meta?.source ? String(meta.source) : ''
+          return (
+            <div key={i} className="rounded border border-border bg-muted/20 p-1.5">
+              <div className="flex items-center gap-1.5">
+                <span className="text-primary font-semibold text-xs">[{i + 1}]</span>
+                <span className="text-xs font-medium">{filename}</span>
+                {source && <Badge variant="outline" className="text-[10px]">{source}</Badge>}
+                {score != null && <span className="ml-auto font-mono text-xs shrink-0">score: {score.toFixed(4)}</span>}
+              </div>
+              <div className="text-xs text-muted-foreground font-mono truncate" title={chunkId}>{chunkId}</div>
+              {text && (
+                <>
+                  <button onClick={() => onToggleDoc(docKey)} className="text-xs text-primary/70 hover:text-primary">
+                    {expandedDocs[docKey] ? '收起' : '展开'}文本
+                  </button>
+                  {expandedDocs[docKey] && (
+                    <p className="mt-0.5 text-xs text-muted-foreground whitespace-pre-wrap break-all">{text}</p>
+                  )}
+                </>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  if (step.node === 'sql_agent') {
+    const sql = r.sql_query ? String(r.sql_query) : ''
+    const cols = Array.isArray(r.sql_result_columns) ? r.sql_result_columns as string[] : []
+    const rows = Array.isArray(r.sql_result_rows) ? r.sql_result_rows as unknown[][] : []
+    const recalled = Array.isArray(r.sql_recalled_sheets) ? r.sql_recalled_sheets as Array<Record<string, unknown>> : []
+    const attempts = Array.isArray(r.sql_attempts) ? r.sql_attempts as Array<Record<string, unknown>> : []
+
+    return (
+      <div className="mt-2 space-y-2">
+        {/* 召回 Sheet 列表 */}
+        {recalled.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-1">召回 Sheet ({recalled.length})</div>
+            <div className="space-y-0.5">
+              {recalled.slice(0, 10).map((s, i) => {
+                const sm = (s.sheet_meta ?? s) as Record<string, unknown>
+                const sheetName = String(sm.sheet_name ?? '')
+                const score = s.score != null ? Number(s.score) : 0
+                const selected = s.selected === true
+                return (
+                  <div key={i} className="text-xs flex items-center gap-1.5">
+                    <span className="font-mono">#{i + 1}</span>
+                    <span className="font-mono">{sheetName}</span>
+                    <Badge variant="secondary" className="text-[10px] font-mono">{score.toFixed(3)}</Badge>
+                    {selected && <Badge variant="default" className="text-[10px]">已选</Badge>}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* SQL 语句 */}
+        {sql && (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-1">执行的 SQL</div>
+            <pre className="text-xs font-mono p-2 bg-muted/30 rounded whitespace-pre-wrap break-all">{sql}</pre>
+          </div>
+        )}
+
+        {/* 结果预览（前 5 行） */}
+        {sql && rows.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-1">
+              结果预览 (前 {Math.min(rows.length, 5)} 行 / 共 {Number(r.sql_result_row_count ?? rows.length)} 行)
+            </div>
+            <div className="overflow-x-auto border rounded">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/30">
+                  <tr>
+                    <th className="px-2 py-1 text-left font-mono">#</th>
+                    {cols.map((c, i) => (
+                      <th key={i} className="px-2 py-1 text-left font-mono">{c}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, 5).map((row, i) => (
+                    <tr key={i} className="border-t">
+                      <td className="px-2 py-1 text-muted-foreground font-mono">{i + 1}</td>
+                      {Array.isArray(row) ? row.map((cell, j) => (
+                        <td key={j} className="px-2 py-1 font-mono">{String(cell ?? '')}</td>
+                      )) : <td className="px-2 py-1">{String(row ?? '')}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        {sql && rows.length === 0 && (
+          <div className="text-xs text-muted-foreground">(空结果)</div>
+        )}
+
+        {/* 重试历史 */}
+        {attempts.length > 1 && (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-1">重试历史 ({attempts.length} 次)</div>
+            <div className="space-y-0.5">
+              {attempts.map((a, i) => (
+                <div key={i} className="text-xs">
+                  <span className="font-mono">第 {String(a.attempt ?? i + 1)} 次:</span>
+                  {a.error ? <span className="text-destructive ml-1">{String(a.error)}</span> : <span className="text-green-600 ml-1">成功 (rows={String(a.row_count ?? 0)})</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (step.node === 'answer_generator' || step.node === 'chitchat') {
+    const answer = String(r.final_answer || r.answer || '')
+    const citations = Array.isArray(r.citations) ? r.citations as string[] : []
+    return (
+      <div className="mt-2 space-y-1">
+        {answer && (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-1">
+              {step.intermediate ? '中间态答案（信息不足）' : '答案'}
+            </div>
+            <p className="text-xs whitespace-pre-wrap break-all bg-muted/20 rounded p-2">{answer}</p>
+          </div>
+        )}
+        {citations.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            <span className="text-xs text-muted-foreground">引用:</span>
+            {citations.map((c, i) => (
+              <Badge key={i} variant="outline" className="text-[10px] font-mono">{c}</Badge>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (step.node === 'graph_agent') {
+    const ctx = r.graph_context ? String(r.graph_context) : ''
+    const entities = Array.isArray(r.graph_entities) ? r.graph_entities as string[] : []
+    return (
+      <div className="mt-2 space-y-1">
+        {entities.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            <span className="text-xs text-muted-foreground">实体:</span>
+            {entities.slice(0, 20).map((e, i) => (
+              <Badge key={i} variant="outline" className="text-[10px]">{e}</Badge>
+            ))}
+          </div>
+        )}
+        {ctx && (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-1">graph_context (前 500 字)</div>
+            <p className="text-xs whitespace-pre-wrap break-all bg-muted/20 rounded p-2">{ctx.slice(0, 500)}</p>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return null
 }
 
 function SqlDebugView({ sqlDebug }: { sqlDebug: import('@/lib/api').SqlDebug }) {

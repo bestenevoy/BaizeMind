@@ -2,8 +2,10 @@
 
 从 management.py 拆分而来，统一挂在 /api/v1/system 前缀下。
 
-支持混合 pipeline：先判断 query_type，sql_query 走 NL2SQL 检索路径，
-其他走文本 RAG（HybridRetriever）。前端按 query_type 分支渲染。
+[UNIFIED] 三种调试模式：
+- unified (默认): 复用主工作流 astream，展示完整执行轨迹（统一召回→条件触发SQL Tool Call）
+- doc: 仅文本 RAG 调试（HybridRetriever 独立调用，不经过 LangGraph）
+- sql: 仅 NL2SQL 调试（ExcelQA.retrieve 独立调用，不经过 LangGraph）
 """
 import logging
 
@@ -25,9 +27,11 @@ class SearchDebugRequest(BaseModel):
     tags: list[str] | None = None
     doc_id: str | None = None
     top_k: int | None = None
-    # 强制指定检索路径："auto"(默认) / "doc" / "sql"
-    # auto = 走 query_router 自动判断；doc = 强制文本 RAG；sql = 强制 NL2SQL
-    force_path: str | None = "auto"
+    # [UNIFIED] 调试模式："unified"(默认) / "doc" / "sql"
+    # unified = 复用主工作流 astream，展示完整执行轨迹
+    # doc = 仅文本 RAG 调试（独立调用 HybridRetriever）
+    # sql = 仅 NL2SQL 调试（独立调用 ExcelQA.retrieve）
+    force_path: str | None = "unified"
 
 
 def _empty_doc_debug(query: str, message: str = "") -> dict:
@@ -130,6 +134,154 @@ def _run_sql_debug(query: str, folder, tags) -> dict:
         return resp
 
 
+async def _run_unified_debug(query: str, folder: str | None, tags: list[str] | None,
+                              doc_id: str | None) -> dict:
+    """[UNIFIED] 复用主工作流 astream，收集完整执行轨迹。
+
+    与 chat 路由的区别：
+    - chat 是 SSE 流式返回，前端实时渲染；本函数同步收集所有事件后一次性返回
+    - 保留 intermediate=True 的 answer_generator 事件（展示"信息不足"中间状态）
+    - 保留所有原始 debug 数据（search_debug_data, retrieval_debug 等）
+
+    返回 UnifiedSearchDebugResponse 结构，包含：
+    - steps: 所有节点执行的完整轨迹
+    - sql_triggered: 是否触发了 SQL Tool Call
+    - final_answer / citations / retrieval_path
+    """
+    from src.agents.workflow import get_workflow
+
+    doc_ids = [doc_id] if doc_id else None
+    workflow = get_workflow()
+
+    steps: list[dict] = []
+    final_answer = ""
+    citations: list[str] = []
+    retrieval_path = ""
+    query_type = "simple_fact"
+    sql_triggered = False
+
+    NODE_LABELS = {
+        "query_router": ("查询路由", "语义意图分类"),
+        "retrieval_agent": ("混合检索", "统一召回: doc+table+sheet 同库"),
+        "lightrag_agent": ("LightRAG 检索", "实体→关系→图谱→chunk"),
+        "graph_agent": ("图谱扩展", "LLM NER + Neo4j expand"),
+        "sql_agent": ("SQL Tool Call", "条件触发: NL2SQL → 执行"),
+        "answer_generator": ("答案生成", "生成 + 自检（合并 validator）"),
+        "chitchat": ("闲聊直答", "直接 LLM，无检索"),
+    }
+
+    try:
+        async for event in workflow.astream(query, folder=folder, tags=tags, doc_ids=doc_ids):
+            if not isinstance(event, dict) or not event:
+                continue
+            (node_name, node_output), = event.items()
+            label, detail_label = NODE_LABELS.get(node_name, (node_name, node_name))
+
+            step = {
+                "node": node_name,
+                "label": label,
+                "detail": detail_label,
+                "status": "error" if node_output.get("error") else "done",
+                "error": node_output.get("error", ""),
+                "intermediate": node_output.get("intermediate", False),
+                "result": {},
+            }
+
+            # 收集各节点关键输出（保留原始 debug 数据，不截断）
+            if node_name == "query_router":
+                query_type = node_output.get("query_type", "simple_fact")
+                step["result"] = {
+                    "query_type": query_type,
+                    "confidence": node_output.get("confidence", 0.0),
+                    "graph_eligible": node_output.get("graph_eligible", False),
+                }
+            elif node_name in ("retrieval_agent", "lightrag_agent"):
+                docs = node_output.get("documents", [])
+                retrieval_path = node_output.get("retrieval_path", "")
+                has_excel = any(
+                    (d.get("metadata", {}) or {}).get("source") == "excel_sheet"
+                    or (d.get("chunk_id", "") or "").startswith("excel:")
+                    for d in docs if isinstance(d, dict)
+                )
+                step["result"] = {
+                    "count": len(docs),
+                    "retrieval_path": retrieval_path,
+                    "has_excel_sheet": has_excel,
+                    "search_debug_data": node_output.get("search_debug_data"),
+                    "documents": docs[:10],
+                }
+            elif node_name == "sql_agent":
+                sql_triggered = True
+                retrieval_path = node_output.get("retrieval_path", "")
+                retrieval_debug = node_output.get("retrieval_debug", {}) or {}
+                docs = node_output.get("documents", [])
+                step["result"] = {
+                    "count": len(docs),
+                    "retrieval_path": retrieval_path,
+                    "rerouted_to_sql": node_output.get("rerouted_to_sql", True),
+                    "sql_query": retrieval_debug.get("sql_query", ""),
+                    "sql_sheet_name": retrieval_debug.get("sql_sheet_name", ""),
+                    "sql_result_row_count": retrieval_debug.get("sql_result_row_count", 0),
+                    "sql_result_columns": retrieval_debug.get("sql_result_columns", []),
+                    "sql_result_rows": retrieval_debug.get("sql_result_rows", []),
+                    "sql_recalled_sheets": retrieval_debug.get("sql_recalled_sheets", []),
+                    "sql_attempts": retrieval_debug.get("sql_attempts", []),
+                    "sql_error": retrieval_debug.get("sql_error", ""),
+                    "sql_fallback_reason": retrieval_debug.get("sql_fallback_reason", ""),
+                    "documents": docs[:10],
+                }
+            elif node_name == "answer_generator":
+                answer = node_output.get("final_answer", node_output.get("draft_answer", ""))
+                if not node_output.get("intermediate", False):
+                    final_answer = answer
+                    citations = node_output.get("citations", [])
+                step["result"] = {
+                    "answer": answer,
+                    "final_answer": answer,
+                    "citations": node_output.get("citations", []),
+                    "iteration": node_output.get("iteration", 0),
+                    "intermediate": node_output.get("intermediate", False),
+                    "rerouted_to_sql": node_output.get("rerouted_to_sql", False),
+                }
+            elif node_name == "chitchat":
+                final_answer = node_output.get("final_answer", "")
+                step["result"] = {"answer": final_answer}
+            elif node_name == "graph_agent":
+                step["result"] = {
+                    "graph_context": node_output.get("graph_context", "")[:500],
+                    "graph_entities": node_output.get("graph_entities", []),
+                    "sub_queries": node_output.get("sub_queries", []),
+                }
+
+            steps.append(step)
+
+    except Exception as e:
+        logger.error("unified debug failed: %s", e, exc_info=True)
+        return {
+            "query": query,
+            "mode": "unified",
+            "query_type": query_type,
+            "steps": steps,
+            "sql_triggered": sql_triggered,
+            "final_answer": final_answer or f"调试失败: {e}",
+            "citations": citations,
+            "retrieval_path": retrieval_path,
+            "error": str(e),
+        }
+
+    return {
+        "query": query,
+        "mode": "unified",
+        "query_type": query_type,
+        "steps": steps,
+        "sql_triggered": sql_triggered,
+        "final_answer": final_answer,
+        "citations": citations,
+        "retrieval_path": retrieval_path,
+        "error": "",
+    }
+
+
 @router.post("/search")
 async def search_debug(body: SearchDebugRequest, current: User = Depends(get_current_user_optional)):
     enforce_guest_query_limit(body.query, current)
@@ -138,18 +290,19 @@ async def search_debug(body: SearchDebugRequest, current: User = Depends(get_cur
     # 这样编辑 hybrid_top_k 能直接影响 Rerank 数量与最终输出
     top_k = body.top_k if body.top_k is not None else settings.hybrid_top_k
 
-    # ── 混合 pipeline：按 query_type 分流 ──
-    force_path = (body.force_path or "auto").lower()
-    query_type = "simple_fact"
-    if force_path == "sql":
-        query_type = "sql_query"
-    elif force_path == "doc":
-        query_type = "simple_fact"
-    else:  # auto
-        query_type = _classify_query_type(query)
+    # [UNIFIED] 三种调试模式分流
+    force_path = (body.force_path or "unified").lower()
 
-    if query_type == "sql_query":
+    # unified 模式：复用主工作流 astream，展示完整执行轨迹
+    if force_path == "unified":
+        return await _run_unified_debug(query, body.folder, body.tags, body.doc_id)
+
+    # sql 模式：仅 NL2SQL 调试（独立调用 ExcelQA.retrieve）
+    if force_path == "sql":
         return _run_sql_debug(query, body.folder, body.tags)
+
+    # doc 模式：仅文本 RAG 调试（独立调用 HybridRetriever）
+    query_type = "simple_fact"
 
     # ── 文本 RAG 路径 ──
     doc_ids = None
