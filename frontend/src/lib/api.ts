@@ -42,6 +42,8 @@ export interface RetrievedDoc {
   dense_score?: number | null
   bm25_score?: number | null
   filename?: string
+  sheet_name?: string
+  source_type?: string
 }
 
 export interface QAResponse {

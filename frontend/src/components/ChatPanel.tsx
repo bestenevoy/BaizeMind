@@ -116,6 +116,8 @@ export function ChatPanel({ folder, docId, tags }: ChatPanelProps) {
               dense_score: d.dense_score as number | null | undefined,
               bm25_score: d.bm25_score as number | null | undefined,
               filename: d.filename as string | undefined,
+              sheet_name: d.sheet_name as string | undefined,
+              source_type: d.source_type as string | undefined,
             }))
             // 合并 + 按 chunk_id 去重（retrieval_agent 和 sql_agent 的 documents 都保留，但去重）
             const merged = [...retrievedDocs]

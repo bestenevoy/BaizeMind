@@ -130,6 +130,7 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                         rs = d.get("rerank_score")
                         ds = d.get("dense_score")
                         bs = d.get("bm25_score")
+                        meta = d.get("metadata", {}) or {}
                         doc_items.append({
                             "doc_id": did,
                             "chunk_id": d.get("chunk_id", "?"),
@@ -139,6 +140,8 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                             "dense_score": ds if isinstance(ds, (int, float)) else None,
                             "bm25_score": bs if isinstance(bs, (int, float)) else None,
                             "filename": doc_name_cache[did],
+                            "sheet_name": meta.get("sheet_name", ""),
+                            "source_type": meta.get("source", d.get("source_type", "")),
                         })
                     payload["result"] = {
                         "count": len(docs),
@@ -157,6 +160,7 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                         rs = d.get("rerank_score")
                         ds = d.get("dense_score")
                         bs = d.get("bm25_score")
+                        meta = d.get("metadata", {}) or {}
                         doc_items.append({
                             "doc_id": did,
                             "chunk_id": d.get("chunk_id", "?"),
@@ -166,6 +170,8 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                             "dense_score": ds if isinstance(ds, (int, float)) else None,
                             "bm25_score": bs if isinstance(bs, (int, float)) else None,
                             "filename": doc_name_cache[did],
+                            "sheet_name": meta.get("sheet_name", ""),
+                            "source_type": meta.get("source", d.get("source_type", "")),
                         })
                     payload["result"] = {
                         "count": len(docs),
@@ -185,13 +191,17 @@ async def ask_stream(request: QARequest, current: User = Depends(get_current_use
                         if did not in doc_name_cache:
                             doc = get_document(did)
                             doc_name_cache[did] = doc["filename"] if doc else did
+                        meta = d.get("metadata", {}) or {}
                         doc_items.append({
                             "doc_id": did,
                             "chunk_id": d.get("chunk_id", "?"),
                             "text": d.get("text", "")[:300],
                             "score": d.get("score", 0.0) if isinstance(d.get("score"), (int, float)) else 0.0,
                             "filename": doc_name_cache[did],
-                            "source_type": d.get("source_type", ""),
+                            # sql_agent 的 doc 直接有 sheet_name 字段（_format_sql_result_as_document 注入）；
+                            # retrieval_agent 的 excel_sheet chunk 在 metadata.sheet_name
+                            "sheet_name": d.get("sheet_name", "") or meta.get("sheet_name", ""),
+                            "source_type": d.get("source_type", "") or meta.get("source", ""),
                         })
                     result = {
                         "count": len(docs),

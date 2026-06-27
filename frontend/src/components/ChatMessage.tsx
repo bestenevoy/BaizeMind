@@ -184,6 +184,8 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
       dense_score: (typeof d.dense_score === 'number' ? d.dense_score : null) as number | null,
       bm25_score: (typeof d.bm25_score === 'number' ? d.bm25_score : null) as number | null,
       filename: d.filename as string | undefined,
+      sheet_name: d.sheet_name as string | undefined,
+      source_type: d.source_type as string | undefined,
     }))
   }, [message.retrieved_docs, message.steps])
 
@@ -346,11 +348,19 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
           <div className="flex flex-wrap gap-1 mt-1">
             {message.citations.slice(0, 5).map((cit, i) => {
               const doc = effectiveDocs?.[i]
-              // 显示优先级：filename > doc_id > 原始 cit 中的 doc_id
+              // 显示优先级：filename + sheet_name > doc_id
               // 避免显示 "af187512-9f9/excel:xxx" 这种截断 UUID 形式
-              const displayRef = doc
-                ? `[${i + 1}] ${doc.filename || doc.doc_id}/${doc.chunk_id}`
-                : cit
+              let displayRef: string
+              if (doc) {
+                const parts: string[] = [`[${i + 1}]`]
+                if (doc.filename) parts.push(doc.filename)
+                if (doc.sheet_name) parts.push(`· ${doc.sheet_name}`)
+                // 没有 filename 时回退到 doc_id
+                if (!doc.filename) parts.push(doc.doc_id)
+                displayRef = parts.join(' ')
+              } else {
+                displayRef = cit
+              }
               return (
                 <Badge
                   key={i}
@@ -395,6 +405,11 @@ export function ChatMessage({ message, userQuery }: { message: Message; userQuer
                     <div className="flex items-center gap-1 text-muted-foreground mb-1">
                       <FileText className="h-3 w-3" />
                       <span className="truncate">{doc.filename || doc.doc_id}</span>
+                      {doc.sheet_name && (
+                        <Badge variant="secondary" className="text-[10px] font-mono shrink-0">
+                          {doc.sheet_name}
+                        </Badge>
+                      )}
                       <span className="ml-auto shrink-0 flex items-center gap-1.5 text-xs font-mono tabular-nums">
                         {doc.rerank_score != null && <span className="text-primary/80">rerank:{doc.rerank_score.toFixed(3)}</span>}
                         {doc.dense_score != null && <span>dense:{doc.dense_score.toFixed(3)}</span>}
