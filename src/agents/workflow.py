@@ -117,14 +117,9 @@ def _format_sql_result_as_document(
     与文本 RAG 的 chunk document 同构，便于统一评估与引用溯源。
     """
     columns = sheet_meta.get("columns", []) or []
-    schema_lines = []
-    for c in columns:
-        if isinstance(c, dict):
-            display_name = c.get("display_name", "")
-            column_name = c.get("column_name", "")
-            ctype = c.get("data_type", "TEXT")
-            schema_lines.append(f"- {column_name} ({ctype}): {display_name}")
-    schema_text = "\n".join(schema_lines) if schema_lines else "(no schema)"
+    # 列结构格式化委托给 store.format_columns_for_llm（全系统唯一规范格式）
+    from src.excel_rag.store import format_columns_for_llm
+    schema_text = format_columns_for_llm(columns) if columns else "(no schema)"
 
     # 结果行格式化
     result_cols = sql_result.get("columns", []) if isinstance(sql_result, dict) else []

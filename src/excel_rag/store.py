@@ -163,6 +163,36 @@ def _normalize_columns(columns: list[dict[str, Any]]) -> list[dict[str, str]]:
     return out
 
 
+def format_columns_for_llm(columns: list[dict[str, str]]) -> str:
+    """把列结构格式化为 LLM 可读的 markdown 表格（全系统唯一规范格式）。
+
+    输出格式（表头即字段标签，自文档化，无需在 prompt 中解释字段位置）：
+
+        | column_name | data_type | display_name |
+        |-------------|-----------|--------------|
+        | segment     | TEXT      | Segment      |
+        | sales_amount| REAL      | 销售额        |
+
+    设计原则：
+    - column_name 放第一列：SQL 生成的核心标识符，LLM 直接看首列即可
+    - data_type 放第二列：类型判断紧随其后
+    - display_name 放第三列：人类可读名，仅用于理解用户问题指向的字段
+    - 表头与 EXCEL_SUMMARY_SYSTEM 输出的 JSON 字段名一致，生成与消费同源
+
+    所有 LLM-facing 的列结构拼接（NL2SQL / answer 生成 / 检索上下文 / chunk text）
+    必须调用此函数，禁止各处自行拼格式。
+    """
+    if not columns:
+        return "(no columns)"
+    lines = ["| column_name | data_type | display_name |", "|-------------|-----------|--------------|"]
+    for c in columns:
+        cn = str(c.get("column_name", "")).replace("|", "\\|")
+        dt = str(c.get("data_type", "TEXT")).replace("|", "\\|")
+        dn = str(c.get("display_name", "")).replace("|", "\\|")
+        lines.append(f"| {cn} | {dt} | {dn} |")
+    return "\n".join(lines)
+
+
 def get_sheet(meta_id: str) -> Optional[dict[str, Any]]:
     conn = _get_conn()
     row = conn.execute("SELECT * FROM excel_sheets WHERE meta_id = ?", (meta_id,)).fetchone()

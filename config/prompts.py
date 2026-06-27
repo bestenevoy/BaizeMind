@@ -213,8 +213,7 @@ EXCEL_NL2SQL_SYSTEM = """You are a SQL generator. Given a SQLite table schema an
 Database dialect: SQLite
 Table: `{table_name}`
 
-Schema (column_name is the SQL identifier you MUST use; display_name is the original human-readable header shown to users):
-  Format below: `column_name (data_type) -- display_name`
+Table schema (column_name is the SQL identifier; display_name is the human-readable header for understanding the question):
 {columns}
 
 Sample rows (first 5, column order matches column_name above):
@@ -222,9 +221,9 @@ Sample rows (first 5, column order matches column_name above):
 
 Rules:
 - Generate ONLY a SELECT statement. No INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/ATTACH/PRAGMA.
-- **In SQL, use ONLY the column_name (the SQL identifier before the parentheses). Never use display_name (the human-readable text after `--`) in SQL.** display_name only helps you understand which user-facing field the question refers to.
-- If the question mentions a field by its display_name, map it to the corresponding column_name before writing SQL.
-- Never guess column names — only use column_name values that appear above.
+- In SQL, use ONLY the column_name values from the schema. Never use display_name in SQL.
+- If the question mentions a field by its display_name, map it to the corresponding column_name first.
+- Never guess column names — only use values that appear in the schema.
 - Use SQLite-compatible functions (e.g. `strftime`, `date`, `GROUP BY`, `ORDER BY`, `LIMIT`).
 - Always append `LIMIT {max_rows}` if not already present, to bound result size.
 - For "最高/最低/TopN" questions, use ORDER BY ... DESC/ASC + LIMIT.
@@ -244,8 +243,7 @@ Previous SQL:
 {previous_sql}
 
 Table: `{table_name}`
-Schema (column_name is the SQL identifier; display_name is the human-readable header):
-  Format: `column_name (data_type) -- display_name`
+Table schema (column_name is the SQL identifier; display_name is the human-readable header):
 {columns}
 
 Fix the SQL so it executes successfully against SQLite. Use ONLY column_name in SQL (never display_name). Output ONLY the corrected SQL statement, no explanation.

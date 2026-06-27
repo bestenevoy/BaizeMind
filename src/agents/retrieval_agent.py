@@ -157,10 +157,9 @@ class RetrievalAgent:
             if r.get('source_type') == 'sheet_summary':
                 cols = r.get('sheet_columns', []) or []
                 if cols and '[列结构]' not in text:
-                    col_lines = '\n'.join(
-                        f"  - {c.get('column_name', '')} ({c.get('data_type', '')}) → {c.get('display_name', '')}"
-                        for c in cols if isinstance(c, dict)
-                    )
-                    text = f"{text}\n[列结构]\n{col_lines}"
+                    # 列结构格式化委托给 store.format_columns_for_llm（全系统唯一规范格式）
+                    from src.excel_rag.store import format_columns_for_llm
+                    col_text = format_columns_for_llm(cols)
+                    text = f"{text}\n[列结构]\n{col_text}"
             parts.append(f"{source}\n{text}")
         return "\n\n---\n\n".join(parts)

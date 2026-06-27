@@ -14,6 +14,7 @@ from config.settings import settings
 from src.embeddings.bge_m3 import BGEM3Embedding
 from src.excel_rag import store as excel_store
 from src.excel_rag.parser import parse_excel
+from src.excel_rag.store import format_columns_for_llm
 from src.excel_rag.summarizer import generate_summary
 from src.excel_rag.vector_store import ExcelVectorStore
 from src.retrieval.vector_retriever import MilvusVectorRetriever
@@ -38,13 +39,11 @@ def _build_sheet_summary_chunk(record: dict[str, Any]) -> dict[str, Any]:
     doc_id = record["doc_id"]
     columns = record.get("columns", []) or []
 
-    # 字段映射：column_name (data_type) → display_name，与 retrieval_agent.extract_context 拼接格式一致，
-    # extract_context 检测到 [列结构] 已存在便不会重复拼接。
-    col_lines = "\n".join(
-        f"  - {c.get('column_name', '')} ({c.get('data_type', '')}) → {c.get('display_name', '')}"
-        for c in columns if isinstance(c, dict) and c.get("column_name")
-    )
-    schema_block = f"\n[列结构]\n{col_lines}" if col_lines else ""
+    # 列结构格式化委托给 store.format_columns_for_llm（全系统唯一规范格式）
+    # 与 retrieval_agent.extract_context 拼接格式一致，extract_context 检测到 [列结构] 已存在便不会重复拼接。
+    schema_block = ""
+    if columns and any(isinstance(c, dict) and c.get("column_name") for c in columns):
+        schema_block = f"\n[列结构]\n{format_columns_for_llm(columns)}"
 
     text = (
         f"[数据源: Excel Sheet \"{sheet_name}\"]\n"
